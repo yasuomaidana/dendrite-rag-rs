@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "dendrite-synapse-dendrite-ecosystem": {
+      "command": "/Users/yasuomaidana/go/bin/dendrite",
+      "args": [
+        "mcp",
+        "serve",
+        "--synapse",
+        "dendrite-ecosystem"
+      ]
+    }
+  }
+}
