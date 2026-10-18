@@ -1,0 +1,10 @@
+[
+  "docs/architecture/2026-10-quality-audit-execution-plan.md",
+  "docs/mcp/dendrite_rag_retrieve.md",
+  "docs/mcp/dendrite_rag_ask.md",
+  "docs/guides/asking-questions-to-dendrite.md",
+  "docs/features/FEAT-022-agent-search-and-capability-discovery.md",
+  "docs/features/FEAT-031-persistent-store-hybrid-token-scheduler.md",
+  "docs/features/FEAT-045-code-knowledge-mcp-graphify.md",
+  "docs/cli/ask.md"
+]
