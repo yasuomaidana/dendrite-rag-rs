@@ -6,5 +6,11 @@
   "docs/features/FEAT-022-agent-search-and-capability-discovery.md",
   "docs/features/FEAT-031-persistent-store-hybrid-token-scheduler.md",
   "docs/features/FEAT-045-code-knowledge-mcp-graphify.md",
-  "docs/cli/ask.md"
+  "docs/cli/ask.md",
+  "docs/cli/store.md",
+  "docs/mcp/dendrite_store_commit_chunk.md",
+  "docs/mcp/dendrite_store_inspect.md",
+  "docs/mcp/dendrite_store_query_partial.md",
+  "docs/mcp/dendrite_store_rm.md",
+  "docs/mcp/dendrite_store_status.md"
 ]
