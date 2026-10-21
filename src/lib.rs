@@ -2,7 +2,10 @@
 //!
 //! See `docs/ARCHITECTURE.md` for the pipeline and `docs/specs/` for each stage.
 
+pub mod chunk;
+pub mod lang;
 pub mod rpc;
+pub mod walk;
 
 /// Name reported by the `health` handshake.
 pub const NAME: &str = "dendrite-rag";

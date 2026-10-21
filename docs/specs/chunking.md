@@ -5,7 +5,7 @@
 - `ignore::WalkBuilder` (parallel), honouring `.gitignore`, `.ignore`, global git excludes and hidden-file rules.
 - Always skipped: `.git/`, `target/`, `node_modules/`, `vendor/`, `dist/`, `.dendrite/`, plus every path matched by `Config::exclude` globs.
 - Files over `Config::max_file_bytes` (default 1 MiB) are skipped. So is any file whose first 8 KiB contain a NUL byte (binary).
-- The language comes from the file extension: Go, Rust, Python, TypeScript/TSX, JavaScript/JSX, Java, C, C++, Markdown. Everything else is plain text.
+- The language comes from the file extension. Go, Rust, Python, TypeScript/TSX, JavaScript/JSX, Java, C and C++ are parsed with tree-sitter. Markdown is split by headings. Known text formats (configuration, data, SQL, shell, and languages without a bundled grammar) are split as plain text. Files with any other extension are not indexed.
 
 ## cAST: split-then-merge over the syntax tree
 
@@ -21,6 +21,10 @@ Gaps between packed nodes (comments, blank lines) stay attached to the following
 
 **Markdown** is split by heading hierarchy. A section that is too large is split by paragraphs, and every chunk carries its heading path. **Plain text** is split on blank lines, then on lines, within the same budget.
 
+## Definitions, references and scope
+
+Definitions and references come from each grammar's official tag query (`tags.scm`, the same queries GitHub code navigation uses): `@definition.*` captures give the symbols a chunk defines, and `@reference.*` captures give the names it calls or uses. A chunk's **scope** is every definition, plus every `impl` block, whose node fully contains the chunk's non-blank text, outermost first, rendered as `<kind> <name>` (`impl Engine › method search`).
+
 ## Chunk record
 
 | Field | Meaning |
@@ -32,6 +36,7 @@ Gaps between packed nodes (comments, blank lines) stay attached to the following
 | `start_line`, `end_line` | 1-based, inclusive |
 | `scope` | Enclosing named scopes, outermost first, e.g. `impl Engine › fn search` |
 | `symbols` | Names defined in the chunk |
+| `refs` | Names referenced in the chunk (up to 64), used for the symbol graph |
 | `content` | Source text |
 
 ## Contextual header
@@ -40,7 +45,7 @@ Before indexing, each chunk's text is prefixed with a short header:
 
 ```
 // path: pkg/sidecar/sidecar.go
-// scope: func (Locator) Locate
+// scope: method Locate
 <content>
 ```
 
