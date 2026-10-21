@@ -16,6 +16,11 @@
       "full": {
         "type": "boolean",
         "default": false
+      },
+      "embed_budget_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Stop the embedding phase after this many milliseconds; the lexical index always completes"
       }
     }
   },
@@ -62,6 +67,11 @@
       "embed_error": {
         "type": "string",
         "description": "Set when embedding failed; lexical index is current, vectors are retried next run"
+      },
+      "embed_pending": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Chunks still without vectors; later index runs continue"
       }
     }
   }

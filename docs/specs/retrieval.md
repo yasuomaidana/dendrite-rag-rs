@@ -29,7 +29,7 @@ Fields:
 
 1. Drop vectors whose chunk no longer exists.
 2. For every chunk without a vector, look up the cache under `(model, content_hash)`.
-3. Embed only cache misses, in groups of 256, committing each group's cache entries.
+3. Embed only cache misses, in groups of 64, committing each group's cache entries. With `embed_budget_ms` the phase stops at the budget and reports `embed_pending`. Interactive callers therefore never wait for a first full embedding, and dense retrieval covers more chunks with each call.
 
 If the embedder fails, the run reports `embed_error`, the lexical index stays current, and the next run picks up the missing vectors. Changing the model invalidates the vector index but not other models' caches.
 

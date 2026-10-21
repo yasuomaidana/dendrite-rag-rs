@@ -9,7 +9,7 @@ Protocol version: **1.0.0**
 | Method | Params | Result |
 |---|---|---|
 | `health` | — | `{name: "dendrite-rag", version, protocol: "1.0.0"}` |
-| `index` | `{root, full?: false}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_error?, duration_ms}` |
+| `index` | `{root, full?: false, embed_budget_ms?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content}]}` |
 | `context` | `{root, query, token_budget?: 4000}` | `{spans: [hit...], tokens}` |
 | `symbols.definitions` | `{root, name}` | `{hits}`: chunks defining `name` |

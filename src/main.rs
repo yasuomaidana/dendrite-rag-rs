@@ -31,6 +31,9 @@ enum Command {
         root: PathBuf,
         #[arg(long)]
         full: bool,
+        /// Stop embedding after this many milliseconds; later runs continue.
+        #[arg(long)]
+        embed_budget_ms: Option<u64>,
     },
     /// Search a project.
     Search {
@@ -136,7 +139,14 @@ fn main() -> anyhow::Result<()> {
             io::stdin().lock(),
             io::stdout().lock(),
         )?,
-        Command::Index { root, full } => print_value(&open(&root)?.index(full)?, cli.json)?,
+        Command::Index {
+            root,
+            full,
+            embed_budget_ms,
+        } => {
+            let budget = embed_budget_ms.map(std::time::Duration::from_millis);
+            print_value(&open(&root)?.index_with(full, budget)?, cli.json)?
+        }
         Command::Search {
             root,
             query,

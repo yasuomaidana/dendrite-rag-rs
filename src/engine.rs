@@ -100,6 +100,10 @@ pub struct IndexReport {
     /// missing vectors are retried on the next run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embed_error: Option<String>,
+    /// Chunks still without a vector because the embedding budget ran out; the next run
+    /// continues where this one stopped.
+    #[serde(default)]
+    pub embed_pending: usize,
     pub duration_ms: u64,
 }
 
@@ -215,7 +219,19 @@ impl Engine {
     /// by content hash; the changed set comes from a Merkle diff of `path → hash`.
     /// `full` discards the index and rebuilds it.
     pub fn index(&mut self, full: bool) -> Result<IndexReport> {
+        self.index_with(full, None)
+    }
+
+    /// Like [`Engine::index`], but stops the embedding phase once `embed_budget` has elapsed
+    /// since the call started. The lexical index is always completed; chunks left without
+    /// vectors are counted in `embed_pending` and embedded by later runs.
+    pub fn index_with(
+        &mut self,
+        full: bool,
+        embed_budget: Option<std::time::Duration>,
+    ) -> Result<IndexReport> {
         let started = Instant::now();
+        let deadline = embed_budget.map(|b| started + b);
         let files = walk(&self.root, &self.cfg.walk)?;
         let old = if full {
             BTreeMap::new()
@@ -342,7 +358,7 @@ impl Engine {
         if changed {
             *self.symbols.write().expect("symbols lock") = None;
         }
-        self.sync_vectors(changed, &mut report)?;
+        self.sync_vectors(changed, deadline, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
     }
@@ -350,7 +366,12 @@ impl Engine {
     /// Makes the vector index hold exactly one vector per stored chunk, embedding only
     /// chunks whose `(model, content_hash)` is not cached. Embedding failures are reported,
     /// not raised, so the lexical index stays usable.
-    fn sync_vectors(&mut self, changed: bool, report: &mut IndexReport) -> Result<()> {
+    fn sync_vectors(
+        &mut self,
+        changed: bool,
+        deadline: Option<Instant>,
+        report: &mut IndexReport,
+    ) -> Result<()> {
         let path = self.dir.join(VECTORS_FILE);
         let Some(embedder) = &self.embedder else {
             if !self.vectors.is_empty() {
@@ -393,7 +414,11 @@ impl Engine {
 
         // Embed in groups, committing each group's cache entries so progress survives
         // interruptions.
-        for ids in todo.chunks(EMBED_GROUP) {
+        for (n, ids) in todo.chunks(EMBED_GROUP).enumerate() {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                report.embed_pending = todo.len() - n * EMBED_GROUP;
+                break;
+            }
             let group = self.ledger.chunks(ids)?;
             let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
             let vectors = match embedder.embed_documents(&texts) {
@@ -516,7 +541,7 @@ const VECTORS_FILE: &str = "vectors.bin";
 const RESCORE_FACTOR: usize = 4;
 const RESCORE_MIN: usize = 40;
 /// Chunks per embedding call group (and per cache commit).
-const EMBED_GROUP: usize = 256;
+const EMBED_GROUP: usize = 64;
 
 /// Ledger key of a cached embedding.
 pub fn cache_key(model: &str, content_hash: &str) -> String {
@@ -585,6 +610,26 @@ mod tests {
             e.search_dense("IndexProject", 1).unwrap()[0].path,
             "pkg/rag/indexer.go"
         );
+    }
+
+    #[test]
+    fn embedding_budget_defers_work_to_later_runs() {
+        let dir = project();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        let r = e.index_with(false, Some(std::time::Duration::ZERO)).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(r.embed_pending as u64, e.status().unwrap().chunks);
+        assert_eq!(
+            e.search_lexical("LocateBinary", 1).unwrap().len(),
+            1,
+            "lexical index is complete"
+        );
+
+        let r = e.index(false).unwrap();
+        assert_eq!((r.files_changed, r.embed_pending), (0, 0));
+        assert_eq!(r.embedded as u64, e.status().unwrap().chunks);
     }
 
     #[test]

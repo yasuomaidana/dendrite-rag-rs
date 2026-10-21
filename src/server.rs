@@ -26,6 +26,8 @@ struct IndexParams {
     root: String,
     #[serde(default)]
     full: bool,
+    /// Stop embedding after this many milliseconds (the lexical index always completes).
+    embed_budget_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -130,7 +132,12 @@ impl Handler for Server {
             "health" => Ok(rpc::health()),
             "index" => {
                 let p: IndexParams = rpc::params(params)?;
-                to_value(self.engine(&p.root)?.index(p.full).map_err(engine_error)?)
+                let budget = p.embed_budget_ms.map(std::time::Duration::from_millis);
+                to_value(
+                    self.engine(&p.root)?
+                        .index_with(p.full, budget)
+                        .map_err(engine_error)?,
+                )
             }
             "search" => {
                 let p: SearchParams = rpc::params(params)?;
