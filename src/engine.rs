@@ -414,9 +414,11 @@ impl Engine {
 
         // Embed in groups, committing each group's cache entries so progress survives
         // interruptions.
-        for (n, ids) in todo.chunks(EMBED_GROUP).enumerate() {
+        // Under a budget, small groups keep the overshoot to a fraction of a second.
+        let group = if deadline.is_some() { EMBED_GROUP_BUDGETED } else { EMBED_GROUP };
+        for (n, ids) in todo.chunks(group).enumerate() {
             if deadline.is_some_and(|d| Instant::now() >= d) {
-                report.embed_pending = todo.len() - n * EMBED_GROUP;
+                report.embed_pending = todo.len() - n * group;
                 break;
             }
             let group = self.ledger.chunks(ids)?;
@@ -542,6 +544,8 @@ const RESCORE_FACTOR: usize = 4;
 const RESCORE_MIN: usize = 40;
 /// Chunks per embedding call group (and per cache commit).
 const EMBED_GROUP: usize = 64;
+/// Group size when the embedding phase runs under a time budget.
+const EMBED_GROUP_BUDGETED: usize = 8;
 
 /// Ledger key of a cached embedding.
 pub fn cache_key(model: &str, content_hash: &str) -> String {
