@@ -13,12 +13,15 @@
 //! [index]
 //! max_file_bytes = 1048576
 //! query_cache = 256
+//!
+//! [graph]
+//! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
 //! ```
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
 use std::path::{Path, PathBuf};
@@ -39,6 +42,13 @@ pub struct Settings {
     pub embed: EmbedConfig,
     pub rerank: RerankConfig,
     pub index: IndexSettings,
+    pub graph: GraphSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GraphSettings {
+    pub resolution: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -129,6 +139,17 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
             );
         }
+        if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
+            self.graph.resolution = Some(
+                r.parse()
+                    .with_context(|| format!("DENDRITE_RAG_GRAPH_RESOLUTION={r:?}"))?,
+            );
+        }
+        if let Some(r) = self.graph.resolution
+            && !(r > 0.0 && r.is_finite())
+        {
+            bail!("graph.resolution must be a positive number, got {r}");
+        }
         Ok(())
     }
 
@@ -144,6 +165,9 @@ impl Settings {
         }
         if let Some(n) = self.index.query_cache {
             cfg.query_cache = n;
+        }
+        if let Some(r) = self.graph.resolution {
+            cfg.graph_resolution = r;
         }
         cfg
     }
@@ -261,5 +285,18 @@ query_cache = 512
             .unwrap();
         assert_eq!(s2.index.query_cache, Some(1024));
         assert_eq!(s2.config().query_cache, 1024);
+    }
+
+    #[test]
+    fn graph_resolution_from_file_and_env() {
+        let mut s = Settings::parse("[graph]\nresolution = 0.5\n").unwrap();
+        assert_eq!(s.config().graph_resolution, 0.5);
+        s.apply_env(env(&[("DENDRITE_RAG_GRAPH_RESOLUTION", "2")]))
+            .unwrap();
+        assert_eq!(s.config().graph_resolution, 2.0);
+        assert!(
+            s.apply_env(env(&[("DENDRITE_RAG_GRAPH_RESOLUTION", "0")]))
+                .is_err()
+        );
     }
 }

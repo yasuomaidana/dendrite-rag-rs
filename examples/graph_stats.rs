@@ -1,5 +1,5 @@
-//! Indexes a project (lexical only) and prints code-graph counts, timing and the symbols
-//! with the most users.
+//! Indexes a project (lexical only) and prints code-graph counts, timing, the symbols
+//! with the most users and the largest communities.
 //!
 //!     cargo run --release --example graph_stats -- <root> [index-dir]
 
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
         cfg.index_dir = Some(dir.into());
     }
     let mut engine = Engine::open_with_embedder(root.as_ref(), cfg, None)?;
-    engine.index(false)?;
+    let report = engine.index(false)?;
     let t = Instant::now();
     let g = engine.code_graph()?;
     let built = t.elapsed();
@@ -49,6 +49,19 @@ fn main() -> anyhow::Result<()> {
             g.out_degree(s),
             g.symbol_name(s)
         );
+    }
+    let t = Instant::now();
+    let mut communities = engine.communities()?;
+    communities.sort_by_key(|c| std::cmp::Reverse(c.files.len()));
+    let singletons = communities.iter().filter(|c| c.files.len() == 1).count();
+    println!(
+        "\ncommunities {} ({singletons} single files); computed in {} ms, read in {:?}",
+        communities.len(),
+        report.graph_ms,
+        t.elapsed()
+    );
+    for c in communities.iter().take(20) {
+        println!("{:>4} files  #{:<4} {}", c.files.len(), c.id, c.label);
     }
     Ok(())
 }

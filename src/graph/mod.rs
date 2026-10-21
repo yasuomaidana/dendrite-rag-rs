@@ -4,6 +4,8 @@
 //! It is derived from the ledger (chunk `calls`/`refs` and file `imports`), so it is
 //! rebuilt in memory after each index change instead of being stored.
 
+pub mod communities;
+pub mod leiden;
 pub mod resolve;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -333,6 +335,11 @@ impl Engine {
         let g = Arc::new(CodeGraph::build(chunks, &files, go_mods));
         *self.graph.write().expect("graph lock") = Some(g.clone());
         Ok(g)
+    }
+
+    /// Every stored community, by id.
+    pub fn communities(&self) -> Result<Vec<communities::Community>> {
+        Ok(self.ledger.communities()?)
     }
 }
 

@@ -46,3 +46,19 @@ Symbol nodes are `(name, defining file)`: `Client` in two packages is two nodes.
 - **Symbols** carry directed `call` and `type` edges from user to definition. In-degree (distinct users) identifies god nodes; FEAT-045 uses in-degree > 20.
 
 The graph is rebuilt in memory from the ledger on first use after an index change: about 50 ms for the Dendrite repository (833 files, 5,462 symbol nodes). `examples/graph_stats.rs` prints the counts and the most-used symbols.
+
+## Communities
+
+Files are partitioned with **Leiden** (`src/graph/leiden.rs`, pure Rust) maximizing modularity with resolution γ (`[graph] resolution`, `DENDRITE_RAG_GRAPH_RESOLUTION`, default 1.0; higher gives more, smaller communities) on the symmetric file graph. Each level runs fast local moving, refines every community so that only well-connected subsets merge (communities are always connected), then aggregates. Refinement takes the best merge instead of a random one, so the partition is deterministic for a given set of files.
+
+- **When:** after every index run that changed files, and once for a ledger that has none. On the Dendrite repository it takes about 0.15–0.3 s including the graph build. `index` reports `communities` and `graph_ms`; `status` reports `communities`.
+- **Stable ids:** new communities, largest first, take the free previous id they share the most files with, so ids, labels and citations do not churn when one file changes.
+- **Label:** the directory holding most members, then the most-used symbol: `pkg/synapse · Member`.
+- **Record:** id, label, member files and the 10 most-used symbols (`name`, `path`, `line`, `in_degree`).
+- Files with no edges (most docs and config) are communities of one.
+
+| redb table | Key | Value |
+|---|---|---|
+| `community_files` | path | community id |
+| `community_chunks` | chunk id | community id (each chunk inherits its file's) |
+| `communities` | community id | the record, JSON |
