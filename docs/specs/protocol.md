@@ -4,16 +4,20 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.0.0**
+Protocol version: **1.1.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`)
 
 | Method | Params | Result |
 |---|---|---|
-| `health` | — | `{name: "dendrite-rag", version, protocol: "1.0.0"}` |
+| `health` | — | `{name: "dendrite-rag", version, protocol: "1.1.0"}` |
 | `index` | `{root, full?: false, embed_budget_ms?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content}]}` |
 | `context` | `{root, query, token_budget?: 4000}` | `{spans: [hit...], tokens}` |
 | `symbols.definitions` | `{root, name}` | `{hits}`: chunks defining `name` |
 | `symbols.references` | `{root, name}` | `{hits}`: chunks calling or using `name` |
+| `graph.communities` | `{root, limit?: 50, min_size?: 2}` | `{communities: [{id, label, size, files, top_symbols, summary}]}`, largest first |
+| `graph.god_nodes` | `{root, min_in_degree?: 21, limit?: 50}` | `{nodes: [{symbol, path, line, in_degree, out_degree, used_from_files, community, summary}]}` |
+| `graph.path` | `{root, from, to, kinds?: ["call","import","type"], max_hops?: 6}` | `{found, directed, level: "symbol"\|"file", steps: [{node, location?, via?, reversed?}]}` |
+| `graph.explain` | `{root, target}` | `{matches: [{kind: "symbol", …} \| {kind: "file", …}]}`: callers, callees, imports, community ([graph.md](graph.md)) |
 | `grep` | `{root, pattern, paths?, max_results?: 200}` | `{matches: [{path, line, text}]}` (no index needed) |
 | `history.index` | `{root, max_commits?: 2000}` | `{commits, documents, head, rebuilt}` |
 | `history.search` | `{root, query, top_k?: 10}` | `{hits: [{sha, time, author, subject, path, diff, score}]}`; updates the history index first ([history.md](history.md)) |
@@ -24,7 +28,7 @@ Protocol version: **1.0.0**
 
 `root` is the project directory. The server keeps one open engine per root.
 
-Errors use the standard codes: `-32700` parse error, `-32600` invalid request, `-32601` method not found, and `-32602` invalid params (unknown root, bad mode, bad regex or glob). Engine failures use `-32000` with `data.kind`: `config` (the project's `.dendrite/rag.toml` or a `DENDRITE_RAG_*` variable is invalid), `not_indexed` (`search`, `context` and `symbols.*` before the first `index`), `io`, `embed` (dense mode with the embedder unreachable; hybrid mode degrades to lexical + symbols instead), or `index`. History methods use `git` for repository errors.
+Errors use the standard codes: `-32700` parse error, `-32600` invalid request, `-32601` method not found, and `-32602` invalid params (unknown root, bad mode, bad regex or glob). Engine failures use `-32000` with `data.kind`: `config` (the project's `.dendrite/rag.toml` or a `DENDRITE_RAG_*` variable is invalid), `not_indexed` (`search`, `context`, `symbols.*` and `graph.*` before the first `index`), `io`, `embed` (dense mode with the embedder unreachable; hybrid mode degrades to lexical + symbols instead), or `index`. History methods use `git` for repository errors.
 
 The same operations exist as dev subcommands, each with `--json`:
 - `dendrite-rag index <root> [--full]`

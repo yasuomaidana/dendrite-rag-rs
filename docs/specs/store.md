@@ -19,6 +19,7 @@ redb tables:
 | `chunks` | chunk_id | chunk record (see chunking.md) |
 | `embeddings` | `model_id ‖ 0x00 ‖ content_hash` | `f32` vector, little-endian (the cache; kept across rebuilds) |
 | `meta` | key | schema version, Merkle root, embed model, last indexed time |
+| `community_files`, `community_chunks`, `communities` | path / chunk id / id | community of each file and chunk, and each community's record ([graph.md](graph.md)) |
 
 The schema version is `2` (version 2 added `calls`, `method_calls` and `imports`). A ledger with another version is cleared on open, keeping the embedding cache, so the next `index` re-chunks every file without re-embedding unchanged content.
 

@@ -4,12 +4,15 @@
 //! It is derived from the ledger (chunk `calls`/`refs` and file `imports`), so it is
 //! rebuilt in memory after each index change instead of being stored.
 
+pub mod communities;
+pub mod leiden;
+pub mod query;
 pub mod resolve;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
 use crate::engine::{Engine, Result};
@@ -20,7 +23,7 @@ use resolve::Resolver;
 /// Names defined in more places than this are too ambiguous to link (`new`, `run`, `init`).
 const MAX_DEF_FANOUT: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeKind {
     Call,
@@ -333,6 +336,11 @@ impl Engine {
         let g = Arc::new(CodeGraph::build(chunks, &files, go_mods));
         *self.graph.write().expect("graph lock") = Some(g.clone());
         Ok(g)
+    }
+
+    /// Every stored community, by id.
+    pub fn communities(&self) -> Result<Vec<communities::Community>> {
+        Ok(self.ledger.communities()?)
     }
 }
 

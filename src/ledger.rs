@@ -7,11 +7,16 @@ use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, Tab
 use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
+use crate::graph::communities::Community;
 
 const FILES: TableDefinition<&str, &[u8]> = TableDefinition::new("files");
 const CHUNKS: TableDefinition<&str, &[u8]> = TableDefinition::new("chunks");
 const EMBEDDINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("embeddings");
 const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
+/// Community id per file and per chunk, and each community's record.
+const COMMUNITY_FILES: TableDefinition<&str, u32> = TableDefinition::new("community_files");
+const COMMUNITY_CHUNKS: TableDefinition<&str, u32> = TableDefinition::new("community_chunks");
+const COMMUNITIES: TableDefinition<u32, &[u8]> = TableDefinition::new("communities");
 
 /// redb page cache size.
 const CACHE_BYTES: usize = 8 << 20;
@@ -65,6 +70,9 @@ impl Ledger {
         txn.open_table(FILES)?;
         txn.open_table(CHUNKS)?;
         txn.open_table(EMBEDDINGS)?;
+        txn.open_table(COMMUNITY_FILES)?;
+        txn.open_table(COMMUNITY_CHUNKS)?;
+        txn.open_table(COMMUNITIES)?;
         let mut meta = txn.open_table(META)?;
         let stored = meta.get("schema")?.map(|v| v.value().to_string());
         if stored.is_some_and(|v| v != SCHEMA_VERSION) {
@@ -135,6 +143,43 @@ impl Ledger {
         Ok(table.get(key)?.map(|v| v.value().to_string()))
     }
 
+    /// The community id of every file.
+    pub fn community_files(&self) -> Result<BTreeMap<String, u32>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITY_FILES)?;
+        let mut out = BTreeMap::new();
+        for row in table.iter()? {
+            let (k, v) = row?;
+            out.insert(k.value().to_string(), v.value());
+        }
+        Ok(out)
+    }
+
+    pub fn community_of_chunk(&self, chunk: &str) -> Result<Option<u32>> {
+        let txn = self.db.begin_read()?;
+        Ok(txn.open_table(COMMUNITY_CHUNKS)?.get(chunk)?.map(|v| v.value()))
+    }
+
+    pub fn community(&self, id: u32) -> Result<Option<Community>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITIES)?;
+        Ok(match table.get(id)? {
+            Some(v) => Some(serde_json::from_slice(v.value())?),
+            None => None,
+        })
+    }
+
+    /// Every community, by id.
+    pub fn communities(&self) -> Result<Vec<Community>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITIES)?;
+        let mut out = Vec::new();
+        for row in table.iter()? {
+            out.push(serde_json::from_slice(row?.1.value())?);
+        }
+        Ok(out)
+    }
+
     /// A cached embedding for `key` (`model ‖ content_hash`).
     pub fn embedding(&self, key: &str) -> Result<Option<Vec<f32>>> {
         let txn = self.db.begin_read()?;
@@ -203,6 +248,30 @@ impl LedgerBatch {
 
     pub fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
         self.txn.open_table(META)?.insert(key, value)?;
+        Ok(())
+    }
+
+    /// Replaces every community, with the id of each member file and of its chunks.
+    pub fn put_communities(
+        &mut self,
+        communities: &[Community],
+        files: &BTreeMap<String, FileEntry>,
+    ) -> Result<()> {
+        let mut by_file = self.txn.open_table(COMMUNITY_FILES)?;
+        let mut by_chunk = self.txn.open_table(COMMUNITY_CHUNKS)?;
+        let mut records = self.txn.open_table(COMMUNITIES)?;
+        by_file.retain(|_, _| false)?;
+        by_chunk.retain(|_, _| false)?;
+        records.retain(|_, _| false)?;
+        for c in communities {
+            records.insert(c.id, serde_json::to_vec(c)?.as_slice())?;
+            for f in &c.files {
+                by_file.insert(f.as_str(), c.id)?;
+                for chunk in files.get(f).map_or(&[][..], |e| e.chunk_ids.as_slice()) {
+                    by_chunk.insert(chunk.as_str(), c.id)?;
+                }
+            }
+        }
         Ok(())
     }
 

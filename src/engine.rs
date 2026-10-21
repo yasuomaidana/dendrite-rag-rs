@@ -38,6 +38,8 @@ pub struct Config {
     pub rerank: RerankConfig,
     /// Capacity of the LRU query embedding cache (0 disables).
     pub query_cache: usize,
+    /// Leiden resolution for communities: higher gives more, smaller communities.
+    pub graph_resolution: f64,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             embed: EmbedConfig::default(),
             rerank: RerankConfig::default(),
             query_cache: DEFAULT_QUERY_CACHE,
+            graph_resolution: 1.0,
         }
     }
 }
@@ -98,6 +101,12 @@ pub struct IndexReport {
     /// continues where this one stopped.
     #[serde(default)]
     pub embed_pending: usize,
+    /// Communities after this run (computed again only when files changed).
+    #[serde(default)]
+    pub communities: usize,
+    /// Time spent building the code graph and its communities.
+    #[serde(default)]
+    pub graph_ms: u64,
     pub duration_ms: u64,
 }
 
@@ -138,6 +147,7 @@ pub struct Status {
     pub last_indexed: Option<u64>,
     pub vectors: usize,
     pub embed_model: Option<String>,
+    pub communities: usize,
 }
 
 pub struct Engine {
@@ -368,6 +378,14 @@ impl Engine {
             *self.symbols.write().expect("symbols lock") = None;
             *self.graph.write().expect("graph lock") = None;
         }
+        // Communities follow the graph; a ledger from before communities gets them now.
+        let mut communities = self.ledger.communities()?.len();
+        if changed || (communities == 0 && !scanned.is_empty()) {
+            let t = Instant::now();
+            communities = self.update_communities()?;
+            report.graph_ms = t.elapsed().as_millis() as u64;
+        }
+        report.communities = communities;
         self.sync_vectors(changed, deadline, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
@@ -562,7 +580,19 @@ impl Engine {
             last_indexed: self.ledger.meta("last_indexed")?.and_then(|s| s.parse().ok()),
             vectors: self.vectors.len(),
             embed_model: self.embedder.as_ref().map(|e| e.model_id().to_string()),
+            communities: self.ledger.communities()?.len(),
         })
+    }
+
+    /// Recomputes the communities of the code graph and stores them; returns their count.
+    fn update_communities(&self) -> Result<usize> {
+        let graph = self.code_graph()?;
+        let previous = self.ledger.community_files()?;
+        let communities = crate::graph::communities::detect(&graph, &previous, self.cfg.graph_resolution);
+        let mut batch = self.ledger.batch()?;
+        batch.put_communities(&communities, &self.ledger.files()?)?;
+        batch.commit()?;
+        Ok(communities.len())
     }
 
     /// Deletes the whole index directory.
@@ -1013,5 +1043,26 @@ mod tests {
         // q2 was evicted, so it calls the embedder again.
         e.dense_ranking("q2", 1).unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 4);
+    }
+
+    #[test]
+    fn index_stores_communities_per_file_and_chunk() {
+        let dir = project();
+        let mut e = Engine::open_with_embedder(dir.path(), Config::default(), None).unwrap();
+        let r = e.index(false).unwrap();
+        assert!(r.communities > 0);
+        let files = e.ledger.community_files().unwrap();
+        assert_eq!(files.len(), e.ledger.files().unwrap().len());
+        let (path, id) = files.iter().next().unwrap();
+        let entry = &e.ledger.files().unwrap()[path];
+        if let Some(chunk) = entry.chunk_ids.first() {
+            assert_eq!(e.ledger.community_of_chunk(chunk).unwrap(), Some(*id));
+        }
+        assert!(e.ledger.community(*id).unwrap().unwrap().files.contains(path));
+        assert_eq!(e.status().unwrap().communities, r.communities);
+        // A no-op run keeps them without recomputing.
+        let again = e.index(false).unwrap();
+        assert_eq!(again.communities, r.communities);
+        assert_eq!(again.graph_ms, 0);
     }
 }
