@@ -2,7 +2,7 @@
 //!
 //! ```toml
 //! [embed]
-//! backend = "ollama"            # openai | ollama | hf | candle | oxillama | model2vec | none
+//! backend = "ollama"            # auto (default) | openai | ollama | hf | candle | oxillama | model2vec | none
 //! model = "nomic-embed-text"
 //! url = "http://localhost:11434"
 //! # api_key_env = "HF_TOKEN"   document_prefix / query_prefix / pooling / batch
@@ -221,6 +221,8 @@ max_file_bytes = 2048
     fn missing_file_means_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let s = Settings::load(dir.path()).unwrap();
-        assert_eq!(s.embed.backend, Backend::Openai);
+        if std::env::var("DENDRITE_RAG_EMBED_BACKEND").is_err() {
+            assert_eq!(s.embed.backend, Backend::Auto);
+        }
     }
 }

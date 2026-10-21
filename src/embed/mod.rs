@@ -5,11 +5,12 @@
 //!
 //! | backend | where the model runs | wire / runtime |
 //! |---|---|---|
+//! | `auto` (default) | the first available of: candle on a GPU, a TEI server, Ollama, candle on the CPU | see [`resolve_auto`] |
 //! | `openai` | any OpenAI-compatible server: the LiteLLM gateway, vLLM, LM Studio, `oxillama serve` | `POST /v1/embeddings` |
 //! | `ollama` | an Ollama server | `POST /api/embed` |
 //! | `hf` | Hugging Face Inference (serverless or a dedicated endpoint) or a TEI server | `POST …/feature-extraction`, TEI `POST /embed` |
 //! | `candle` | in process (feature `candle`) | safetensors BERT / NomicBERT / JinaBERT |
-//! | `oxillama` | in process (feature `oxillama`) | GGUF decoder embedders, e.g. Qwen3-Embedding |
+//! | `oxillama` | in process (feature `oxillama`), CPU only for embeddings | GGUF decoder embedders, e.g. Qwen3-Embedding |
 //! | `model2vec` | in process (feature `model2vec`) | static token embeddings |
 //! | `none` | — | lexical and symbol retrieval only |
 
@@ -57,8 +58,10 @@ pub trait Embedder: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
-    /// OpenAI-compatible `/v1/embeddings`; by default the LiteLLM gateway.
+    /// The first available GPU-capable backend; see [`resolve_auto`].
     #[default]
+    Auto,
+    /// OpenAI-compatible `/v1/embeddings`; by default the LiteLLM gateway.
     #[serde(alias = "gateway", alias = "litellm")]
     Openai,
     /// Ollama's native `/api/embed`.
@@ -68,7 +71,8 @@ pub enum Backend {
     Hf,
     /// In-process safetensors encoders (feature `candle`).
     Candle,
-    /// In-process GGUF embedders (feature `oxillama`).
+    /// In-process GGUF embedders (feature `oxillama`). oxillama-runtime 0.1.4 runs
+    /// multi-token prefill, and therefore every embedding, on the CPU.
     Oxillama,
     /// In-process static embeddings (feature `model2vec`).
     Model2vec,
@@ -78,7 +82,8 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub const ALL: [Backend; 7] = [
+    pub const ALL: [Backend; 8] = [
+        Backend::Auto,
         Backend::Openai,
         Backend::Ollama,
         Backend::Hf,
@@ -90,6 +95,7 @@ impl Backend {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Backend::Auto => "auto",
             Backend::Openai => "openai",
             Backend::Ollama => "ollama",
             Backend::Hf => "hf",
@@ -125,7 +131,8 @@ impl Backend {
             Backend::Openai => Some("local-nomic-embed-text-latest"),
             Backend::Ollama => Some("nomic-embed-text"),
             Backend::Hf => Some("BAAI/bge-base-en-v1.5"),
-            Backend::Candle => Some("nomic-ai/nomic-embed-text-v1.5"),
+            Backend::Auto => None,
+            Backend::Candle => Some("jinaai/jina-embeddings-v2-base-code"),
             Backend::Oxillama => Some("Qwen/Qwen3-Embedding-0.6B-GGUF"),
             Backend::Model2vec => Some("minishlab/potion-code-16M-v2"),
             Backend::None => None,
@@ -165,6 +172,9 @@ impl Backend {
 
     pub fn describe(self) -> &'static str {
         match self {
+            Backend::Auto => {
+                "first available: candle on a GPU, a TEI server (HF_TEI_ENDPOINT), Ollama, candle on the CPU"
+            }
             Backend::Openai => {
                 "OpenAI-compatible /v1/embeddings: LiteLLM gateway, vLLM, LM Studio, oxillama serve"
             }
@@ -173,7 +183,9 @@ impl Backend {
             Backend::Candle => {
                 "in process: safetensors BERT, NomicBERT or JinaBERT encoders (CPU, Metal, Accelerate)"
             }
-            Backend::Oxillama => "in process: GGUF decoder embedders such as Qwen3-Embedding (pure Rust)",
+            Backend::Oxillama => {
+                "in process: GGUF decoder embedders such as Qwen3-Embedding (pure Rust, CPU only: no GPU prefill)"
+            }
             Backend::Model2vec => "in process: static token embeddings, fastest, lowest quality",
             Backend::None => "no dense retrieval: lexical and symbol rankings only",
         }
@@ -299,8 +311,71 @@ pub fn model_pooling(model: &str) -> Pooling {
     }
 }
 
-/// Builds the configured embedder; `Ok(None)` for `Backend::None`.
+/// GPU-capable backends first, Rust before other runtimes: the concrete configuration
+/// `backend = "auto"` stands for, and why it was chosen.
+///
+/// 1. `candle` when built with `candle-metal` or `candle-cuda` and the device opens;
+/// 2. `hf` when `HF_TEI_ENDPOINT` names a Text Embeddings Inference server (Rust, GPU);
+/// 3. `ollama` when its server answers (GPU through llama.cpp);
+/// 4. `candle` on the CPU when built with `candle`;
+/// 5. `none`: lexical and symbol retrieval only.
+///
+/// oxillama is never chosen: oxillama-runtime 0.1.4 offloads only Q4_0 single-token
+/// decode to the GPU, so its embeddings run on the CPU (over 3 s per chunk measured).
+/// The configured model, prefixes, pooling and batch carry over to the chosen backend.
+pub fn resolve_auto(cfg: &EmbedConfig, ollama_reachable: impl Fn(&str) -> bool) -> (EmbedConfig, String) {
+    let with = |backend: Backend, url: Option<String>| EmbedConfig {
+        backend,
+        url,
+        ..cfg.clone()
+    };
+    #[cfg(feature = "candle")]
+    if let Some(device) = candle::accelerator() {
+        return (with(Backend::Candle, None), format!("candle on {device}"));
+    }
+    if let Some(tei) = std::env::var("HF_TEI_ENDPOINT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        let reason = format!("Text Embeddings Inference at {tei}");
+        return (with(Backend::Hf, Some(tei)), reason);
+    }
+    let ollama = Backend::Ollama.default_url().unwrap_or_default();
+    if ollama_reachable(&ollama) {
+        return (with(Backend::Ollama, None), format!("Ollama at {ollama}"));
+    }
+    if Backend::Candle.compiled() {
+        return (
+            with(Backend::Candle, None),
+            "candle on the CPU (no GPU build, TEI server or Ollama found)".into(),
+        );
+    }
+    (
+        with(Backend::None, None),
+        "no embedder available (no GPU build of candle, TEI server or Ollama): lexical and symbol retrieval only".into(),
+    )
+}
+
+/// Whether an Ollama server answers at `url` within half a second.
+pub fn ollama_reachable(url: &str) -> bool {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_millis(500)))
+        .build()
+        .into();
+    agent.get(&format!("{url}/api/version")).call().is_ok()
+}
+
+/// Builds the configured embedder; `Ok(None)` for `Backend::None`. `auto` is resolved
+/// first, and the choice is reported on stderr.
 pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
+    if cfg.backend == Backend::Auto {
+        let (resolved, reason) = resolve_auto(cfg, ollama_reachable);
+        eprintln!(
+            "dendrite-rag: embedder auto -> {} ({reason})",
+            resolved.backend.as_str()
+        );
+        return from_config(&resolved);
+    }
     if !cfg.backend.compiled() {
         return Err(EmbedError::Model(format!(
             "this dendrite-rag was built without the `{0}` feature (cargo install --features {0})",
@@ -424,7 +499,10 @@ mod tests {
 
     #[test]
     fn model_families_get_their_prefixes_and_pooling() {
-        let cfg = EmbedConfig::default();
+        let cfg = EmbedConfig {
+            backend: Backend::Openai,
+            ..Default::default()
+        };
         assert_eq!(cfg.prefixes().1, "search_query: ");
         let cfg = EmbedConfig {
             backend: Backend::Ollama,
@@ -441,6 +519,34 @@ mod tests {
         assert_eq!(cfg.pooling(), Pooling::Last);
         assert_eq!(model_pooling("BAAI/bge-base-en-v1.5"), Pooling::Cls);
         assert_eq!(model_pooling("nomic-ai/nomic-embed-text-v1.5"), Pooling::Mean);
+    }
+
+    #[test]
+    fn auto_prefers_gpu_then_tei_then_ollama() {
+        let cfg = EmbedConfig {
+            model: Some("nomic-embed-text".into()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.backend, Backend::Auto);
+        // GPU builds and HF_TEI_ENDPOINT vary between machines; check the order that holds
+        // for this build and environment.
+        let gpu = cfg!(any(feature = "candle-metal", feature = "candle-cuda"));
+        let tei = std::env::var("HF_TEI_ENDPOINT").is_ok_and(|v| !v.trim().is_empty());
+        let (with_ollama, _) = resolve_auto(&cfg, |_| true);
+        let (without, reason) = resolve_auto(&cfg, |_| false);
+        if !gpu && !tei {
+            assert_eq!(with_ollama.backend, Backend::Ollama);
+            assert_eq!(with_ollama.model(), "nomic-embed-text");
+            let fallback = if Backend::Candle.compiled() {
+                Backend::Candle
+            } else {
+                Backend::None
+            };
+            assert_eq!(without.backend, fallback, "{reason}");
+        }
+        for c in [&with_ollama, &without] {
+            assert!(!matches!(c.backend, Backend::Oxillama | Backend::Auto));
+        }
     }
 
     #[test]

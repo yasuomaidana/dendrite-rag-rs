@@ -22,7 +22,7 @@
           "embed": {
             "type": "object",
             "properties": {
-              "backend": {"enum": ["openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
+              "backend": {"enum": ["auto", "openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
               "model": {"type": ["string", "null"]},
               "url": {"type": ["string", "null"]},
               "api_key_env": {"type": ["string", "null"]},

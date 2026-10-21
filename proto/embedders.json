@@ -17,7 +17,7 @@
           "type": "object",
           "required": ["backend", "compiled", "description"],
           "properties": {
-            "backend": {"enum": ["openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
+            "backend": {"enum": ["auto", "openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
             "compiled": {"type": "boolean", "description": "False when the build lacks the backend's cargo feature"},
             "default_model": {"type": ["string", "null"]},
             "default_url": {"type": ["string", "null"]},

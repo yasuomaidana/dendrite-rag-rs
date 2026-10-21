@@ -113,6 +113,7 @@ mod tests {
     fn short_answers_are_errors() {
         let stub = HttpStub::serve(r#"{"data":[{"index":0,"embedding":[1]}]}"#);
         let e = OpenAiEmbedder::new(&EmbedConfig {
+            backend: Backend::Openai,
             url: Some(stub.url.clone()),
             ..Default::default()
         });
@@ -126,7 +127,10 @@ mod tests {
         if std::env::var("DENDRITE_RAG_LIVE_GATEWAY").is_err() {
             return;
         }
-        let e = OpenAiEmbedder::new(&EmbedConfig::default());
+        let e = OpenAiEmbedder::new(&EmbedConfig {
+            backend: Backend::Openai,
+            ..Default::default()
+        });
         let docs = e
             .embed_documents(&["func Locate(name string) string".into(), "fn main() {}".into()])
             .unwrap();

@@ -38,6 +38,7 @@ impl GatewayReranker {
         let model = cfg.model.clone()?;
         // Same URL and key resolution as the OpenAI-compatible embedder.
         let endpoint = crate::embed::EmbedConfig {
+            backend: crate::embed::Backend::Openai,
             url: cfg.url.clone(),
             api_key_env: cfg.api_key_env.clone(),
             ..Default::default()

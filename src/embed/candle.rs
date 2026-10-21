@@ -78,15 +78,33 @@ fn model_files(model: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
     ))
 }
 
+/// The device this build runs on: CUDA with `candle-cuda`, Metal with `candle-metal`,
+/// otherwise the CPU.
 fn device() -> Result<Device> {
-    #[cfg(feature = "candle-metal")]
+    #[cfg(feature = "candle-cuda")]
+    {
+        Device::new_cuda(0).map_err(model_err)
+    }
+    #[cfg(all(feature = "candle-metal", not(feature = "candle-cuda")))]
     {
         Device::new_metal(0).map_err(model_err)
     }
-    #[cfg(not(feature = "candle-metal"))]
+    #[cfg(not(any(feature = "candle-metal", feature = "candle-cuda")))]
     {
         Ok(Device::Cpu)
     }
+}
+
+/// The GPU this build can use (`"metal"` or `"cuda"`), if it opens.
+pub fn accelerator() -> Option<&'static str> {
+    let gpu = if cfg!(feature = "candle-cuda") {
+        "cuda"
+    } else if cfg!(feature = "candle-metal") {
+        "metal"
+    } else {
+        return None;
+    };
+    device().ok().map(|_| gpu)
 }
 
 impl CandleEmbedder {
@@ -289,6 +307,7 @@ mod tests {
         }
         let e = CandleEmbedder::load(&EmbedConfig {
             backend: super::super::Backend::Candle,
+            model: Some("nomic-ai/nomic-embed-text-v1.5".into()),
             ..Default::default()
         })
         .unwrap();
