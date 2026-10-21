@@ -20,6 +20,8 @@ struct Golden {
 struct Query {
     q: String,
     expect: Vec<String>,
+    #[serde(default)]
+    broad: bool,
 }
 
 #[derive(Default)]
@@ -62,6 +64,41 @@ fn max_rss_mb() -> f64 {
     bytes / (1024.0 * 1024.0)
 }
 
+/// Prints hit@k and MRR@10 per mode over `queries`, then the hybrid misses.
+fn print_scores(engine: &Engine, modes: &[Mode], queries: &[&Query], label: &str) -> anyhow::Result<()> {
+    println!("| mode | hit@1 | hit@5 | hit@10 | MRR@10 |\n|---|---|---|---|---|");
+    let n = queries.len() as f32;
+    let mut hybrid_misses = Vec::new();
+    for mode in modes {
+        let mut s = Scores::default();
+        for q in queries {
+            match rank(engine, q, *mode)? {
+                Some(r) => {
+                    s.hit1 += (r == 1) as usize;
+                    s.hit5 += (r <= 5) as usize;
+                    s.hit10 += 1;
+                    s.rr += 1.0 / r as f32;
+                }
+                None => s.misses.push(q.q.clone()),
+            }
+        }
+        println!(
+            "| {mode:?} | {:.2} | {:.2} | {:.2} | {:.3} |",
+            s.hit1 as f32 / n,
+            s.hit5 as f32 / n,
+            s.hit10 as f32 / n,
+            s.rr / n
+        );
+        if *mode == Mode::Hybrid {
+            hybrid_misses = s.misses;
+        }
+    }
+    if !hybrid_misses.is_empty() {
+        println!("\n{label}hybrid misses: {hybrid_misses:#?}");
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = args.first().map(String::as_str).unwrap_or(".");
@@ -91,35 +128,12 @@ fn main() -> anyhow::Result<()> {
     if engine.has_vectors() {
         modes.insert(1, Mode::Dense);
     }
-    println!("| mode | hit@1 | hit@5 | hit@10 | MRR@10 |\n|---|---|---|---|---|");
-    let n = golden.queries.len() as f32;
-    let mut hybrid_misses = Vec::new();
-    for mode in &modes {
-        let mut s = Scores::default();
-        for q in &golden.queries {
-            match rank(&engine, q, *mode)? {
-                Some(r) => {
-                    s.hit1 += (r == 1) as usize;
-                    s.hit5 += (r <= 5) as usize;
-                    s.hit10 += 1;
-                    s.rr += 1.0 / r as f32;
-                }
-                None => s.misses.push(q.q.clone()),
-            }
-        }
-        println!(
-            "| {mode:?} | {:.2} | {:.2} | {:.2} | {:.3} |",
-            s.hit1 as f32 / n,
-            s.hit5 as f32 / n,
-            s.hit10 as f32 / n,
-            s.rr / n
-        );
-        if *mode == Mode::Hybrid {
-            hybrid_misses = s.misses;
-        }
-    }
-    if !hybrid_misses.is_empty() {
-        println!("\nhybrid misses: {hybrid_misses:#?}");
+    let all: Vec<&Query> = golden.queries.iter().collect();
+    print_scores(&engine, &modes, &all, "")?;
+    let broad: Vec<&Query> = golden.queries.iter().filter(|q| q.broad).collect();
+    if !broad.is_empty() {
+        println!("\nbroad subset ({} queries):", broad.len());
+        print_scores(&engine, &modes, &broad, "broad ")?;
     }
 
     eprintln!("rss after quality: {:.0} MB", max_rss_mb());

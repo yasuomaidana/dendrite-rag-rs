@@ -1,6 +1,6 @@
 # Eval and benchmark results (Apple Silicon)
 
-Run with `cargo run --release [--features model2vec] --example eval -- <root> eval/golden-dendrite.json <index-dir>`.
+Run with `cargo run --release [--features model2vec] --example eval -- <root> <golden file> <index-dir>`. Queries marked `"broad": true` ("how does sync work?") are also scored as a separate subset, the target of per-community summary chunks (DRAG-31).
 
 ## Quality: Dendrite repository (828 files, 5,281 chunks, 30 golden queries)
 
@@ -13,6 +13,28 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> ev
 | potion-code-16M-v2 (model2vec) | hybrid | 0.50 | 0.87 | 0.93 | 0.672 |
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
+
+## Three corpora (DRAG-25, 2026-10-21)
+
+Golden sets: `golden-dendrite.json` (37 queries, 8 broad; three queries that named `pkg/rag/indexer.go`, removed by DEN-1044, were retargeted or dropped), `golden-embedag.json` (25 queries, 8 broad) and `golden-dendrite-rag.json` (25 queries, 8 broad). Embedder: `auto` → candle on Metal, `jinaai/jina-embeddings-v2-base-code`.
+
+| corpus | files / chunks | mode | hit@1 | hit@5 | hit@10 | MRR@10 | broad MRR@10 |
+|---|---|---|---|---|---|---|---|
+| Dendrite (Go) | 833 / 5,286 | lexical | 0.51 | 0.70 | 0.81 | 0.614 | 0.432 |
+| | | dense | 0.51 | 0.81 | 0.89 | 0.651 | 0.458 |
+| | | **hybrid** | **0.68** | **0.97** | **1.00** | **0.810** | **0.747** |
+| embedag (Rust) | 133 / 815 | lexical | 0.68 | 0.96 | 1.00 | 0.824 | 0.825 |
+| | | dense | 0.60 | 0.96 | 1.00 | 0.742 | 0.641 |
+| | | **hybrid** | **0.76** | **0.96** | **1.00** | **0.852** | 0.724 |
+| dendrite-rag-rs (Rust) | 67 / 330 | lexical | **0.84** | 0.96 | 1.00 | **0.894** | **0.889** |
+| | | dense | 0.80 | 0.96 | 1.00 | 0.868 | 0.692 |
+| | | hybrid | 0.80 | **1.00** | 1.00 | 0.878 | 0.712 |
+
+Findings:
+- Hybrid wins clearly on the large Go corpus. On the two small Rust corpora lexical is as good or better, and on their broad questions hybrid trails lexical: the fixed fusion weights do not suit every corpus and embedder (DRAG-26).
+- The small corpora saturate hit@10, so they discriminate only at hit@1 and MRR.
+- First full index with candle on Metal: 1,047 s for Dendrite (5,286 chunks), 140 s for embedag, 56 s for dendrite-rag-rs; later runs reuse the cache. RSS with the model loaded: about 630 MB.
+- int8 vs exact recall@10: 1.000 on all three. p95 vector scan under 25 ms at 5k chunks with 8 readers.
 
 ## Embedding backends (DRAG-18 to DRAG-21, 2026-10-21)
 

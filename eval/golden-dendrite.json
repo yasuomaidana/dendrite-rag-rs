@@ -21,8 +21,7 @@
     {"q": "where are sidecar binaries located", "expect": ["pkg/sidecar/sidecar.go", "docs/architecture/sidecar-protocol.md"]},
     {"q": "merge dense and sparse rankings with reciprocal rank fusion", "expect": ["pkg/agentsearch/rrf.go"]},
     {"q": "cosine similarity between two embedding vectors", "expect": ["pkg/agentsearch/embedding.go"]},
-    {"q": "okapi bm25 scoring of project chunks", "expect": ["pkg/rag/indexer.go", "pkg/agentsearch/bm25.go"]},
-    {"q": "split markdown documents into chunks at headings", "expect": ["pkg/rag/indexer.go"]},
+    {"q": "okapi bm25 scoring of project chunks", "expect": ["pkg/agentsearch/bm25.go"]},
     {"q": "list every supported deployment scenario", "expect": ["pkg/topology/validate.go"]},
     {"q": "ResumeParked", "expect": ["pkg/agentjobs/fallback.go"]},
     {"q": "CoverageForPackages", "expect": ["pkg/assert/coverage.go"]},
@@ -31,6 +30,14 @@
     {"q": "GenerateContainerName", "expect": ["pkg/sandbox/sandbox.go"]},
     {"q": "where does the store ComputeHash digest come from", "expect": ["pkg/store/store.go"]},
     {"q": "handler of the dendrite_rag_retrieve MCP tool", "expect": ["pkg/mcpserver/tools_rag.go"]},
-    {"q": "how does chronos next pick the next ticket", "expect": ["cmd/dendrite/plane.go", "pkg/tracker/dag/dag.go"]}
+    {"q": "how does chronos next pick the next ticket", "expect": ["cmd/dendrite/plane.go", "pkg/tracker/dag/dag.go"]},
+    {"q": "how does sync work?", "expect": ["pkg/synapsesync/sync.go", "pkg/synapse/heal.go"], "broad": true},
+    {"q": "how does agent failure fallback and model retry work?", "expect": ["pkg/agentjobs/fallback.go", "pkg/agentjobs/classify.go"], "broad": true},
+    {"q": "how does container sandbox creation and security hardening work?", "expect": ["pkg/sandbox/sandbox.go"], "broad": true},
+    {"q": "how does LiteLLM proxy configuration rendering work?", "expect": ["pkg/gateway/renderer.go", "pkg/tokens/evaluator.go"], "broad": true},
+    {"q": "how does chronos DAG scheduling pick tickets?", "expect": ["cmd/dendrite/plane.go", "pkg/tracker/dag/dag.go"], "broad": true},
+    {"q": "how does self-update verify and smoke-test freshly built binaries?", "expect": ["pkg/selfupdate/selfupdate.go"], "broad": true},
+    {"q": "how does codebase retrieval indexing and BM25 search work?", "expect": ["pkg/rag/retriever.go", "pkg/sidecar/sidecar.go"], "broad": true},
+    {"q": "how are deployment scenarios and project topology validated?", "expect": ["pkg/topology/validate.go", "pkg/projectid/projectid.go"], "broad": true}
   ]
 }
