@@ -40,9 +40,11 @@ If the embedder fails, the run reports `embed_error`, the lexical index stays cu
 
 The cache makes the first embedding a one-time cost per content hash.
 
+Query vectors are cached too: an LRU of 256 entries (`[index] query_cache`, `DENDRITE_RAG_QUERY_CACHE`; 0 disables it) keyed by `(model, query text)`, so a repeated query skips the embedder, which is almost all of dense query latency.
+
 **Why not HNSW (yet).**
-- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall.
-- HNSW (`hnsw_rs`) needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
+- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall. Vectors are flat int8 today, HNSW planned (DRAG-37).
+- HNSW needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
 - It stays an option behind the `VectorIndex` trait for corpora where a scan exceeds the latency target.
 
 ## Symbol-name ranking
@@ -59,7 +61,12 @@ RRF uses ranks only, so BM25 and cosine scores never need calibrating against ea
 
 ## Optional rerank
 
-A `Reranker` trait scores `(query, chunk)` pairs with a cross-encoder through the gateway's `/v1/rerank` endpoint (for example `bge-reranker-v2-m3`). It is applied to the top 30 fused candidates. Off by default.
+A `Reranker` trait scores `(query, chunk)` pairs with a cross-encoder. It is applied to the top 30 fused candidates. Off by default.
+
+Backends (`[rerank] backend`):
+- `gateway` (default): server with a Cohere-style `/v1/rerank` endpoint (e.g. LiteLLM gateway, model `bge-reranker-v2-m3`). Off when `model` is unset.
+- `candle`: in-process cross-encoder on candle (feature `candle`, default model `BAAI/bge-reranker-base`). Checkpoints with `model_type` `xlm-roberta` (the BGE rerankers) run through candle's XLM-RoBERTa sequence classifier, and `bert` ones (MiniLM-style cross-encoders) through BERT with its pooler and linear head. Runs on the GPU (Metal, CUDA) or CPU. Its logits match the reference implementation (transformers) within 0.05 on `BAAI/bge-reranker-base` (`live_candle_bge_reranker_scores`).
+- `none`: reranking disabled.
 
 ## Context packing
 
@@ -79,5 +86,5 @@ The result lists the spans in score order, each with `path`, `start_line`, `end_
 |---|---|
 | RSS at 50k chunks | < 200 MB (measured 96 MB lexical baseline at 49k; ~135 MB with 768-d vectors) |
 | p95 search latency, 8 concurrent readers | < 30 ms (embedding the query excluded) |
-| HNSW recall@10 vs exact | ≥ 0.95 |
+| Quantized recall@10 vs exact | ≥ 0.95 |
 | Hybrid recall@10 on the golden set | ≥ lexical-only |

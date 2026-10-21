@@ -97,7 +97,55 @@ impl Lang {
         let all = TAGS.get_or_init(|| ALL_CODE.iter().map(|&l| (l, compile_tags(l))).collect());
         all.iter().find(|(l, _)| *l == self).and_then(|(_, q)| q.as_ref())
     }
+
+    /// The import query (`@import` captures the module specifier, `@import.mod` a Rust
+    /// `mod name;` declaration), compiled once per language.
+    pub fn imports(self) -> Option<&'static Query> {
+        static IMPORTS: OnceLock<Vec<(Lang, Option<Query>)>> = OnceLock::new();
+        let all = IMPORTS.get_or_init(|| {
+            ALL_CODE
+                .iter()
+                .map(|&l| (l, l.grammar().and_then(|g| Query::new(&g, import_query(l)).ok())))
+                .collect()
+        });
+        all.iter().find(|(l, _)| *l == self).and_then(|(_, q)| q.as_ref())
+    }
 }
+
+/// Import statements per language. Specifiers keep their quotes; the chunker strips them.
+fn import_query(lang: Lang) -> &'static str {
+    match lang {
+        Lang::Go => "(import_spec path: (_) @import)",
+        Lang::Rust => {
+            "(use_declaration argument: (_) @import)
+             (mod_item !body name: (identifier) @import.mod)"
+        }
+        Lang::Python => {
+            "(import_statement name: (dotted_name) @import)
+             (import_statement name: (aliased_import name: (dotted_name) @import))
+             (import_from_statement module_name: (_) @import)"
+        }
+        Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
+            "(import_statement source: (string) @import)
+             (export_statement source: (string) @import)
+             ((call_expression function: (identifier) @_f arguments: (arguments (string) @import))
+              (#eq? @_f \"require\"))"
+        }
+        Lang::Java => "(import_declaration (_) @import)",
+        Lang::C | Lang::Cpp => "(preproc_include path: (_) @import)",
+        Lang::Markdown | Lang::Text => "",
+    }
+}
+
+/// Calls in C and C++, whose stock tag queries capture definitions only.
+const C_CALLS: &str = "
+(call_expression function: (identifier) @name) @reference.call
+(call_expression function: (field_expression field: (field_identifier) @name)) @reference.call
+";
+
+const CPP_CALLS: &str = "
+(call_expression function: (qualified_identifier name: (identifier) @name)) @reference.call
+";
 
 fn compile_tags(lang: Lang) -> Option<Query> {
     let grammar = lang.grammar()?;
@@ -115,8 +163,12 @@ fn compile_tags(lang: Lang) -> Option<Query> {
         }
         Lang::JavaScript => tree_sitter_javascript::TAGS_QUERY.to_string(),
         Lang::Java => tree_sitter_java::TAGS_QUERY.to_string(),
-        Lang::C => tree_sitter_c::TAGS_QUERY.to_string(),
-        Lang::Cpp => format!("{}\n{}", tree_sitter_c::TAGS_QUERY, tree_sitter_cpp::TAGS_QUERY),
+        Lang::C => format!("{}\n{C_CALLS}", tree_sitter_c::TAGS_QUERY),
+        Lang::Cpp => format!(
+            "{}\n{}\n{C_CALLS}\n{CPP_CALLS}",
+            tree_sitter_c::TAGS_QUERY,
+            tree_sitter_cpp::TAGS_QUERY
+        ),
         Lang::Markdown | Lang::Text => return None,
     };
     Query::new(&grammar, &source)
@@ -150,6 +202,7 @@ mod tests {
     fn every_code_language_has_a_tag_query() {
         for lang in ALL_CODE {
             assert!(lang.tags().is_some(), "{lang:?} tag query does not compile");
+            assert!(lang.imports().is_some(), "{lang:?} import query does not compile");
         }
     }
 }

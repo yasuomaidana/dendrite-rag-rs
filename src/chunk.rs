@@ -45,6 +45,12 @@ pub struct Chunk {
     pub symbols: Vec<String>,
     /// Names referenced (called, used as types) in the chunk.
     pub refs: Vec<String>,
+    /// The subset of `refs` that are calls.
+    #[serde(default)]
+    pub calls: Vec<String>,
+    /// The subset of `calls` made through a receiver or qualifier (`x.len()`, `pkg.F()`).
+    #[serde(default)]
+    pub method_calls: Vec<String>,
     pub content: String,
 }
 
@@ -68,8 +74,14 @@ impl Chunk {
 
 /// Splits one file into chunks.
 pub fn chunk_file(path: &str, lang: Lang, src: &str, opts: ChunkOptions) -> Vec<Chunk> {
+    analyze_file(path, lang, src, opts).0
+}
+
+/// Splits one file into chunks and lists its import specifiers (module paths as written,
+/// unquoted; a Rust `mod name;` is reported as `mod:name`).
+pub fn analyze_file(path: &str, lang: Lang, src: &str, opts: ChunkOptions) -> (Vec<Chunk>, Vec<String>) {
     let lines = LineIndex::new(src);
-    match lang {
+    let chunks = match lang {
         Lang::Markdown => {
             let sections = markdown_sections(src, opts);
             sections
@@ -81,13 +93,15 @@ pub fn chunk_file(path: &str, lang: Lang, src: &str, opts: ChunkOptions) -> Vec<
             .into_iter()
             .filter_map(|r| build(path, lang, src, &lines, r, Vec::new(), &[], &[]))
             .collect(),
-        _ => chunk_code(path, lang, src, &lines, opts).unwrap_or_else(|| {
-            chunk_file(path, Lang::Text, src, opts)
+        _ => match chunk_code(path, lang, src, &lines, opts) {
+            Some(done) => return done,
+            None => chunk_file(path, Lang::Text, src, opts)
                 .into_iter()
                 .map(|c| relang(c, lang))
-                .collect()
-        }),
-    }
+                .collect(),
+        },
+    };
+    (chunks, Vec::new())
 }
 
 fn relang(mut c: Chunk, lang: Lang) -> Chunk {
@@ -110,6 +124,8 @@ struct Tag {
     name: String,
     name_byte: usize,
     range: Range<usize>,
+    /// The name is the member of a receiver or qualifier expression (`a.name`).
+    member: bool,
 }
 
 fn chunk_code(
@@ -118,7 +134,7 @@ fn chunk_code(
     src: &str,
     lines: &LineIndex,
     opts: ChunkOptions,
-) -> Option<Vec<Chunk>> {
+) -> Option<(Vec<Chunk>, Vec<String>)> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar()?).ok()?;
     let tree = parser.parse(src, None)?;
@@ -140,25 +156,48 @@ fn chunk_code(
         .filter(|t| matches!(t.kind, TagKind::Ref(_)))
         .collect();
 
-    Some(
-        spans
-            .into_iter()
-            .filter_map(|r| {
-                let sig = significant(bytes, r.clone())?;
-                let mut scope: Vec<&Tag> = tags
-                    .iter()
-                    .filter(|t| is_scope(&t.kind) && t.range.start <= sig.start && t.range.end >= sig.end)
-                    .collect();
-                scope.sort_by_key(|t| (t.range.start, std::cmp::Reverse(t.range.end)));
-                scope.dedup_by_key(|t| t.range.clone());
-                let scope = scope
-                    .iter()
-                    .map(|t| format!("{} {}", kind_label(&t.kind), t.name))
-                    .collect();
-                build(path, lang, src, lines, r, scope, &defs, &refs)
-            })
-            .collect(),
-    )
+    let chunks = spans
+        .into_iter()
+        .filter_map(|r| {
+            let sig = significant(bytes, r.clone())?;
+            let mut scope: Vec<&Tag> = tags
+                .iter()
+                .filter(|t| is_scope(&t.kind) && t.range.start <= sig.start && t.range.end >= sig.end)
+                .collect();
+            scope.sort_by_key(|t| (t.range.start, std::cmp::Reverse(t.range.end)));
+            scope.dedup_by_key(|t| t.range.clone());
+            let scope = scope
+                .iter()
+                .map(|t| format!("{} {}", kind_label(&t.kind), t.name))
+                .collect();
+            build(path, lang, src, lines, r, scope, &defs, &refs)
+        })
+        .collect();
+    Some((chunks, imports(lang, root, bytes)))
+}
+
+/// Import specifiers in source order, deduplicated, without quotes or angle brackets.
+fn imports(lang: Lang, root: Node, src: &[u8]) -> Vec<String> {
+    let Some(query) = lang.imports() else {
+        return Vec::new();
+    };
+    let names = query.capture_names();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, root, src);
+    let mut out = Vec::new();
+    while let Some(m) = matches.next() {
+        for cap in m.captures() {
+            let text = cap.node.utf8_text(src).unwrap_or_default();
+            let spec = text.trim_matches(|c| matches!(c, '"' | '\'' | '`' | '<' | '>'));
+            match names[cap.index as usize] {
+                "import" if !spec.is_empty() => out.push(spec.to_string()),
+                "import.mod" => out.push(format!("mod:{spec}")),
+                _ => {}
+            }
+        }
+    }
+    dedup_keep_order(&mut out);
+    out
 }
 
 /// cAST: greedily pack sibling nodes up to `max` non-whitespace characters, recursing into
@@ -246,7 +285,7 @@ fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
             let cname = names[cap.index as usize];
             if cname == "name" {
                 let text = cap.node.utf8_text(src).unwrap_or_default();
-                name = Some((text.to_string(), cap.node.start_byte()));
+                name = Some((text.to_string(), cap.node.start_byte(), is_member(cap.node)));
             } else if let Some(k) = cname.strip_prefix("definition.") {
                 kind = Some(TagKind::Def(k.to_string()));
                 range = Some(cap.node.byte_range());
@@ -255,7 +294,7 @@ fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
                 range = Some(cap.node.byte_range());
             }
         }
-        if let (Some((name, name_byte)), Some(kind), Some(range)) = (name, kind, range)
+        if let (Some((name, name_byte, member)), Some(kind), Some(range)) = (name, kind, range)
             && !name.is_empty()
         {
             out.push(Tag {
@@ -263,10 +302,24 @@ fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
                 name,
                 name_byte,
                 range,
+                member,
             });
         }
     }
     out
+}
+
+/// Whether a name node is the member part of `receiver.name` in any supported grammar.
+fn is_member(name: Node) -> bool {
+    let Some(parent) = name.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "field_expression" | "selector_expression" | "member_expression" | "attribute" => true,
+        // Java: `obj.call()` carries an `object` field; a bare `call()` does not.
+        "method_invocation" => parent.child_by_field_name("object").is_some(),
+        _ => false,
+    }
 }
 
 /// Definitions open a scope, and so do `impl` blocks (tagged as implementation references).
@@ -492,12 +545,26 @@ fn build(
     let in_span = |t: &&&Tag| t.name_byte >= start_byte && t.name_byte < end_byte;
     let mut symbols: Vec<String> = defs.iter().filter(in_span).map(|t| t.name.clone()).collect();
     dedup_keep_order(&mut symbols);
-    let mut refs: Vec<String> = refs
+    let refs: Vec<&&Tag> = refs
         .iter()
         .filter(in_span)
         .filter(|t| t.kind != TagKind::Ref("implementation".into()))
-        .map(|t| t.name.clone())
         .collect();
+    let call_tags: Vec<&&&Tag> = refs
+        .iter()
+        .filter(|t| t.kind == TagKind::Ref("call".into()))
+        .collect();
+    let mut calls: Vec<String> = call_tags.iter().map(|t| t.name.clone()).collect();
+    dedup_keep_order(&mut calls);
+    calls.truncate(64);
+    let mut method_calls: Vec<String> = call_tags
+        .iter()
+        .filter(|t| t.member)
+        .map(|t| t.name.clone())
+        .filter(|n| calls.contains(n))
+        .collect();
+    dedup_keep_order(&mut method_calls);
+    let mut refs: Vec<String> = refs.iter().map(|t| t.name.clone()).collect();
     dedup_keep_order(&mut refs);
     refs.truncate(64);
 
@@ -524,6 +591,8 @@ fn build(
         scope,
         symbols,
         refs,
+        calls,
+        method_calls,
         content,
     })
 }
@@ -644,6 +713,70 @@ mod tests {
         let chunks = chunk_file("a.ts", Lang::TypeScript, ts, ChunkOptions::default());
         let syms: Vec<_> = chunks.iter().flat_map(|c| c.symbols.clone()).collect();
         assert!(syms.contains(&"search".into()), "{syms:?}");
+    }
+
+    #[test]
+    fn calls_and_imports_are_extracted_per_language() {
+        let cases: [(&str, Lang, &str, &[&str], &str); 7] = [
+            (
+                "a.go",
+                Lang::Go,
+                "package a\n\nimport (\n\t\"fmt\"\n\tx \"example.com/m/pkg/x\"\n)\n\nfunc F() { fmt.Println(x.Run()) }\n",
+                &["fmt", "example.com/m/pkg/x"],
+                "Run",
+            ),
+            (
+                "src/lib.rs",
+                Lang::Rust,
+                "mod engine;\nuse crate::ledger::{Ledger, FileEntry};\n\nfn f() { open(); }\n",
+                &["mod:engine", "crate::ledger::{Ledger, FileEntry}"],
+                "open",
+            ),
+            (
+                "a.py",
+                Lang::Python,
+                "import os.path\nfrom .util import helper\n\ndef f():\n    return helper(1)\n",
+                &["os.path", ".util"],
+                "helper",
+            ),
+            (
+                "a.ts",
+                Lang::TypeScript,
+                "import { b } from './b';\nconst c = require('./c');\nexport function f() { return b(); }\n",
+                &["./b", "./c"],
+                "b",
+            ),
+            (
+                "A.java",
+                Lang::Java,
+                "import com.acme.util.Strings;\nclass A { void f() { Strings.trim(\"x\"); } }\n",
+                &["com.acme.util.Strings"],
+                "trim",
+            ),
+            (
+                "a.c",
+                Lang::C,
+                "#include \"util.h\"\n#include <stdio.h>\nint f(void) { return helper(1); }\n",
+                &["util.h", "stdio.h"],
+                "helper",
+            ),
+            (
+                "a.cpp",
+                Lang::Cpp,
+                "#include \"util.hpp\"\nint f() { return ns::helper(1); }\n",
+                &["util.hpp"],
+                "helper",
+            ),
+        ];
+        for (path, lang, src, want, call) in cases {
+            let (chunks, imports) = analyze_file(path, lang, src, ChunkOptions::default());
+            assert_eq!(imports, want, "{path}");
+            assert!(
+                chunks.iter().any(|c| c.calls.iter().any(|n| n == call)),
+                "{path}: no call to {call} in {:?}",
+                chunks.iter().map(|c| &c.calls).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

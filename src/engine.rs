@@ -1,25 +1,34 @@
 //! The engine: opens a project's index, keeps it current and answers queries.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use embedag::dag::merkle::{MerkleNode, diff};
+use lru::LruCache;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::chunk::{Chunk, ChunkOptions, chunk_file};
+use crate::chunk::{Chunk, ChunkOptions, analyze_file};
 use crate::embed::{EmbedConfig, Embedder};
+use crate::graph::CodeGraph;
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
-use crate::rerank::{GatewayReranker, RerankConfig, Reranker};
+use crate::rerank::{RerankConfig, Reranker};
 use crate::symbols::SymbolIndex;
 use crate::vector::{FlatIndex, VectorIndex};
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
 
+/// Query embeddings kept by default (`[index] query_cache`).
+pub const DEFAULT_QUERY_CACHE: usize = 256;
+
+/// `(model, query)` → query vector.
+type QueryCache = LruCache<(String, String), Vec<f32>>;
+
 /// Engine configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// Where the index lives; defaults to `<root>/.dendrite/rag`.
     pub index_dir: Option<PathBuf>,
@@ -27,6 +36,24 @@ pub struct Config {
     pub chunk: ChunkOptions,
     pub embed: EmbedConfig,
     pub rerank: RerankConfig,
+    /// Capacity of the LRU query embedding cache (0 disables).
+    pub query_cache: usize,
+    /// Leiden resolution for communities: higher gives more, smaller communities.
+    pub graph_resolution: f64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            index_dir: None,
+            walk: WalkOptions::default(),
+            chunk: ChunkOptions::default(),
+            embed: EmbedConfig::default(),
+            rerank: RerankConfig::default(),
+            query_cache: DEFAULT_QUERY_CACHE,
+            graph_resolution: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +101,12 @@ pub struct IndexReport {
     /// continues where this one stopped.
     #[serde(default)]
     pub embed_pending: usize,
+    /// Communities after this run (computed again only when files changed).
+    #[serde(default)]
+    pub communities: usize,
+    /// Time spent building the code graph and its communities.
+    #[serde(default)]
+    pub graph_ms: u64,
     pub duration_ms: u64,
 }
 
@@ -114,6 +147,7 @@ pub struct Status {
     pub last_indexed: Option<u64>,
     pub vectors: usize,
     pub embed_model: Option<String>,
+    pub communities: usize,
 }
 
 pub struct Engine {
@@ -127,6 +161,10 @@ pub struct Engine {
     pub(crate) reranker: Option<Box<dyn Reranker>>,
     /// Built lazily from the ledger; cleared whenever an index run changes chunks.
     pub(crate) symbols: RwLock<Option<Arc<SymbolIndex>>>,
+    /// The typed code graph, built and cleared like `symbols`.
+    pub(crate) graph: RwLock<Option<Arc<CodeGraph>>>,
+    /// Query embeddings by `(model, query)`; `None` when `cfg.query_cache` is 0.
+    pub(crate) query_cache: Option<Mutex<QueryCache>>,
 }
 
 impl Engine {
@@ -151,21 +189,34 @@ impl Engine {
         }
         let ledger = Ledger::open(&dir.join("ledger.redb"))?;
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
-        let mut vectors = FlatIndex::load(&dir.join(VECTORS_FILE))?;
+        let vectors_path = dir.join(VECTORS_FILE);
+        let mut vectors = match FlatIndex::load(&vectors_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to load vector index at {}: {e}; starting with empty index",
+                    vectors_path.display()
+                );
+                FlatIndex::new()
+            }
+        };
         // Vectors from another model are useless: rebuild them (from the cache when possible).
         if ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
             vectors.clear();
         }
+        let query_cache = NonZeroUsize::new(cfg.query_cache).map(|n| Mutex::new(LruCache::new(n)));
         Ok(Self {
             root,
             dir,
             ledger,
             lexical,
-            reranker: GatewayReranker::new(&cfg.rerank).map(|r| Box::new(r) as Box<dyn Reranker>),
+            reranker: crate::rerank::from_config(&cfg.rerank)?,
             cfg,
             embedder,
             vectors,
             symbols: RwLock::new(None),
+            graph: RwLock::new(None),
+            query_cache,
         })
     }
 
@@ -238,13 +289,13 @@ impl Engine {
 
         // Chunk the added and modified files.
         let opts = self.cfg.chunk;
-        let fresh: Vec<(&SourceFile, &String, Vec<Chunk>)> = scanned
+        let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = scanned
             .par_iter()
             .filter(|(f, _)| added.contains(&f.path))
             .map(|(f, h)| {
-                let chunks =
-                    read_text(&f.abs).map_or_else(Vec::new, |src| chunk_file(&f.path, f.lang, &src, opts));
-                (f, h, chunks)
+                let (chunks, imports) = read_text(&f.abs)
+                    .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
+                (f, h, chunks, imports)
             })
             .collect();
 
@@ -264,7 +315,7 @@ impl Engine {
         for p in &removed {
             lw.remove_file(p);
         }
-        for (_, _, chunks) in &fresh {
+        for (_, _, chunks, _) in &fresh {
             for c in chunks {
                 lw.add(c)?;
             }
@@ -286,7 +337,7 @@ impl Engine {
                 batch.remove_file(p)?;
             }
         }
-        for (f, h, chunks) in &fresh {
+        for (f, h, chunks, imports) in &fresh {
             for c in chunks {
                 batch.put_chunk(c)?;
             }
@@ -296,6 +347,7 @@ impl Engine {
                 size: f.size,
                 mtime_ns: f.mtime_ns,
                 chunk_ids: chunks.iter().map(|c| c.id.clone()).collect(),
+                imports: imports.clone(),
             };
             batch.put_file(&f.path, &entry)?;
         }
@@ -324,7 +376,16 @@ impl Engine {
         let changed = full || report.files_changed > 0 || report.files_removed > 0;
         if changed {
             *self.symbols.write().expect("symbols lock") = None;
+            *self.graph.write().expect("graph lock") = None;
         }
+        // Communities follow the graph; a ledger from before communities gets them now.
+        let mut communities = self.ledger.communities()?.len();
+        if changed || (communities == 0 && !scanned.is_empty()) {
+            let t = Instant::now();
+            communities = self.update_communities()?;
+            report.graph_ms = t.elapsed().as_millis() as u64;
+        }
+        report.communities = communities;
         self.sync_vectors(changed, deadline, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
@@ -351,7 +412,16 @@ impl Engine {
         let chunk_count = self.ledger.chunk_count()? as usize;
         let same_model = self.ledger.meta("embed_model")?.as_deref() == Some(model.as_str());
         if !changed && same_model && self.vectors.len() == chunk_count {
-            return Ok(());
+            // Equal counts can still hide a stale file: compare ids too. The file table
+            // lists every chunk id without loading chunk texts.
+            let files = self.ledger.files()?;
+            if files
+                .values()
+                .flat_map(|f| &f.chunk_ids)
+                .all(|id| self.vectors.contains(id))
+            {
+                return Ok(());
+            }
         }
 
         // Only ids and content hashes are kept in memory; texts are loaded per group.
@@ -425,10 +495,10 @@ impl Engine {
 
     /// Embeds a query with the configured embedder (`None` without one).
     pub fn embed_query(&self, query: &str) -> Result<Option<Vec<f32>>> {
-        match &self.embedder {
-            Some(e) => Ok(Some(e.embed_query(query)?)),
-            None => Ok(None),
-        }
+        let Some(embedder) = &self.embedder else {
+            return Ok(None);
+        };
+        Ok(Some(self.cached_embed_query(embedder.as_ref(), query)?))
     }
 
     /// Nearest chunks to an already-embedded query. The int8 scan shortlists
@@ -454,6 +524,20 @@ impl Engine {
         Ok(shortlist)
     }
 
+    /// Embeds a query, reusing the vector of an identical earlier query with the same model.
+    fn cached_embed_query(&self, embedder: &dyn Embedder, query: &str) -> Result<Vec<f32>> {
+        let Some(cache) = &self.query_cache else {
+            return Ok(embedder.embed_query(query)?);
+        };
+        let key = (embedder.model_id().to_string(), query.to_string());
+        if let Some(v) = cache.lock().expect("query cache lock").get(&key) {
+            return Ok(v.clone());
+        }
+        let v = embedder.embed_query(query)?;
+        cache.lock().expect("query cache lock").put(key, v.clone());
+        Ok(v)
+    }
+
     /// `(chunk_id, cosine)` for the query, best first.
     pub fn dense_ranking(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>> {
         let Some(embedder) = &self.embedder else {
@@ -462,7 +546,7 @@ impl Engine {
         if self.vectors.is_empty() {
             return Ok(Vec::new());
         }
-        let q = embedder.embed_query(query)?;
+        let q = self.cached_embed_query(embedder.as_ref(), query)?;
         self.search_vector(&q, top_k)
     }
 
@@ -496,7 +580,19 @@ impl Engine {
             last_indexed: self.ledger.meta("last_indexed")?.and_then(|s| s.parse().ok()),
             vectors: self.vectors.len(),
             embed_model: self.embedder.as_ref().map(|e| e.model_id().to_string()),
+            communities: self.ledger.communities()?.len(),
         })
+    }
+
+    /// Recomputes the communities of the code graph and stores them; returns their count.
+    fn update_communities(&self) -> Result<usize> {
+        let graph = self.code_graph()?;
+        let previous = self.ledger.community_files()?;
+        let communities = crate::graph::communities::detect(&graph, &previous, self.cfg.graph_resolution);
+        let mut batch = self.ledger.batch()?;
+        batch.put_communities(&communities, &self.ledger.files()?)?;
+        batch.commit()?;
+        Ok(communities.len())
     }
 
     /// Deletes the whole index directory.
@@ -707,5 +803,266 @@ mod tests {
         assert!(index_dir.join(".gitignore").exists());
         e.purge().unwrap();
         assert!(!index_dir.exists());
+    }
+
+    struct SharedEmbedder(Arc<HashEmbedder>);
+
+    impl Embedder for SharedEmbedder {
+        fn model_id(&self) -> &str {
+            self.0.model_id()
+        }
+
+        fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
+            self.0.embed_documents(texts)
+        }
+
+        fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
+            self.0.embed_query(text)
+        }
+    }
+
+    #[test]
+    fn truncated_or_corrupt_vectors_heals_from_cache() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, r.chunks_added);
+        assert!(e.status().unwrap().vectors > 0);
+        let hits_before = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_before[0].path, "pkg/sidecar/sidecar.go");
+        let initial_calls = embedder.calls.load(Ordering::SeqCst);
+        assert!(initial_calls > 0);
+        drop(e);
+
+        // Corrupt vectors.bin by truncating it
+        let vectors_path = dir.path().join(".dendrite/rag").join(VECTORS_FILE);
+        assert!(vectors_path.exists());
+        fs::write(&vectors_path, b"DRV3-truncated").unwrap();
+
+        // Engine::open succeeds on corrupt vectors.bin
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        assert_eq!(e.status().unwrap().vectors, 0);
+
+        // After index, dense search works with zero embed calls
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(embedder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+
+        let hits_after = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_after[0].path, "pkg/sidecar/sidecar.go");
+
+        // Now corrupt the BLAKE3 checksum footer
+        drop(e);
+        let mut bytes = fs::read(&vectors_path).unwrap();
+        let len = bytes.len();
+        bytes[len - 1] ^= 0xff;
+        fs::write(&vectors_path, &bytes).unwrap();
+
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        assert_eq!(e.status().unwrap().vectors, 0);
+
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(embedder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+
+        let hits_after2 = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_after2[0].path, "pkg/sidecar/sidecar.go");
+    }
+
+    #[test]
+    fn sync_vectors_detects_mismatched_ids_with_equal_count() {
+        let dir = project();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        e.index(false).unwrap();
+        let total = e.status().unwrap().chunks as usize;
+        assert!(total > 0);
+        let vectors_path = dir.path().join(".dendrite/rag").join(VECTORS_FILE);
+
+        // Replace one valid ID with an alien ID, keeping the same count
+        let mut idx = FlatIndex::load(&vectors_path).unwrap();
+        let first_id = idx.ids().next().unwrap().to_string();
+        let tag = idx.tag(&first_id).unwrap().to_string();
+        idx.remove(&first_id);
+        idx.upsert("alien-chunk-id", &tag, &vec![0.1f32; 64]);
+        assert_eq!(idx.len(), total);
+        idx.save(&vectors_path).unwrap();
+
+        // Reopen with this modified vectors.bin
+        drop(e);
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        // Count matches, but IDs do not match ledger chunk IDs
+        assert_eq!(e.status().unwrap().vectors, total);
+        assert!(!e.vectors.contains(&first_id));
+        assert!(e.vectors.contains("alien-chunk-id"));
+
+        // index(false) must detect the mismatch, remove alien id, and refill the missing id from cache
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(e.status().unwrap().vectors, total);
+        assert!(e.vectors.contains(&first_id));
+        assert!(!e.vectors.contains("alien-chunk-id"));
+    }
+
+    #[test]
+    fn query_cache_skips_repeated_embeddings() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let embedder = HashEmbedder::new();
+        let calls = embedder.calls.clone();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder))).unwrap();
+        e.index(false).unwrap();
+
+        let initial_calls = calls.load(Ordering::SeqCst);
+
+        // First query embeds and populates the cache.
+        let hits1 = e.dense_ranking("LocateBinary sidecar", 1).unwrap();
+        assert!(!hits1.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 1);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 1);
+
+        // Second identical query hits the LRU cache without calling the embedder.
+        let hits2 = e.dense_ranking("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits1, hits2);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            initial_calls + 1,
+            "repeated query must not call the embedder"
+        );
+
+        // A different query calls the embedder again.
+        let hits3 = e.dense_ranking("IndexProject", 1).unwrap();
+        assert!(!hits3.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 2);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 2);
+    }
+
+    #[test]
+    fn query_cache_is_keyed_by_model() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        e.index(false).unwrap();
+        e.dense_ranking("LocateBinary", 1).unwrap();
+        let other = HashEmbedder::with_model("hash-64-v2");
+        let calls = other.calls.clone();
+        e.embedder = Some(Box::new(other));
+        e.dense_ranking("LocateBinary", 1).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "another model must not reuse the vector"
+        );
+    }
+
+    #[test]
+    fn query_cache_disabled_when_capacity_is_zero() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let embedder = HashEmbedder::new();
+        let calls = embedder.calls.clone();
+        let cfg = Config {
+            query_cache: 0,
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(embedder))).unwrap();
+        e.index(false).unwrap();
+
+        let initial_calls = calls.load(Ordering::SeqCst);
+
+        e.dense_ranking("LocateBinary", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 1);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 0);
+
+        // Second identical query still calls the embedder because cache is disabled.
+        e.dense_ranking("LocateBinary", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 2);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 0);
+    }
+
+    #[test]
+    fn query_cache_evicts_lru_when_capacity_reached() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let embedder = HashEmbedder::new();
+        let calls = embedder.calls.clone();
+        let cfg = Config {
+            query_cache: 2,
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(embedder))).unwrap();
+        e.index(false).unwrap();
+
+        let initial_calls = calls.load(Ordering::SeqCst);
+
+        e.dense_ranking("q1", 1).unwrap();
+        e.dense_ranking("q2", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 2);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 2);
+
+        // Access q1 so q2 becomes the least recently used.
+        e.dense_ranking("q1", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 2);
+
+        // Insert q3, evicting q2.
+        e.dense_ranking("q3", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 3);
+        assert_eq!(e.query_cache.as_ref().map_or(0, |c| c.lock().unwrap().len()), 2);
+
+        // q1 is still in cache.
+        e.dense_ranking("q1", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 3);
+
+        // q2 was evicted, so it calls the embedder again.
+        e.dense_ranking("q2", 1).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), initial_calls + 4);
+    }
+
+    #[test]
+    fn index_stores_communities_per_file_and_chunk() {
+        let dir = project();
+        let mut e = Engine::open_with_embedder(dir.path(), Config::default(), None).unwrap();
+        let r = e.index(false).unwrap();
+        assert!(r.communities > 0);
+        let files = e.ledger.community_files().unwrap();
+        assert_eq!(files.len(), e.ledger.files().unwrap().len());
+        let (path, id) = files.iter().next().unwrap();
+        let entry = &e.ledger.files().unwrap()[path];
+        if let Some(chunk) = entry.chunk_ids.first() {
+            assert_eq!(e.ledger.community_of_chunk(chunk).unwrap(), Some(*id));
+        }
+        assert!(e.ledger.community(*id).unwrap().unwrap().files.contains(path));
+        assert_eq!(e.status().unwrap().communities, r.communities);
+        // A no-op run keeps them without recomputing.
+        let again = e.index(false).unwrap();
+        assert_eq!(again.communities, r.communities);
+        assert_eq!(again.graph_ms, 0);
     }
 }

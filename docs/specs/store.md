@@ -15,10 +15,15 @@ redb tables:
 
 | Table | Key | Value |
 |---|---|---|
-| `files` | path | `{blake3, size, mtime_ns, chunk_ids}` |
+| `files` | path | `{blake3, size, mtime_ns, chunk_ids, imports}` |
 | `chunks` | chunk_id | chunk record (see chunking.md) |
 | `embeddings` | `model_id ‖ 0x00 ‖ content_hash` | `f32` vector, little-endian (the cache; kept across rebuilds) |
 | `meta` | key | schema version, Merkle root, embed model, last indexed time |
+| `community_files`, `community_chunks`, `communities` | path / chunk id / id | community of each file and chunk, and each community's record ([graph.md](graph.md)) |
+
+The schema version is `2` (version 2 added `calls`, `method_calls` and `imports`). A ledger with another version is cleared on open, keeping the embedding cache, so the next `index` re-chunks every file without re-embedding unchanged content.
+
+`vectors.bin` (format `DRV3`): magic, `u32` dimension, `u32` row count, then per row a `u16`-length id, a `u16`-length tag, an `f32` scale and the `i8` components, followed by a BLAKE3 checksum of everything before it. It is written to a temporary file that is fsynced before the rename, and the directory is fsynced after. `DRV2` files (with `u8` lengths and no checksum) still load. A missing, truncated or corrupt file is not an error: the engine starts with an empty vector index and the next `index` refills it from the `embeddings` cache, without calling the embedder. That run also compares the stored ids with the ledger's, so a stale file with the right row count is repaired too.
 
 ## Incremental indexing
 

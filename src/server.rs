@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::engine::{Config, Engine, Error};
+use crate::graph::EdgeKind;
 use crate::retrieve::{Mode, SearchOpts};
 use crate::rpc::{self, Handler, RpcError, code};
 
@@ -88,6 +89,57 @@ struct GrepParams {
     paths: Vec<String>,
     #[serde(default = "default_max_results")]
     max_results: usize,
+}
+
+#[derive(Deserialize)]
+struct CommunitiesParams {
+    root: String,
+    #[serde(default = "default_communities")]
+    limit: usize,
+    #[serde(default = "default_min_size")]
+    min_size: usize,
+}
+
+#[derive(Deserialize)]
+struct GodNodesParams {
+    root: String,
+    #[serde(default = "default_god_in_degree")]
+    min_in_degree: usize,
+    #[serde(default = "default_communities")]
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+struct PathParams {
+    root: String,
+    from: String,
+    to: String,
+    #[serde(default)]
+    kinds: Vec<EdgeKind>,
+    #[serde(default = "default_max_hops")]
+    max_hops: usize,
+}
+
+#[derive(Deserialize)]
+struct ExplainParams {
+    root: String,
+    target: String,
+}
+
+fn default_communities() -> usize {
+    50
+}
+
+fn default_min_size() -> usize {
+    2
+}
+
+fn default_god_in_degree() -> usize {
+    crate::graph::query::GOD_NODE_IN_DEGREE
+}
+
+fn default_max_hops() -> usize {
+    6
 }
 
 fn default_top_k() -> usize {
@@ -258,6 +310,38 @@ impl Handler for Server {
                     .map_err(history_error)?;
                 Ok(json!({ "hits": hits }))
             }
+            "graph.communities" => {
+                let p: CommunitiesParams = rpc::params(params)?;
+                let communities = self
+                    .indexed(&p.root)?
+                    .graph_communities(p.limit, p.min_size)
+                    .map_err(engine_error)?;
+                Ok(json!({ "communities": communities }))
+            }
+            "graph.god_nodes" => {
+                let p: GodNodesParams = rpc::params(params)?;
+                let nodes = self
+                    .indexed(&p.root)?
+                    .graph_god_nodes(p.min_in_degree, p.limit)
+                    .map_err(engine_error)?;
+                Ok(json!({ "nodes": nodes }))
+            }
+            "graph.path" => {
+                let p: PathParams = rpc::params(params)?;
+                to_value(
+                    self.indexed(&p.root)?
+                        .graph_path(&p.from, &p.to, &p.kinds, p.max_hops)
+                        .map_err(engine_error)?,
+                )
+            }
+            "graph.explain" => {
+                let p: ExplainParams = rpc::params(params)?;
+                let matches = self
+                    .indexed(&p.root)?
+                    .graph_explain(&p.target)
+                    .map_err(engine_error)?;
+                Ok(json!({ "matches": matches }))
+            }
             "grep" => {
                 let p: GrepParams = rpc::params(params)?;
                 let matches = self
@@ -299,6 +383,8 @@ mod tests {
 
         let r = call(&mut s, "search", json!({"root": root, "query": "x"}));
         assert_eq!(r["error"]["data"]["kind"], "not_indexed");
+        let r = call(&mut s, "graph.communities", json!({"root": root}));
+        assert_eq!(r["error"]["data"]["kind"], "not_indexed");
 
         let r = call(&mut s, "index", json!({"root": root}));
         assert_eq!(r["result"]["files_scanned"], 3);
@@ -326,6 +412,32 @@ mod tests {
             json!({"root": root, "name": "IndexProject"}),
         );
         assert_eq!(r["result"]["hits"][0]["path"], "pkg/rag/indexer.go");
+        let r = call(&mut s, "graph.communities", json!({"root": root, "min_size": 1}));
+        assert!(!r["result"]["communities"].as_array().unwrap().is_empty());
+        let r = call(
+            &mut s,
+            "graph.god_nodes",
+            json!({"root": root, "min_in_degree": 1}),
+        );
+        assert!(r["result"]["nodes"].is_array());
+        let r = call(
+            &mut s,
+            "graph.path",
+            json!({"root": root, "from": "pkg/rag/indexer.go", "to": "pkg/sidecar/sidecar.go", "kinds": ["call"]}),
+        );
+        assert_eq!(r["result"]["level"], "file");
+        let r = call(
+            &mut s,
+            "graph.path",
+            json!({"root": root, "from": "a", "to": "b", "kinds": ["bogus"]}),
+        );
+        assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+        let r = call(
+            &mut s,
+            "graph.explain",
+            json!({"root": root, "target": "IndexProject"}),
+        );
+        assert_eq!(r["result"]["matches"][0]["kind"], "symbol");
         let r = call(&mut s, "grep", json!({"root": root, "pattern": "^func"}));
         assert_eq!(r["result"]["matches"].as_array().unwrap().len(), 2);
         let r = call(&mut s, "grep", json!({"root": root, "pattern": "("}));

@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/graph.explain.json",
+  "title": "graph.explain",
+  "description": "Callers, callees, imports and community of a symbol (up to five definitions of the name) or of a file.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "target"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "target": {
+        "type": "string",
+        "description": "Symbol name or project-relative path"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "matches"
+    ],
+    "properties": {
+      "matches": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/symbol"
+            },
+            {
+              "$ref": "#/$defs/file"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "symbol": {
+      "type": "object",
+      "required": [
+        "kind",
+        "symbol",
+        "sites",
+        "community",
+        "god_node",
+        "in_degree",
+        "out_degree",
+        "users",
+        "uses",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "const": "symbol"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "sites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "line",
+              "chunk"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "chunk": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "community": {
+          "$ref": "#/$defs/community_ref"
+        },
+        "god_node": {
+          "type": "boolean"
+        },
+        "in_degree": {
+          "type": "integer"
+        },
+        "out_degree": {
+          "type": "integer"
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/neighbour"
+          }
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/neighbour"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path",
+        "community",
+        "defines",
+        "imports",
+        "imported_by",
+        "external_imports",
+        "depends_on",
+        "used_by",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "const": "file"
+        },
+        "path": {
+          "type": "string"
+        },
+        "community": {
+          "$ref": "#/$defs/community_ref"
+        },
+        "defines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/top_symbol"
+          }
+        },
+        "imports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "imported_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "external_imports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "used_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "neighbour": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "path",
+        "line",
+        "kind"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "call",
+            "import",
+            "type"
+          ]
+        }
+      }
+    },
+    "community_ref": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "top_symbol": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "line",
+        "in_degree"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "in_degree": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

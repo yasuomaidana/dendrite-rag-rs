@@ -72,6 +72,14 @@
         "type": "integer",
         "minimum": 0,
         "description": "Chunks still without vectors; later index runs continue"
+      },
+      "communities": {
+        "type": "integer",
+        "description": "Communities after this run"
+      },
+      "graph_ms": {
+        "type": "integer",
+        "description": "Time spent on the code graph and communities"
       }
     }
   }

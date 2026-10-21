@@ -54,6 +54,10 @@
           "string",
           "null"
         ]
+      },
+      "communities": {
+        "type": "integer",
+        "description": "Communities of the code graph"
       }
     }
   }

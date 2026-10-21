@@ -7,17 +7,24 @@ use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, Tab
 use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
+use crate::graph::communities::Community;
 
 const FILES: TableDefinition<&str, &[u8]> = TableDefinition::new("files");
 const CHUNKS: TableDefinition<&str, &[u8]> = TableDefinition::new("chunks");
 const EMBEDDINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("embeddings");
 const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
+/// Community id per file and per chunk, and each community's record.
+const COMMUNITY_FILES: TableDefinition<&str, u32> = TableDefinition::new("community_files");
+const COMMUNITY_CHUNKS: TableDefinition<&str, u32> = TableDefinition::new("community_chunks");
+const COMMUNITIES: TableDefinition<u32, &[u8]> = TableDefinition::new("communities");
 
 /// redb page cache size.
 const CACHE_BYTES: usize = 8 << 20;
 
-/// Ledger schema version, stored under `meta.schema`.
-pub const SCHEMA_VERSION: &str = "1";
+/// Ledger schema version, stored under `meta.schema`. Version 2 added call references
+/// and file imports; an older ledger is cleared on open (embeddings are kept) so the next
+/// index run re-chunks every file.
+pub const SCHEMA_VERSION: &str = "2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -45,6 +52,9 @@ pub struct FileEntry {
     pub size: u64,
     pub mtime_ns: u128,
     pub chunk_ids: Vec<String>,
+    /// Import specifiers as written in the source (see [`crate::chunk::analyze_file`]).
+    #[serde(default)]
+    pub imports: Vec<String>,
 }
 
 pub struct Ledger {
@@ -60,7 +70,20 @@ impl Ledger {
         txn.open_table(FILES)?;
         txn.open_table(CHUNKS)?;
         txn.open_table(EMBEDDINGS)?;
-        txn.open_table(META)?.insert("schema", SCHEMA_VERSION)?;
+        txn.open_table(COMMUNITY_FILES)?;
+        txn.open_table(COMMUNITY_CHUNKS)?;
+        txn.open_table(COMMUNITIES)?;
+        let mut meta = txn.open_table(META)?;
+        let stored = meta.get("schema")?.map(|v| v.value().to_string());
+        if stored.is_some_and(|v| v != SCHEMA_VERSION) {
+            meta.remove("merkle_root")?;
+            drop(meta);
+            txn.open_table(FILES)?.retain(|_, _| false)?;
+            txn.open_table(CHUNKS)?.retain(|_, _| false)?;
+            meta = txn.open_table(META)?;
+        }
+        meta.insert("schema", SCHEMA_VERSION)?;
+        drop(meta);
         txn.commit()?;
         Ok(Self { db })
     }
@@ -118,6 +141,43 @@ impl Ledger {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(META)?;
         Ok(table.get(key)?.map(|v| v.value().to_string()))
+    }
+
+    /// The community id of every file.
+    pub fn community_files(&self) -> Result<BTreeMap<String, u32>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITY_FILES)?;
+        let mut out = BTreeMap::new();
+        for row in table.iter()? {
+            let (k, v) = row?;
+            out.insert(k.value().to_string(), v.value());
+        }
+        Ok(out)
+    }
+
+    pub fn community_of_chunk(&self, chunk: &str) -> Result<Option<u32>> {
+        let txn = self.db.begin_read()?;
+        Ok(txn.open_table(COMMUNITY_CHUNKS)?.get(chunk)?.map(|v| v.value()))
+    }
+
+    pub fn community(&self, id: u32) -> Result<Option<Community>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITIES)?;
+        Ok(match table.get(id)? {
+            Some(v) => Some(serde_json::from_slice(v.value())?),
+            None => None,
+        })
+    }
+
+    /// Every community, by id.
+    pub fn communities(&self) -> Result<Vec<Community>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(COMMUNITIES)?;
+        let mut out = Vec::new();
+        for row in table.iter()? {
+            out.push(serde_json::from_slice(row?.1.value())?);
+        }
+        Ok(out)
     }
 
     /// A cached embedding for `key` (`model ‖ content_hash`).
@@ -191,6 +251,30 @@ impl LedgerBatch {
         Ok(())
     }
 
+    /// Replaces every community, with the id of each member file and of its chunks.
+    pub fn put_communities(
+        &mut self,
+        communities: &[Community],
+        files: &BTreeMap<String, FileEntry>,
+    ) -> Result<()> {
+        let mut by_file = self.txn.open_table(COMMUNITY_FILES)?;
+        let mut by_chunk = self.txn.open_table(COMMUNITY_CHUNKS)?;
+        let mut records = self.txn.open_table(COMMUNITIES)?;
+        by_file.retain(|_, _| false)?;
+        by_chunk.retain(|_, _| false)?;
+        records.retain(|_, _| false)?;
+        for c in communities {
+            records.insert(c.id, serde_json::to_vec(c)?.as_slice())?;
+            for f in &c.files {
+                by_file.insert(f.as_str(), c.id)?;
+                for chunk in files.get(f).map_or(&[][..], |e| e.chunk_ids.as_slice()) {
+                    by_chunk.insert(chunk.as_str(), c.id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Removes every file and chunk (embeddings are kept: they are keyed by content).
     pub fn clear_index(&mut self) -> Result<()> {
         self.txn.open_table(FILES)?.retain(|_, _| false)?;
@@ -240,6 +324,7 @@ mod tests {
                 size: 3,
                 mtime_ns: 7,
                 chunk_ids: vec![chunks[0].id.clone()],
+                imports: vec!["fmt".into()],
             };
             b.put_file("a.go", &entry).unwrap();
             b.put_chunk(&chunks[0]).unwrap();
@@ -260,5 +345,35 @@ mod tests {
         assert!(ledger.files().unwrap().is_empty());
         assert_eq!(ledger.chunk_count().unwrap(), 0);
         assert_eq!(ledger.embedding_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn an_older_schema_is_cleared_but_keeps_embeddings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.redb");
+        {
+            let ledger = Ledger::open(&path).unwrap();
+            let mut b = ledger.batch().unwrap();
+            b.put_file(
+                "a.go",
+                &FileEntry {
+                    hash: "h".into(),
+                    size: 1,
+                    mtime_ns: 1,
+                    chunk_ids: Vec::new(),
+                    imports: Vec::new(),
+                },
+            )
+            .unwrap();
+            b.put_embedding("m:x", &[1.0]).unwrap();
+            b.set_meta("merkle_root", "abc").unwrap();
+            b.set_meta("schema", "1").unwrap();
+            b.commit().unwrap();
+        }
+        let ledger = Ledger::open(&path).unwrap();
+        assert!(ledger.files().unwrap().is_empty());
+        assert_eq!(ledger.meta("merkle_root").unwrap(), None);
+        assert_eq!(ledger.embedding_count().unwrap(), 1);
+        assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
     }
 }

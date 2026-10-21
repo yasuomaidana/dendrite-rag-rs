@@ -19,8 +19,10 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 # batch = 32                    # texts per request or forward pass
 
 [rerank]
-# model = "bge-reranker-v2-m3"  # cross-encoder at a Cohere-style /v1/rerank; off when unset
-# url = "http://localhost:4000"
+# backend = "gateway"           # gateway (default) | candle | none
+# model = "bge-reranker-v2-m3"  # cross-encoder; off when unset on gateway
+# url = "http://localhost:4000" # gateway URL
+# batch = 16                    # in-process batch size
 
 [index]
 # max_file_bytes = 1048576
@@ -30,7 +32,7 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 |---|---|
 | `DENDRITE_RAG_EMBED_BACKEND` | `embed.backend`. A backend different from the file's drops the file's `model`, `url`, prefixes and pooling, because they belong to the file's backend |
 | `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` | the matching `embed.*` key |
-| `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL` | `rerank.model`, `rerank.url` |
+| `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL` | `rerank.backend`, `rerank.model`, `rerank.url`. A backend different from the file's drops the file's model and URL |
 | `DENDRITE_RAG_MAX_FILE_BYTES` | `index.max_file_bytes` |
 
 Unknown keys, unknown backends and malformed values are errors, never silently replaced by a default.

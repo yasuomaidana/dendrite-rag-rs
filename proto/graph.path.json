@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/graph.path.json",
+  "title": "graph.path",
+  "description": "Shortest path between two symbols (symbol graph) or files (file graph; a symbol stands for its defining files). Forward paths are preferred; otherwise edges may be followed backwards.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "from",
+      "to"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "from": {
+        "type": "string",
+        "description": "Symbol name or project-relative path"
+      },
+      "to": {
+        "type": "string"
+      },
+      "kinds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "call",
+            "import",
+            "type"
+          ]
+        },
+        "description": "Edge kinds to follow; all when empty"
+      },
+      "max_hops": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 6
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "found",
+      "directed",
+      "level",
+      "steps"
+    ],
+    "properties": {
+      "found": {
+        "type": "boolean"
+      },
+      "directed": {
+        "type": "boolean",
+        "description": "Every edge points forward"
+      },
+      "level": {
+        "type": "string",
+        "enum": [
+          "symbol",
+          "file"
+        ]
+      },
+      "steps": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/step"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": [
+        "node"
+      ],
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string",
+          "description": "path:line of a symbol's definition"
+        },
+        "via": {
+          "type": "string",
+          "enum": [
+            "call",
+            "import",
+            "type"
+          ]
+        },
+        "reversed": {
+          "type": "boolean",
+          "description": "Present and true when the edge was followed backwards"
+        }
+      }
+    }
+  }
+}
