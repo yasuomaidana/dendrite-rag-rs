@@ -1,6 +1,7 @@
 //! Shared test fixtures.
 
 use std::fs;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::embed::{EmbedError, Embedder, Result, normalize};
@@ -31,15 +32,27 @@ pub struct HashEmbedder {
     pub fail: AtomicBool,
     /// Makes query embedding fail (the gateway went down after indexing).
     pub fail_queries: AtomicBool,
-    pub calls: AtomicUsize,
+    pub calls: Arc<AtomicUsize>,
+    pub model: &'static str,
+}
+
+impl Default for HashEmbedder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HashEmbedder {
     pub fn new() -> Self {
+        Self::with_model("hash-64")
+    }
+
+    pub fn with_model(model: &'static str) -> Self {
         Self {
             fail: false.into(),
             fail_queries: false.into(),
-            calls: 0.into(),
+            calls: Arc::new(AtomicUsize::new(0)),
+            model,
         }
     }
 
@@ -55,7 +68,7 @@ impl HashEmbedder {
 
 impl Embedder for HashEmbedder {
     fn model_id(&self) -> &str {
-        "hash-64"
+        self.model
     }
 
     fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -70,6 +83,7 @@ impl Embedder for HashEmbedder {
         if self.fail_queries.load(Ordering::SeqCst) {
             return Err(EmbedError::Http("gateway down".into()));
         }
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(Self::vector(text))
     }
 }

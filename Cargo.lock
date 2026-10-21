@@ -837,6 +837,7 @@ dependencies = [
  "hf-hub",
  "ignore",
  "libc",
+ "lru",
  "model2vec-rs",
  "oxillama-runtime",
  "rayon",
