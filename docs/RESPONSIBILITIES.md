@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-`dendrite-rag-rs` is the dedicated Rust repository for Dendrite's hybrid retrieval-augmented generation (RAG) engine, BLAKE3 content-addressable segmented store (CAS), and distributed memory synchronization engine (Pillar 7 & Pillar 9). It provides deterministic sparse (Okapi BM25) and dense (vector embedding) indexing, Reciprocal Rank Fusion (RRF) ranking, structured topic memory parsing with zero-extrapolation fidelity guards, and multi-tier memory synchronization (`local-only`, `edge` WAL, and `push` compaction). Currently initialized as a minimal Rust library scaffold (`src/lib.rs`), it is the extraction target for Dendrite's retrieval, segmented storage, and memory subsystems under umbrella ticket `DEN-974` (`DRAG-1`).
+`dendrite-rag-rs` is the dedicated Rust repository for Dendrite's hybrid retrieval-augmented generation (RAG) engine, BLAKE3 content-addressable segmented store (CAS), and distributed memory synchronization engine (Pillar 7 & Pillar 9). It provides deterministic sparse (Okapi BM25) and dense (vector embedding) indexing, Reciprocal Rank Fusion (RRF) ranking, structured topic memory parsing with zero-extrapolation fidelity guards, and multi-tier memory synchronization (`local-only`, `edge` WAL, and `push` compaction). It ships the Cargo package `dendrite-rag` (library `dendrite_rag`, binary `dendrite-rag`) and is the extraction target for Dendrite's retrieval, segmented storage, and memory subsystems under umbrella ticket `DEN-974` (`DRAG-1`).
 
 ---
 
@@ -47,7 +47,7 @@
   - Speaks **JSON-RPC 2.0 over stdio** with request/response schemas defined in `proto/*.json` and versioned via SemVer.
   - Exposes health handshake, incremental project indexing, hybrid BM25 + vector chunk retrieval, CAS segment commit/query/inspect/purge operations, memory sync mode execution (`local-only`, `edge`, `push`), and topic memory fidelity verification.
 - **Rust Crate API (`dendrite-rag` / `dendrite_rag_rs`)**:
-  - Library crate (`src/lib.rs`, currently containing bootstrap stub `pub fn init() -> bool`) exposing retrieval, CAS, and memory sync primitives for direct Rust integration and unit/property testing.
+  - Library crate `dendrite_rag` exposing retrieval, CAS, and memory sync primitives for direct Rust integration and unit/property testing.
 
 ### Who Consumes It
 - **`dendrite-control` (`Dendrite` Go repo)**:

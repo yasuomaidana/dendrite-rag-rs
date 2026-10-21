@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/health.json",
+  "title": "health",
+  "description": "Handshake. Clients refuse a server whose protocol major version differs from theirs.",
+  "params": { "type": ["object", "null"], "additionalProperties": false },
+  "result": {
+    "type": "object",
+    "required": ["name", "version", "protocol"],
+    "properties": {
+      "name": { "const": "dendrite-rag" },
+      "version": { "type": "string" },
+      "protocol": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+    }
+  }
+}
