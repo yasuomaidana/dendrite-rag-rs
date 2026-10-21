@@ -48,12 +48,12 @@ struct Probe {
     position_embedding_type: Option<String>,
 }
 
-fn model_err(e: impl std::fmt::Display) -> EmbedError {
+pub(crate) fn model_err(e: impl std::fmt::Display) -> EmbedError {
     EmbedError::Model(e.to_string())
 }
 
 /// `config.json`, `tokenizer.json` and the safetensors weights of a folder or hub repo.
-fn model_files(model: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
+pub(crate) fn model_files(model: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
     let local = Path::new(model);
     if local.is_dir() {
         return Ok((
@@ -80,7 +80,7 @@ fn model_files(model: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
 
 /// The device this build runs on: CUDA with `candle-cuda`, Metal with `candle-metal`,
 /// otherwise the CPU.
-fn device() -> Result<Device> {
+pub(crate) fn device() -> Result<Device> {
     #[cfg(feature = "candle-cuda")]
     {
         Device::new_cuda(0).map_err(model_err)

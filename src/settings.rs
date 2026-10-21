@@ -8,6 +8,7 @@
 //! # api_key_env = "HF_TOKEN"   document_prefix / query_prefix / pooling / batch
 //!
 //! [rerank]
+//! backend = "gateway"            # gateway (default) | candle | none
 //! model = "bge-reranker-v2-m3"
 //!
 //! [index]
@@ -17,7 +18,7 @@
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
-//! `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL`, `DENDRITE_RAG_MAX_FILE_BYTES`,
+//! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `DENDRITE_RAG_MAX_FILE_BYTES`,
 //! `DENDRITE_RAG_QUERY_CACHE`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
@@ -28,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::embed::{Backend, EmbedConfig, Pooling};
 use crate::engine::Config;
-use crate::rerank::RerankConfig;
+use crate::rerank::{RerankBackend, RerankConfig};
 
 /// Project-relative location of the settings file.
 pub const FILE: &str = ".dendrite/rag.toml";
@@ -115,8 +116,31 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_EMBED_BATCH={n:?}"))?,
             );
         }
+        let r = &mut self.rerank;
+        if let Some(b) = var("DENDRITE_RAG_RERANK_BACKEND") {
+            let Some(backend) = RerankBackend::parse(&b) else {
+                let names: Vec<_> = RerankBackend::ALL.iter().map(|b| b.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_RERANK_BACKEND={b:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            if backend != r.backend {
+                *r = RerankConfig {
+                    backend,
+                    ..Default::default()
+                };
+            }
+        }
         set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
         set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
+        set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
+        if let Some(n) = var("DENDRITE_RAG_RERANK_BATCH") {
+            self.rerank.batch = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_RERANK_BATCH={n:?}"))?,
+            );
+        }
         if let Some(n) = var("DENDRITE_RAG_MAX_FILE_BYTES") {
             self.index.max_file_bytes = Some(
                 n.parse()
@@ -261,5 +285,34 @@ query_cache = 512
             .unwrap();
         assert_eq!(s2.index.query_cache, Some(1024));
         assert_eq!(s2.config().query_cache, 1024);
+    }
+
+    #[test]
+    fn parses_rerank_backend_and_applies_env() {
+        let toml_with_rerank = r#"
+[embed]
+backend = "none"
+
+[rerank]
+backend = "candle"
+model = "BAAI/bge-reranker-base"
+"#;
+        let mut s = Settings::parse(toml_with_rerank).unwrap();
+        assert_eq!(s.rerank.backend, RerankBackend::Candle);
+        assert_eq!(s.rerank.model.as_deref(), Some("BAAI/bge-reranker-base"));
+
+        // Environment overrides file.
+        s.apply_env(env(&[("DENDRITE_RAG_RERANK_BACKEND", "none")]))
+            .unwrap();
+        assert_eq!(s.rerank.backend, RerankBackend::None);
+        // Changed backend drops file model
+        assert_eq!(s.rerank.model, None);
+
+        // Reject unknown backend
+        let mut s2 = Settings::default();
+        assert!(
+            s2.apply_env(env(&[("DENDRITE_RAG_RERANK_BACKEND", "word2vec")]))
+                .is_err()
+        );
     }
 }

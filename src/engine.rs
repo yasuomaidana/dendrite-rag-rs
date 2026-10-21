@@ -16,7 +16,7 @@ use crate::embed::{EmbedConfig, Embedder};
 use crate::graph::CodeGraph;
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
-use crate::rerank::{GatewayReranker, RerankConfig, Reranker};
+use crate::rerank::{RerankConfig, Reranker};
 use crate::symbols::SymbolIndex;
 use crate::vector::{FlatIndex, VectorIndex};
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
@@ -200,7 +200,7 @@ impl Engine {
             dir,
             ledger,
             lexical,
-            reranker: GatewayReranker::new(&cfg.rerank).map(|r| Box::new(r) as Box<dyn Reranker>),
+            reranker: crate::rerank::from_config(&cfg.rerank)?,
             cfg,
             embedder,
             vectors,

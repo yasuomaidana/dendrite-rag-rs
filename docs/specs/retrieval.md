@@ -61,7 +61,12 @@ RRF uses ranks only, so BM25 and cosine scores never need calibrating against ea
 
 ## Optional rerank
 
-A `Reranker` trait scores `(query, chunk)` pairs with a cross-encoder through the gateway's `/v1/rerank` endpoint (for example `bge-reranker-v2-m3`). It is applied to the top 30 fused candidates. Off by default.
+A `Reranker` trait scores `(query, chunk)` pairs with a cross-encoder. It is applied to the top 30 fused candidates. Off by default.
+
+Backends (`[rerank] backend`):
+- `gateway` (default): server with a Cohere-style `/v1/rerank` endpoint (e.g. LiteLLM gateway, model `bge-reranker-v2-m3`). Off when `model` is unset.
+- `candle`: in-process cross-encoder on candle (feature `candle`, default model `BAAI/bge-reranker-base`). Checkpoints with `model_type` `xlm-roberta` (the BGE rerankers) run through candle's XLM-RoBERTa sequence classifier, and `bert` ones (MiniLM-style cross-encoders) through BERT with its pooler and linear head. Runs on the GPU (Metal, CUDA) or CPU. Its logits match the reference implementation (transformers) within 0.05 on `BAAI/bge-reranker-base` (`live_candle_bge_reranker_scores`).
+- `none`: reranking disabled.
 
 ## Context packing
 
