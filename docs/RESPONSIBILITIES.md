@@ -154,10 +154,10 @@ Selection criteria: pure-Rust storage, < 200 MB baseline RSS, concurrent readers
 |---|---|---|
 | Chunking | **cAST** split-then-merge over **tree-sitter** syntax trees | fixed line windows (cut functions), whole files (dilute relevance) |
 | Lexical / BM25 | **Tantivy** with a code tokenizer (camelCase / snake_case / digit split + whole identifier) | SQLite FTS5 (bundled C FFI) |
-| Vector ANN | exact **flat** scan below 20k vectors; **hnsw_rs** above (cosine, M=16, ef_construction=200) | instant-distance (rebuild-only), sqlite-vec (C extension), embedded LanceDB (footprint, heavy build) |
+| Vector search | exact parallel **int8** scan (4× smaller than f32, recall@10 ≥ 0.95); HNSW deferred behind the `VectorIndex` trait | hnsw_rs now (extra f32 copy + graph breaks the 200 MB budget at 50k chunks), instant-distance (rebuild-only), sqlite-vec (C extension), embedded LanceDB (footprint, heavy build) |
 | Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default) and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
 | Fusion | weighted **RRF** (k = 60) over lexical, dense and symbol-name lists, implemented locally | `embedag-rag::RrfRanker` (two lists only, `Uuid` keys, pulls in `oxirag`) |
 | Change detection | **embedag-core** BLAKE3 Merkle tree (`MerkleNode::from_paths` + `diff`) | full rescans |
 | Ledger | **redb** (pure Rust) | SQLite (FFI) |
 
-Benchmark gate (DRAG-15): RSS < 200 MB at 50k chunks, p95 query latency < 30 ms with 8 concurrent readers, HNSW recall@10 ≥ 0.95 versus exact search, hybrid recall@10 ≥ lexical-only on the golden query set.
+Benchmark gate (DRAG-15): RSS < 200 MB at 50k chunks, p95 query latency < 30 ms with 8 concurrent readers, quantized recall@10 ≥ 0.95 versus exact f32 search, hybrid recall@10 ≥ lexical-only on the golden query set.

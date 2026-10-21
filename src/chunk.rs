@@ -217,12 +217,13 @@ fn merge_small(spans: Vec<Range<usize>>, src: &[u8], opts: ChunkOptions) -> Vec<
     let mut out: Vec<(Range<usize>, usize)> = Vec::new();
     for r in spans {
         let size = nonws(&src[r.clone()]);
-        if let Some((last, last_size)) = out.last_mut() {
-            if (*last_size < opts.min_chars || size < opts.min_chars) && *last_size + size <= opts.max_chars {
-                last.end = r.end;
-                *last_size += size;
-                continue;
-            }
+        if let Some((last, last_size)) = out.last_mut()
+            && (*last_size < opts.min_chars || size < opts.min_chars)
+            && *last_size + size <= opts.max_chars
+        {
+            last.end = r.end;
+            *last_size += size;
+            continue;
         }
         out.push((r, size));
     }
@@ -254,15 +255,15 @@ fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
                 range = Some(cap.node.byte_range());
             }
         }
-        if let (Some((name, name_byte)), Some(kind), Some(range)) = (name, kind, range) {
-            if !name.is_empty() {
-                out.push(Tag {
-                    kind,
-                    name,
-                    name_byte,
-                    range,
-                });
-            }
+        if let (Some((name, name_byte)), Some(kind), Some(range)) = (name, kind, range)
+            && !name.is_empty()
+        {
+            out.push(Tag {
+                kind,
+                name,
+                name_byte,
+                range,
+            });
         }
     }
     out
@@ -324,12 +325,13 @@ fn markdown_sections(src: &str, opts: ChunkOptions) -> Vec<(Range<usize>, Vec<St
             }
             continue;
         }
-        if let Some((last, _, last_size)) = out.last_mut() {
-            if (*last_size < opts.min_chars || size < opts.min_chars) && *last_size + size <= opts.max_chars {
-                last.end = end;
-                *last_size += size;
-                continue;
-            }
+        if let Some((last, _, last_size)) = out.last_mut()
+            && (*last_size < opts.min_chars || size < opts.min_chars)
+            && *last_size + size <= opts.max_chars
+        {
+            last.end = end;
+            *last_size += size;
+            continue;
         }
         out.push((*start..end, scope.clone(), size));
     }

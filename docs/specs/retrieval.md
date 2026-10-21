@@ -15,20 +15,41 @@ Fields:
 
 ## Dense index
 
-`Embedder` trait: `embed(&[String]) -> Vec<Vec<f32>>`, plus `dim()` and `model_id()`.
+`Embedder` trait: `model_id()`, `embed_documents(&[String])`, `embed_query(&str)`. Vectors are L2-normalized, so cosine similarity is a dot product.
 
 | Backend | When | Notes |
 |---|---|---|
-| `GatewayEmbedder` | default | OpenAI-compatible `POST {base}/v1/embeddings`, batches of 64, bearer key from `LITELLM_API_KEY`/`OPENAI_API_KEY`, base from `LITELLM_PROXY_URL` (default `http://localhost:4000`). Model from `Config::embed_model` (default `nomic-embed-text`) |
-| `Model2VecEmbedder` | feature `model2vec`, or `embed_backend = "model2vec"` | In-process static embeddings (model2vec-rs), no network, sub-millisecond per chunk; lower quality than a transformer, but a full offline fallback |
-| none | `embed_backend = "none"` | Lexical and symbol retrieval only |
+| `GatewayEmbedder` | default (`backend = "gateway"`) | OpenAI-compatible `POST {base}/v1/embeddings` in batches of 32. Base from `LITELLM_PROXY_URL` (default `http://localhost:4000`); bearer key from `LITELLM_API_KEY`, `LITELLM_MASTER_KEY` or `OPENAI_API_KEY`. Default model `local-nomic-embed-text-latest` (nomic-embed-text served by Ollama behind the gateway). Inputs over 8,000 bytes are truncated |
+| `Model2VecEmbedder` | cargo feature `model2vec`, `backend = "model2vec"` | In-process static embeddings (model2vec-rs, pure Rust; `fancy-regex` tokenizer, no C). Default model `minishlab/potion-code-16M-v2`, fetched once from the Hugging Face hub or loaded from a local folder. No network afterwards, sub-millisecond per chunk; lower quality than a transformer, but a full offline fallback |
+| none | `backend = "none"` | Lexical and symbol retrieval only |
 
-Vectors are L2-normalized, so cosine similarity is a dot product. Embeddings are cached in the ledger under `(model_id, content_hash)`. Changing models invalidates only that model's cache.
+**Asymmetric prefixes.** nomic models get `search_document: ` for chunks and `search_query: ` for queries (configurable for other models).
 
-`VectorIndex` trait: `upsert`, `remove`, `search(query, k)`, `len`.
+**Embedding phase.** It runs after the lexical index and ledger are committed, and is resumable:
 
-- **Flat** (default below `hnsw_threshold`, 20,000 vectors): exact dot-product scan. At this size an exact scan is faster than a graph search and has perfect recall.
-- **HNSW** (`hnsw_rs`, cosine, M = 16, ef_construction = 200, ef_search = 64): used above the threshold. Deletions are tombstoned, and the graph is rebuilt when tombstones exceed 20%.
+1. Drop vectors whose chunk no longer exists.
+2. For every chunk without a vector, look up the cache under `(model, content_hash)`.
+3. Embed only cache misses, in groups of 256, committing each group's cache entries.
+
+If the embedder fails, the run reports `embed_error`, the lexical index stays current, and the next run picks up the missing vectors. Changing the model invalidates the vector index but not other models' caches.
+
+**Vector index: exact int8 scan.**
+- Each vector is stored as `i8` components plus one `f32` scale (`max|x| / 127`). The query is quantized the same way, and the score is an integer dot product times both scales. That is 4× less memory than `f32` (50k chunks × 768 dims ≈ 38 MB instead of 150 MB), and the loop auto-vectorizes.
+- Rows are scanned in parallel blocks of 1,024, and the top k comes from `select_nth_unstable`.
+- Recall@10 against exact `f32` search is ≥ 0.95 (unit test over 3,000 random vectors).
+- The index persists to `vectors.bin` (written atomically) and loads at open.
+
+**Measured on the Dendrite repository** (5,281 chunks, `nomic-embed-text` through the LiteLLM gateway on Ollama, Apple Silicon):
+- First embedding: 558 s (about 9.5 chunks/s; Ollama serializes requests, and 4 concurrent requests gained only about 10%).
+- Re-index with nothing changed: 40 ms.
+- Dense query: 28–35 ms, almost all of it embedding the query; the scan itself is sub-millisecond.
+
+The cache makes the first embedding a one-time cost per content hash.
+
+**Why not HNSW (yet).**
+- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall.
+- HNSW (`hnsw_rs`) needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
+- It stays an option behind the `VectorIndex` trait for corpora where a scan exceeds the latency target.
 
 ## Symbol-name ranking
 

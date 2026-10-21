@@ -8,7 +8,7 @@ Default location: `<project>/.dendrite/rag/`, overridden by `Config::index_dir`.
 .dendrite/rag/
 ├── ledger.redb      files, chunks, embedding cache, Merkle root, metadata
 ├── tantivy/         lexical index segments
-└── vectors.hnsw.*   HNSW dump (only above the HNSW threshold)
+└── vectors.bin      int8 vector index (ids, scales, components)
 ```
 
 redb tables:
@@ -17,7 +17,7 @@ redb tables:
 |---|---|---|
 | `files` | path | `{blake3, size, mtime_ns, chunk_ids}` |
 | `chunks` | chunk_id | chunk record (see chunking.md) |
-| `embeddings` | `model_id ‖ content_hash` | `f32` vector, little-endian |
+| `embeddings` | `model_id ‖ 0x00 ‖ content_hash` | `f32` vector, little-endian (the cache; kept across rebuilds) |
 | `meta` | key | schema version, Merkle root, embed model, last indexed time |
 
 ## Incremental indexing

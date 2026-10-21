@@ -9,8 +9,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::chunk::{Chunk, ChunkOptions, chunk_file};
+use crate::embed::{EmbedConfig, Embedder};
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
+use crate::vector::{FlatIndex, VectorIndex};
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
 
 /// Engine configuration.
@@ -20,6 +22,7 @@ pub struct Config {
     pub index_dir: Option<PathBuf>,
     pub walk: WalkOptions,
     pub chunk: ChunkOptions,
+    pub embed: EmbedConfig,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +34,8 @@ pub enum Error {
     #[error("lexical index: {0}")]
     Lexical(#[from] tantivy::TantivyError),
     #[error("{0}")]
+    Embed(#[from] crate::embed::EmbedError),
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 
@@ -39,6 +44,7 @@ impl Error {
     pub fn kind(&self) -> &'static str {
         match self {
             Error::Io(_) => "io",
+            Error::Embed(_) => "embed",
             Error::Ledger(_) | Error::Lexical(_) | Error::Other(_) => "index",
         }
     }
@@ -54,7 +60,12 @@ pub struct IndexReport {
     pub files_removed: usize,
     pub chunks_added: usize,
     pub chunks_removed: usize,
+    /// Chunks embedded in this run (cached embeddings are not counted).
     pub embedded: usize,
+    /// Set when embedding failed; the lexical index is still up to date and the
+    /// missing vectors are retried on the next run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embed_error: Option<String>,
     pub duration_ms: u64,
 }
 
@@ -93,6 +104,8 @@ pub struct Status {
     pub merkle_root: Option<String>,
     /// Unix seconds of the last completed index run.
     pub last_indexed: Option<u64>,
+    pub vectors: usize,
+    pub embed_model: Option<String>,
 }
 
 pub struct Engine {
@@ -101,11 +114,19 @@ pub struct Engine {
     cfg: Config,
     ledger: Ledger,
     lexical: LexicalIndex,
+    embedder: Option<Box<dyn Embedder>>,
+    vectors: FlatIndex,
 }
 
 impl Engine {
-    /// Opens (or creates) the index of the project at `root`.
+    /// Opens (or creates) the index of the project at `root`, with the embedder from `cfg.embed`.
     pub fn open(root: &Path, cfg: Config) -> Result<Self> {
+        let embedder = crate::embed::from_config(&cfg.embed)?;
+        Self::open_with_embedder(root, cfg, embedder)
+    }
+
+    /// Opens the project with an explicit embedder (`None` disables dense retrieval).
+    pub fn open_with_embedder(root: &Path, cfg: Config, embedder: Option<Box<dyn Embedder>>) -> Result<Self> {
         let root = root.canonicalize()?;
         let dir = cfg
             .index_dir
@@ -119,12 +140,19 @@ impl Engine {
         }
         let ledger = Ledger::open(&dir.join("ledger.redb"))?;
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
+        let mut vectors = FlatIndex::load(&dir.join(VECTORS_FILE))?;
+        // Vectors from another model are useless: rebuild them (from the cache when possible).
+        if ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
+            vectors.clear();
+        }
         Ok(Self {
             root,
             dir,
             cfg,
             ledger,
             lexical,
+            embedder,
+            vectors,
         })
     }
 
@@ -134,6 +162,11 @@ impl Engine {
 
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
+    }
+
+    /// Whether dense retrieval is available.
+    pub fn has_vectors(&self) -> bool {
+        self.embedder.is_some() && !self.vectors.is_empty()
     }
 
     /// Brings the index up to date. Unchanged files are skipped by `(size, mtime)` and then
@@ -263,8 +296,97 @@ impl Engine {
         batch.set_meta("last_indexed", &now_secs().to_string())?;
         batch.commit()?;
 
+        let changed = full || report.files_changed > 0 || report.files_removed > 0;
+        self.sync_vectors(changed, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
+    }
+
+    /// Makes the vector index hold exactly one vector per stored chunk, embedding only
+    /// chunks whose `(model, content_hash)` is not cached. Embedding failures are reported,
+    /// not raised, so the lexical index stays usable.
+    fn sync_vectors(&mut self, changed: bool, report: &mut IndexReport) -> Result<()> {
+        let path = self.dir.join(VECTORS_FILE);
+        let Some(embedder) = &self.embedder else {
+            if !self.vectors.is_empty() {
+                self.vectors.clear();
+                self.vectors.save(&path)?;
+            }
+            return Ok(());
+        };
+        let model = embedder.model_id().to_string();
+        let chunk_count = self.ledger.chunk_count()? as usize;
+        let same_model = self.ledger.meta("embed_model")?.as_deref() == Some(model.as_str());
+        if !changed && same_model && self.vectors.len() == chunk_count {
+            return Ok(());
+        }
+
+        let mut live: BTreeMap<String, Chunk> = BTreeMap::new();
+        self.ledger.for_each_chunk(|c| {
+            live.insert(c.id.clone(), c);
+        })?;
+        let stale: Vec<String> = self
+            .vectors
+            .ids()
+            .filter(|id| !live.contains_key(*id))
+            .map(str::to_string)
+            .collect();
+        for id in &stale {
+            self.vectors.remove(id);
+        }
+
+        let mut todo: Vec<&Chunk> = Vec::new();
+        let missing: Vec<&Chunk> = live.values().filter(|c| !self.vectors.contains(&c.id)).collect();
+        for c in missing {
+            match self.ledger.embedding(&cache_key(&model, &c.content_hash))? {
+                Some(v) => self.vectors.upsert(&c.id, &v),
+                None => todo.push(c),
+            }
+        }
+
+        // Embed in groups, committing each group's cache entries so progress survives
+        // interruptions.
+        for group in todo.chunks(EMBED_GROUP) {
+            let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
+            let vectors = match embedder.embed_documents(&texts) {
+                Ok(v) => v,
+                Err(e) => {
+                    report.embed_error = Some(e.to_string());
+                    break;
+                }
+            };
+            let mut batch = self.ledger.batch()?;
+            for (c, v) in group.iter().zip(&vectors) {
+                batch.put_embedding(&cache_key(&model, &c.content_hash), v)?;
+                self.vectors.upsert(&c.id, v);
+            }
+            batch.commit()?;
+            report.embedded += group.len();
+        }
+
+        let mut batch = self.ledger.batch()?;
+        batch.set_meta("embed_model", &model)?;
+        batch.commit()?;
+        self.vectors.save(&path)?;
+        Ok(())
+    }
+
+    /// Dense-only search; empty when no embedder is configured.
+    pub fn search_dense(&self, query: &str, top_k: usize) -> Result<Vec<Hit>> {
+        let ranked = self.dense_ranking(query, top_k)?;
+        self.hits(&ranked)
+    }
+
+    /// `(chunk_id, cosine)` for the query, best first.
+    pub fn dense_ranking(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>> {
+        let Some(embedder) = &self.embedder else {
+            return Ok(Vec::new());
+        };
+        if self.vectors.is_empty() {
+            return Ok(Vec::new());
+        }
+        let q = embedder.embed_query(query)?;
+        Ok(self.vectors.search(&q, top_k))
     }
 
     /// BM25-only search.
@@ -295,6 +417,8 @@ impl Engine {
             index_dir: self.dir.display().to_string(),
             merkle_root: self.ledger.meta("merkle_root")?,
             last_indexed: self.ledger.meta("last_indexed")?.and_then(|s| s.parse().ok()),
+            vectors: self.vectors.len(),
+            embed_model: self.embedder.as_ref().map(|e| e.model_id().to_string()),
         })
     }
 
@@ -305,6 +429,14 @@ impl Engine {
         std::fs::remove_dir_all(dir)?;
         Ok(())
     }
+}
+
+const VECTORS_FILE: &str = "vectors.bin";
+/// Chunks per embedding call group (and per cache commit).
+const EMBED_GROUP: usize = 256;
+
+fn cache_key(model: &str, content_hash: &str) -> String {
+    format!("{model}\u{0}{content_hash}")
 }
 
 fn merkle<'a>(entries: impl Iterator<Item = (&'a str, &'a str)>) -> MerkleNode {
@@ -357,7 +489,102 @@ mod tests {
     }
 
     fn open(root: &Path) -> Engine {
-        Engine::open(root, Config::default()).unwrap()
+        Engine::open_with_embedder(root, Config::default(), None).unwrap()
+    }
+
+    /// Feature-hashed bag of code tokens: deterministic, and texts sharing identifiers
+    /// land close together. `fail` makes every call error.
+    struct HashEmbedder {
+        fail: std::sync::atomic::AtomicBool,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl HashEmbedder {
+        fn new() -> Self {
+            Self {
+                fail: false.into(),
+                calls: 0.into(),
+            }
+        }
+
+        fn vector(text: &str) -> Vec<f32> {
+            let mut v = vec![0f32; 64];
+            for t in crate::lexical::tokenize(text) {
+                let h = blake3::hash(t.text.as_bytes());
+                v[h.as_bytes()[0] as usize % 64] += 1.0;
+            }
+            crate::embed::normalize(v)
+        }
+    }
+
+    impl Embedder for HashEmbedder {
+        fn model_id(&self) -> &str {
+            "hash-64"
+        }
+
+        fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
+            use std::sync::atomic::Ordering;
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(crate::embed::EmbedError::Http("gateway down".into()));
+            }
+            self.calls.fetch_add(texts.len(), Ordering::SeqCst);
+            Ok(texts.iter().map(|t| Self::vector(t)).collect())
+        }
+
+        fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
+            Ok(Self::vector(text))
+        }
+    }
+
+    #[test]
+    fn dense_search_uses_cached_embeddings() {
+        let dir = project();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, r.chunks_added);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+        let hits = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits[0].path, "pkg/sidecar/sidecar.go");
+
+        // A full rebuild re-chunks everything but embeds nothing new.
+        let r = e.index(true).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+
+        // Reopening loads the persisted vectors.
+        drop(e);
+        let e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        assert!(e.has_vectors());
+        assert_eq!(
+            e.search_dense("IndexProject", 1).unwrap()[0].path,
+            "pkg/rag/indexer.go"
+        );
+    }
+
+    #[test]
+    fn embedding_failures_are_reported_and_retried() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let failing = HashEmbedder::new();
+        failing.fail.store(true, Ordering::SeqCst);
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(failing))).unwrap();
+        let r = e.index(false).unwrap();
+        assert!(r.embed_error.as_deref().unwrap().contains("gateway down"));
+        assert_eq!(e.search_lexical("LocateBinary", 1).unwrap().len(), 1);
+        drop(e);
+
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        let r = e.index(false).unwrap();
+        assert!(r.embed_error.is_none());
+        assert_eq!(r.files_changed, 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 name = "dendrite-rag"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Retrieval engine for source-code repositories: cAST chunking, code-aware BM25, dense vectors, RRF fusion and token-budgeted context packs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/yasuomaidana/dendrite-rag-rs"
@@ -22,6 +22,7 @@ clap = { version = "4.6", features = ["derive"] }
 embedag = { git = "https://github.com/yasuomaidana/embedag", branch = "develop", version = "0.1.0", default-features = false, features = ["core"] }
 globset = "0.4"
 ignore = "0.4"
+model2vec-rs = { version = "0.3", default-features = false, features = ["fancy-regex", "hf-hub"], optional = true }
 rayon = "1"
 redb = "4"
 serde = { version = "1", features = ["derive"] }
@@ -38,6 +39,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
+ureq = { version = "3", features = ["json"] }
 
 [profile.release]
 lto = "thin"
@@ -45,3 +47,8 @@ codegen-units = 1
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+default = []
+# In-process static embeddings (model2vec), for fully offline indexing.
+model2vec = ["dep:model2vec-rs"]

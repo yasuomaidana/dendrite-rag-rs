@@ -3,11 +3,13 @@
 //! See `docs/ARCHITECTURE.md` for the pipeline and `docs/specs/` for each stage.
 
 pub mod chunk;
+pub mod embed;
 pub mod engine;
 pub mod lang;
 pub mod ledger;
 pub mod lexical;
 pub mod rpc;
+pub mod vector;
 pub mod walk;
 
 /// Name reported by the `health` handshake.
