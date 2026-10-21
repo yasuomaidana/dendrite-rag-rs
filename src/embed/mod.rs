@@ -20,6 +20,10 @@ mod http;
 pub mod ollama;
 pub mod openai;
 
+#[cfg(feature = "candle")]
+pub mod candle;
+#[cfg(feature = "candle")]
+pub mod jina_code;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
 #[cfg(feature = "oxillama")]
@@ -103,13 +107,16 @@ impl Backend {
 
     /// Whether this build can construct the backend.
     pub fn compiled(self) -> bool {
-        match self {
-            // The in-process candle engine lands with DRAG-19.
-            Backend::Candle => false,
-            Backend::Oxillama => cfg!(feature = "oxillama"),
-            Backend::Model2vec => cfg!(feature = "model2vec"),
-            _ => true,
-        }
+        // In-process backends need their cargo feature; the others are always built.
+        let features = [
+            (Backend::Candle, cfg!(feature = "candle")),
+            (Backend::Oxillama, cfg!(feature = "oxillama")),
+            (Backend::Model2vec, cfg!(feature = "model2vec")),
+        ];
+        features
+            .iter()
+            .find(|(b, _)| *b == self)
+            .is_none_or(|&(_, on)| on)
     }
 
     /// The model used when none is configured.
@@ -305,6 +312,8 @@ pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
         Backend::Openai => Some(Box::new(OpenAiEmbedder::new(cfg))),
         Backend::Ollama => Some(Box::new(ollama::OllamaEmbedder::new(cfg))),
         Backend::Hf => Some(Box::new(hf::HfEmbedder::new(cfg)?)),
+        #[cfg(feature = "candle")]
+        Backend::Candle => Some(Box::new(candle::CandleEmbedder::load(cfg)?)),
         #[cfg(feature = "oxillama")]
         Backend::Oxillama => Some(Box::new(oxillama::OxillamaEmbedder::load(cfg)?)),
         #[cfg(feature = "model2vec")]
