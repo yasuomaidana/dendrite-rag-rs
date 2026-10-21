@@ -40,6 +40,8 @@ If the embedder fails, the run reports `embed_error`, the lexical index stays cu
 
 The cache makes the first embedding a one-time cost per content hash.
 
+Query vectors are cached too: an LRU of 256 entries (`[index] query_cache`, `DENDRITE_RAG_QUERY_CACHE`; 0 disables it) keyed by `(model, query text)`, so a repeated query skips the embedder, which is almost all of dense query latency.
+
 **Why not HNSW (yet).**
 - At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall. Vectors are flat int8 today, HNSW planned (DRAG-37).
 - HNSW needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.

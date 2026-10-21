@@ -12,12 +12,13 @@
 //!
 //! [index]
 //! max_file_bytes = 1048576
+//! query_cache = 256
 //! ```
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
-//! `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL`, `DENDRITE_RAG_MAX_FILE_BYTES`, and
-//! `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
+//! `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL`, `DENDRITE_RAG_MAX_FILE_BYTES`,
+//! `DENDRITE_RAG_QUERY_CACHE`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ pub struct Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct IndexSettings {
     pub max_file_bytes: Option<u64>,
+    pub query_cache: Option<usize>,
 }
 
 impl Settings {
@@ -121,6 +123,12 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_MAX_FILE_BYTES={n:?}"))?,
             );
         }
+        if let Some(n) = var("DENDRITE_RAG_QUERY_CACHE") {
+            self.index.query_cache = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
+            );
+        }
         Ok(())
     }
 
@@ -133,6 +141,9 @@ impl Settings {
         };
         if let Some(n) = self.index.max_file_bytes {
             cfg.walk.max_file_bytes = n;
+        }
+        if let Some(n) = self.index.query_cache {
+            cfg.query_cache = n;
         }
         cfg
     }
@@ -224,5 +235,31 @@ max_file_bytes = 2048
         if std::env::var("DENDRITE_RAG_EMBED_BACKEND").is_err() {
             assert_eq!(s.embed.backend, Backend::Auto);
         }
+    }
+
+    #[test]
+    fn parses_query_cache_and_applies_env() {
+        let toml_with_cache = r#"
+[embed]
+backend = "ollama"
+
+[index]
+query_cache = 512
+"#;
+        let mut s = Settings::parse(toml_with_cache).unwrap();
+        assert_eq!(s.index.query_cache, Some(512));
+        assert_eq!(s.config().query_cache, 512);
+
+        // Environment overrides file.
+        s.apply_env(env(&[("DENDRITE_RAG_QUERY_CACHE", "0")])).unwrap();
+        assert_eq!(s.index.query_cache, Some(0));
+        assert_eq!(s.config().query_cache, 0);
+
+        // Env on default settings.
+        let mut s2 = Settings::default();
+        s2.apply_env(env(&[("DENDRITE_RAG_QUERY_CACHE", "1024")]))
+            .unwrap();
+        assert_eq!(s2.index.query_cache, Some(1024));
+        assert_eq!(s2.config().query_cache, 1024);
     }
 }
