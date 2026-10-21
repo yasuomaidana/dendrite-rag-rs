@@ -36,7 +36,8 @@ pub struct FlatIndex {
     pos: HashMap<String, usize>,
 }
 
-const MAGIC: &[u8; 4] = b"DRV2";
+const MAGIC: &[u8; 4] = b"DRV3";
+const MAGIC_V2: &[u8; 4] = b"DRV2";
 /// Earlier format without tags: loaded as empty, so vectors are rebuilt from the cache.
 const MAGIC_V1: &[u8; 4] = b"DRV1";
 /// Rows per parallel work unit.
@@ -66,24 +67,65 @@ impl FlatIndex {
 
     /// Writes the index atomically (temporary file, then rename).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        for (row, id) in self.ids.iter().enumerate() {
+            if id.len() > u16::MAX as usize {
+                let len = id.len();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("id length {len} exceeds u16::MAX (65535)"),
+                ));
+            }
+            let tag = &self.tags[row];
+            if tag.len() > u16::MAX as usize {
+                let len = tag.len();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("tag length {len} exceeds u16::MAX (65535)"),
+                ));
+            }
+        }
         let tmp = path.with_extension("tmp");
         {
-            let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            w.write_all(MAGIC)?;
-            w.write_all(&(self.dim as u32).to_le_bytes())?;
-            w.write_all(&(self.ids.len() as u32).to_le_bytes())?;
-            for (row, id) in self.ids.iter().enumerate() {
-                w.write_all(&[id.len() as u8])?;
-                w.write_all(id.as_bytes())?;
-                w.write_all(&[self.tags[row].len() as u8])?;
-                w.write_all(self.tags[row].as_bytes())?;
-                w.write_all(&self.scales[row].to_le_bytes())?;
-                let v = &self.data[row * self.dim..(row + 1) * self.dim];
-                w.write_all(&v.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
+            let mut file = std::fs::File::create(&tmp)?;
+            let mut hasher = blake3::Hasher::new();
+            {
+                let mut w = std::io::BufWriter::new(&mut file);
+                let mut write_hashed = |buf: &[u8]| -> std::io::Result<()> {
+                    w.write_all(buf)?;
+                    hasher.update(buf);
+                    Ok(())
+                };
+                write_hashed(MAGIC)?;
+                write_hashed(&(self.dim as u32).to_le_bytes())?;
+                write_hashed(&(self.ids.len() as u32).to_le_bytes())?;
+                let mut row_buf = Vec::with_capacity(self.dim);
+                for (row, id) in self.ids.iter().enumerate() {
+                    write_hashed(&(id.len() as u16).to_le_bytes())?;
+                    write_hashed(id.as_bytes())?;
+                    let tag = &self.tags[row];
+                    write_hashed(&(tag.len() as u16).to_le_bytes())?;
+                    write_hashed(tag.as_bytes())?;
+                    write_hashed(&self.scales[row].to_le_bytes())?;
+                    let v = &self.data[row * self.dim..(row + 1) * self.dim];
+                    row_buf.clear();
+                    row_buf.extend(v.iter().map(|&x| x as u8));
+                    write_hashed(&row_buf)?;
+                }
+                let checksum = hasher.finalize();
+                w.write_all(checksum.as_bytes())?;
+                w.flush()?;
             }
-            w.flush()?;
+            file.sync_all()?;
         }
-        std::fs::rename(tmp, path)
+        std::fs::rename(&tmp, path)?;
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if let Ok(dir_file) = std::fs::File::open(dir) {
+            let _ = dir_file.sync_all();
+        }
+        Ok(())
     }
 
     /// Loads an index written by [`FlatIndex::save`]; a missing file gives an empty index.
@@ -94,43 +136,92 @@ impl FlatIndex {
             Err(e) => return Err(e),
         };
         let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt vector index");
-        let mut r = bytes.as_slice();
-        let mut magic = [0u8; 4];
-        r.read_exact(&mut magic)?;
-        if &magic == MAGIC_V1 {
-            return Ok(Self::new());
-        }
-        if &magic != MAGIC {
+        if bytes.len() < 4 {
             return Err(bad());
         }
+        let magic = &bytes[0..4];
+        if magic == MAGIC_V1 {
+            return Ok(Self::new());
+        }
+        let is_v3 = if magic == MAGIC {
+            true
+        } else if magic == MAGIC_V2 {
+            false
+        } else {
+            return Err(bad());
+        };
+        if is_v3 {
+            if bytes.len() < 44 {
+                return Err(bad());
+            }
+            let payload_len = bytes.len() - 32;
+            let expected = &bytes[payload_len..];
+            let hash = blake3::hash(&bytes[..payload_len]);
+            if hash.as_bytes() != expected {
+                return Err(bad());
+            }
+        }
+        let payload = if is_v3 {
+            &bytes[4..bytes.len() - 32]
+        } else {
+            &bytes[4..]
+        };
+        let mut r = payload;
         let mut u32b = [0u8; 4];
-        r.read_exact(&mut u32b)?;
+        r.read_exact(&mut u32b).map_err(|_| bad())?;
         let dim = u32::from_le_bytes(u32b) as usize;
-        r.read_exact(&mut u32b)?;
+        r.read_exact(&mut u32b).map_err(|_| bad())?;
         let count = u32::from_le_bytes(u32b) as usize;
         let mut idx = Self {
             dim,
             ..Self::default()
         };
         idx.data.reserve(dim * count);
+        idx.ids.reserve(count);
+        idx.tags.reserve(count);
+        idx.scales.reserve(count);
         for row in 0..count {
-            let mut len = [0u8; 1];
-            r.read_exact(&mut len)?;
-            let mut id = vec![0u8; len[0] as usize];
-            r.read_exact(&mut id)?;
+            let id_len = if is_v3 {
+                let mut b = [0u8; 2];
+                r.read_exact(&mut b).map_err(|_| bad())?;
+                u16::from_le_bytes(b) as usize
+            } else {
+                let mut b = [0u8; 1];
+                r.read_exact(&mut b).map_err(|_| bad())?;
+                b[0] as usize
+            };
+            let mut id = vec![0u8; id_len];
+            r.read_exact(&mut id).map_err(|_| bad())?;
             let id = String::from_utf8(id).map_err(|_| bad())?;
-            r.read_exact(&mut len)?;
-            let mut tag = vec![0u8; len[0] as usize];
-            r.read_exact(&mut tag)?;
-            idx.tags.push(String::from_utf8(tag).map_err(|_| bad())?);
+
+            let tag_len = if is_v3 {
+                let mut b = [0u8; 2];
+                r.read_exact(&mut b).map_err(|_| bad())?;
+                u16::from_le_bytes(b) as usize
+            } else {
+                let mut b = [0u8; 1];
+                r.read_exact(&mut b).map_err(|_| bad())?;
+                b[0] as usize
+            };
+            let mut tag = vec![0u8; tag_len];
+            r.read_exact(&mut tag).map_err(|_| bad())?;
+            let tag = String::from_utf8(tag).map_err(|_| bad())?;
+
             let mut f = [0u8; 4];
-            r.read_exact(&mut f)?;
+            r.read_exact(&mut f).map_err(|_| bad())?;
             let mut v = vec![0u8; dim];
-            r.read_exact(&mut v)?;
-            idx.pos.insert(id.clone(), row);
+            r.read_exact(&mut v).map_err(|_| bad())?;
+
+            if idx.pos.insert(id.clone(), row).is_some() {
+                return Err(bad());
+            }
             idx.ids.push(id);
+            idx.tags.push(tag);
             idx.scales.push(f32::from_le_bytes(f));
             idx.data.extend(v.into_iter().map(|x| x as i8));
+        }
+        if !r.is_empty() {
+            return Err(bad());
         }
         Ok(idx)
     }
@@ -314,5 +405,72 @@ mod tests {
         assert_eq!(back.tag("c0"), Some("t"));
         assert_eq!(back.search(&vs[3], 1)[0].0, "c3");
         assert_eq!(FlatIndex::load(&dir.path().join("missing")).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn v3_format_300_byte_ids_and_checksum() {
+        let vs = rand_vecs(3, 16, 42);
+        let mut idx = FlatIndex::new();
+        let long_id = "a".repeat(300);
+        let long_tag = "tag-".repeat(75);
+        idx.upsert(&long_id, &long_tag, &vs[0]);
+        idx.upsert("short", "tag", &vs[1]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("v3.bin");
+        idx.save(&p).unwrap();
+
+        let bytes = std::fs::read(&p).unwrap();
+        assert!(bytes.starts_with(b"DRV3"));
+
+        let back = FlatIndex::load(&p).unwrap();
+        assert_eq!(back.len(), 2);
+        assert!(back.contains(&long_id));
+        assert!(back.contains("short"));
+        assert_eq!(back.tag(&long_id), Some(long_tag.as_str()));
+        assert_eq!(back.tag("short"), Some("tag"));
+
+        let mut corrupt = bytes.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0x01;
+        let corrupt_p = dir.path().join("corrupt.bin");
+        std::fs::write(&corrupt_p, &corrupt).unwrap();
+        assert!(FlatIndex::load(&corrupt_p).is_err());
+
+        let trunc_p = dir.path().join("trunc.bin");
+        std::fs::write(&trunc_p, &bytes[..bytes.len() - 10]).unwrap();
+        assert!(FlatIndex::load(&trunc_p).is_err());
+
+        let mut huge_idx = FlatIndex::new();
+        let huge_id = "x".repeat(65536);
+        huge_idx.upsert(&huge_id, "t", &vs[0]);
+        let huge_p = dir.path().join("huge.bin");
+        assert!(huge_idx.save(&huge_p).is_err());
+    }
+
+    #[test]
+    fn loads_legacy_drv2_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("v2.bin");
+        let dim: u32 = 4;
+        let count: u32 = 1;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"DRV2");
+        buf.extend_from_slice(&dim.to_le_bytes());
+        buf.extend_from_slice(&count.to_le_bytes());
+        let id = b"chunk-1";
+        buf.push(id.len() as u8);
+        buf.extend_from_slice(id);
+        let tag = b"tag-1";
+        buf.push(tag.len() as u8);
+        buf.extend_from_slice(tag);
+        buf.extend_from_slice(&1.5f32.to_le_bytes());
+        buf.extend_from_slice(&[10u8, 20, 30, 40]);
+        std::fs::write(&p, &buf).unwrap();
+
+        let loaded = FlatIndex::load(&p).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.contains("chunk-1"));
+        assert_eq!(loaded.tag("chunk-1"), Some("tag-1"));
     }
 }

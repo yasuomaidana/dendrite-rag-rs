@@ -176,7 +176,17 @@ impl Engine {
         }
         let ledger = Ledger::open(&dir.join("ledger.redb"))?;
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
-        let mut vectors = FlatIndex::load(&dir.join(VECTORS_FILE))?;
+        let vectors_path = dir.join(VECTORS_FILE);
+        let mut vectors = match FlatIndex::load(&vectors_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to load vector index at {}: {e}; starting with empty index",
+                    vectors_path.display()
+                );
+                FlatIndex::new()
+            }
+        };
         // Vectors from another model are useless: rebuild them (from the cache when possible).
         if ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
             vectors.clear();
@@ -378,7 +388,16 @@ impl Engine {
         let chunk_count = self.ledger.chunk_count()? as usize;
         let same_model = self.ledger.meta("embed_model")?.as_deref() == Some(model.as_str());
         if !changed && same_model && self.vectors.len() == chunk_count {
-            return Ok(());
+            // Equal counts can still hide a stale file: compare ids too. The file table
+            // lists every chunk id without loading chunk texts.
+            let files = self.ledger.files()?;
+            if files
+                .values()
+                .flat_map(|f| &f.chunk_ids)
+                .all(|id| self.vectors.contains(id))
+            {
+                return Ok(());
+            }
         }
 
         // Only ids and content hashes are kept in memory; texts are loaded per group.
@@ -748,6 +767,129 @@ mod tests {
         assert!(index_dir.join(".gitignore").exists());
         e.purge().unwrap();
         assert!(!index_dir.exists());
+    }
+
+    struct SharedEmbedder(Arc<HashEmbedder>);
+
+    impl Embedder for SharedEmbedder {
+        fn model_id(&self) -> &str {
+            self.0.model_id()
+        }
+
+        fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
+            self.0.embed_documents(texts)
+        }
+
+        fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
+            self.0.embed_query(text)
+        }
+    }
+
+    #[test]
+    fn truncated_or_corrupt_vectors_heals_from_cache() {
+        use std::sync::atomic::Ordering;
+        let dir = project();
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, r.chunks_added);
+        assert!(e.status().unwrap().vectors > 0);
+        let hits_before = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_before[0].path, "pkg/sidecar/sidecar.go");
+        let initial_calls = embedder.calls.load(Ordering::SeqCst);
+        assert!(initial_calls > 0);
+        drop(e);
+
+        // Corrupt vectors.bin by truncating it
+        let vectors_path = dir.path().join(".dendrite/rag").join(VECTORS_FILE);
+        assert!(vectors_path.exists());
+        fs::write(&vectors_path, b"DRV3-truncated").unwrap();
+
+        // Engine::open succeeds on corrupt vectors.bin
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        assert_eq!(e.status().unwrap().vectors, 0);
+
+        // After index, dense search works with zero embed calls
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(embedder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+
+        let hits_after = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_after[0].path, "pkg/sidecar/sidecar.go");
+
+        // Now corrupt the BLAKE3 checksum footer
+        drop(e);
+        let mut bytes = fs::read(&vectors_path).unwrap();
+        let len = bytes.len();
+        bytes[len - 1] ^= 0xff;
+        fs::write(&vectors_path, &bytes).unwrap();
+
+        let embedder = Arc::new(HashEmbedder::new());
+        let mut e = Engine::open_with_embedder(
+            dir.path(),
+            Config::default(),
+            Some(Box::new(SharedEmbedder(embedder.clone()))),
+        )
+        .unwrap();
+        assert_eq!(e.status().unwrap().vectors, 0);
+
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(embedder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.status().unwrap().vectors as u64, e.status().unwrap().chunks);
+
+        let hits_after2 = e.search_dense("LocateBinary sidecar", 1).unwrap();
+        assert_eq!(hits_after2[0].path, "pkg/sidecar/sidecar.go");
+    }
+
+    #[test]
+    fn sync_vectors_detects_mismatched_ids_with_equal_count() {
+        let dir = project();
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        e.index(false).unwrap();
+        let total = e.status().unwrap().chunks as usize;
+        assert!(total > 0);
+        let vectors_path = dir.path().join(".dendrite/rag").join(VECTORS_FILE);
+
+        // Replace one valid ID with an alien ID, keeping the same count
+        let mut idx = FlatIndex::load(&vectors_path).unwrap();
+        let first_id = idx.ids().next().unwrap().to_string();
+        let tag = idx.tag(&first_id).unwrap().to_string();
+        idx.remove(&first_id);
+        idx.upsert("alien-chunk-id", &tag, &vec![0.1f32; 64]);
+        assert_eq!(idx.len(), total);
+        idx.save(&vectors_path).unwrap();
+
+        // Reopen with this modified vectors.bin
+        drop(e);
+        let mut e =
+            Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
+                .unwrap();
+        // Count matches, but IDs do not match ledger chunk IDs
+        assert_eq!(e.status().unwrap().vectors, total);
+        assert!(!e.vectors.contains(&first_id));
+        assert!(e.vectors.contains("alien-chunk-id"));
+
+        // index(false) must detect the mismatch, remove alien id, and refill the missing id from cache
+        let r = e.index(false).unwrap();
+        assert_eq!(r.embedded, 0);
+        assert_eq!(e.status().unwrap().vectors, total);
+        assert!(e.vectors.contains(&first_id));
+        assert!(!e.vectors.contains("alien-chunk-id"));
     }
 
     #[test]
