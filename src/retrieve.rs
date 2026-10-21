@@ -28,6 +28,10 @@ pub struct SearchOpts {
     pub mode: Mode,
     /// Glob patterns over project-relative paths; results must match one of them.
     pub paths: Vec<String>,
+    /// Drop hits scoring below this (scores are mode-specific: RRF, BM25 or cosine).
+    pub min_score: Option<f32>,
+    /// Skip this many hits (pagination).
+    pub offset: usize,
 }
 
 impl Default for SearchOpts {
@@ -36,6 +40,8 @@ impl Default for SearchOpts {
             top_k: 10,
             mode: Mode::Hybrid,
             paths: Vec::new(),
+            min_score: None,
+            offset: 0,
         }
     }
 }
@@ -83,10 +89,11 @@ impl Engine {
 
     /// Ranked hits for `query`.
     pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<Vec<Hit>> {
+        let page = opts.offset + opts.top_k;
         let wanted = if opts.paths.is_empty() {
-            opts.top_k
+            page
         } else {
-            CANDIDATES.max(opts.top_k * 3)
+            CANDIDATES.max(page * 3)
         };
         let n = CANDIDATES.max(wanted);
         let fused = match opts.mode {
@@ -122,8 +129,10 @@ impl Engine {
             hits.retain(|h| set.is_match(&h.path));
         }
         self.rerank(query, &mut hits);
-        hits.truncate(opts.top_k);
-        Ok(hits)
+        if let Some(min) = opts.min_score {
+            hits.retain(|h| h.score >= min);
+        }
+        Ok(hits.into_iter().skip(opts.offset).take(opts.top_k).collect())
     }
 
     /// Reorders the top hits with the cross-encoder when one is configured; on failure the

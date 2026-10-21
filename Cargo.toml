@@ -25,6 +25,7 @@ ignore = "0.4"
 model2vec-rs = { version = "0.3", default-features = false, features = ["fancy-regex", "hf-hub"], optional = true }
 rayon = "1"
 redb = "4"
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 streaming-iterator = "0.1"

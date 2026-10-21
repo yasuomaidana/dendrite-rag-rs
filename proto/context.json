@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/context.json",
+  "title": "context",
+  "description": "Token-budgeted context pack: hybrid hits expanded through the symbol graph, PageRank-weighted, de-duplicated and merged.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "query"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "query": {
+        "type": "string"
+      },
+      "token_budget": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 4000
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "spans",
+      "tokens"
+    ],
+    "properties": {
+      "spans": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      },
+      "tokens": {
+        "type": "integer"
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

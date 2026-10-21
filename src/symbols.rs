@@ -89,6 +89,16 @@ impl SymbolIndex {
         out
     }
 
+    /// Chunks defining `name`.
+    pub fn definitions(&self, name: &str) -> &[String] {
+        self.defs.get(name).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Chunks referencing `name` (calls, type uses).
+    pub fn references(&self, name: &str) -> &[String] {
+        self.refs.get(name).map(Vec::as_slice).unwrap_or_default()
+    }
+
     /// One-hop neighbours of a chunk: definitions of what it references, then chunks that
     /// reference what it defines.
     pub fn neighbours(&self, chunk: &str, limit: usize) -> Vec<String> {

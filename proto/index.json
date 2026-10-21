@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/index.json",
+  "title": "index",
+  "description": "Brings the project's index up to date; full rebuilds it.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "full": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "files_scanned",
+      "files_changed",
+      "files_removed",
+      "chunks_added",
+      "chunks_removed",
+      "embedded",
+      "duration_ms"
+    ],
+    "properties": {
+      "files_scanned": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "files_changed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "files_removed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "chunks_added": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "chunks_removed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "embedded": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "duration_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "embed_error": {
+        "type": "string",
+        "description": "Set when embedding failed; lexical index is current, vectors are retried next run"
+      }
+    }
+  }
+}

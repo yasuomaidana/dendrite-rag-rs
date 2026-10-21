@@ -30,6 +30,35 @@ pub struct Config {
     pub rerank_model: Option<String>,
 }
 
+impl Config {
+    /// Defaults overridden by the environment: `DENDRITE_RAG_EMBED_BACKEND` (`gateway`,
+    /// `model2vec`, `none`), `DENDRITE_RAG_EMBED_MODEL`, `DENDRITE_RAG_RERANK_MODEL` and
+    /// `DENDRITE_RAG_MAX_FILE_BYTES`.
+    pub fn from_env() -> Self {
+        let mut cfg = Config::default();
+        if let Ok(b) = std::env::var("DENDRITE_RAG_EMBED_BACKEND") {
+            cfg.embed.backend = match b.to_ascii_lowercase().as_str() {
+                "model2vec" => crate::embed::Backend::Model2vec,
+                "none" | "off" => crate::embed::Backend::None,
+                _ => crate::embed::Backend::Gateway,
+            };
+        }
+        cfg.embed.model = std::env::var("DENDRITE_RAG_EMBED_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        cfg.rerank_model = std::env::var("DENDRITE_RAG_RERANK_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        if let Some(n) = std::env::var("DENDRITE_RAG_MAX_FILE_BYTES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            cfg.walk.max_file_bytes = n;
+        }
+        cfg
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("io: {0}")]

@@ -45,16 +45,19 @@ flowchart LR
 | Module | Contents |
 |---|---|
 | `walk` | File discovery, language detection, size and binary filters |
-| `chunk` | tree-sitter grammars, cAST splitter, Markdown and text splitters, contextual headers |
-| `symbols` | Definition and reference extraction, chunk-level symbol graph |
-| `ledger` | redb tables: files, chunks, embedding cache, Merkle root |
+| `lang` | Languages, tree-sitter grammars and their tag queries |
+| `chunk` | cAST splitter, Markdown and text splitters, definitions/references/scope, contextual headers |
+| `ledger` | redb tables: files, chunks, embedding cache, metadata |
 | `lexical` | Tantivy schema, code tokenizer, BM25 search |
 | `embed` | `Embedder` trait, gateway and model2vec backends |
-| `vector` | `VectorIndex` trait, flat and HNSW implementations |
+| `vector` | `VectorIndex` trait, exact int8 flat index |
+| `symbols` | Symbol tables, chunk neighbours, file reference graph, personalized PageRank |
 | `fusion` | Weighted RRF |
-| `context` | Graph expansion, personalized PageRank, token-budget packing |
-| `engine` | `Engine::open / index / search / context / status / purge` |
-| `rpc` | JSON-RPC 2.0 stdio server |
+| `rerank` | `Reranker` trait, gateway cross-encoder |
+| `engine` | `Engine::open / index / status / purge`, incremental indexing and the embedding phase |
+| `retrieve` | `search` (hybrid, lexical, dense; paths, threshold, pagination) and `context` packing |
+| `lookup` | Symbol definitions and references, regex `grep` |
+| `rpc`, `server` | JSON-RPC 2.0 framing and the method table |
 
 ## 4. Other owned capabilities (planned)
 

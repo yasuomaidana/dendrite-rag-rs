@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/status.json",
+  "title": "status",
+  "description": "Index statistics.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "files",
+      "chunks",
+      "index_dir",
+      "vectors"
+    ],
+    "properties": {
+      "files": {
+        "type": "integer"
+      },
+      "chunks": {
+        "type": "integer"
+      },
+      "index_dir": {
+        "type": "string"
+      },
+      "merkle_root": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "last_indexed": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "description": "Unix seconds"
+      },
+      "vectors": {
+        "type": "integer"
+      },
+      "embed_model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/symbols.references.json",
+  "title": "symbols.references",
+  "description": "Chunks referencing a symbol (calls, type uses).",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "name"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "name": {
+        "type": "string"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "hits"
+    ],
+    "properties": {
+      "hits": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

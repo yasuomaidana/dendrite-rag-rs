@@ -9,9 +9,11 @@ pub mod fusion;
 pub mod lang;
 pub mod ledger;
 pub mod lexical;
+pub mod lookup;
 pub mod rerank;
 pub mod retrieve;
 pub mod rpc;
+pub mod server;
 pub mod symbols;
 #[cfg(test)]
 pub(crate) mod testutil;
