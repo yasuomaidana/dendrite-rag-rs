@@ -60,6 +60,25 @@ struct SymbolParams {
 }
 
 #[derive(Deserialize)]
+struct HistoryIndexParams {
+    root: String,
+    #[serde(default = "default_max_commits")]
+    max_commits: usize,
+}
+
+#[derive(Deserialize)]
+struct HistorySearchParams {
+    root: String,
+    query: String,
+    #[serde(default = "default_top_k")]
+    top_k: usize,
+}
+
+fn default_max_commits() -> usize {
+    crate::history::DEFAULT_MAX_COMMITS
+}
+
+#[derive(Deserialize)]
 struct GrepParams {
     root: String,
     pattern: String,
@@ -120,6 +139,14 @@ impl Server {
 
 fn engine_error(e: Error) -> RpcError {
     RpcError::engine(e.kind(), e.to_string())
+}
+
+/// History failures (not a git repository, git missing) are reported as `kind: "git"`.
+fn history_error(e: Error) -> RpcError {
+    match e {
+        Error::Other(e) => RpcError::engine("git", e.to_string()),
+        e => engine_error(e),
+    }
 }
 
 fn to_value<T: serde::Serialize>(v: T) -> Result<Value, RpcError> {
@@ -185,6 +212,22 @@ impl Handler for Server {
                     engine.references(&p.name)
                 }
                 .map_err(engine_error)?;
+                Ok(json!({ "hits": hits }))
+            }
+            "history.index" => {
+                let p: HistoryIndexParams = rpc::params(params)?;
+                to_value(
+                    self.engine(&p.root)?
+                        .index_history(p.max_commits)
+                        .map_err(history_error)?,
+                )
+            }
+            "history.search" => {
+                let p: HistorySearchParams = rpc::params(params)?;
+                let hits = self
+                    .engine(&p.root)?
+                    .search_history(&p.query, p.top_k)
+                    .map_err(history_error)?;
                 Ok(json!({ "hits": hits }))
             }
             "grep" => {

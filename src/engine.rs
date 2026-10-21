@@ -415,7 +415,11 @@ impl Engine {
         // Embed in groups, committing each group's cache entries so progress survives
         // interruptions.
         // Under a budget, small groups keep the overshoot to a fraction of a second.
-        let group = if deadline.is_some() { EMBED_GROUP_BUDGETED } else { EMBED_GROUP };
+        let group = if deadline.is_some() {
+            EMBED_GROUP_BUDGETED
+        } else {
+            EMBED_GROUP
+        };
         for (n, ids) in todo.chunks(group).enumerate() {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 report.embed_pending = todo.len() - n * group;

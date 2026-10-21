@@ -56,7 +56,8 @@ flowchart LR
 | `rerank` | `Reranker` trait, gateway cross-encoder |
 | `engine` | `Engine::open / index / status / purge`, incremental indexing and the embedding phase |
 | `retrieve` | `search` (hybrid, lexical, dense; paths, threshold, pagination) and `context` packing |
-| `lookup` | Symbol definitions and references, regex `grep` |
+| `lookup` | Symbol definitions and references, regex `grep`, history indexing and search |
+| `history` | Git history index: (commit, file) documents from `git log -p`, incremental by last indexed commit |
 | `rpc`, `server` | JSON-RPC 2.0 framing and the method table |
 
 ## 4. Other owned capabilities (planned)

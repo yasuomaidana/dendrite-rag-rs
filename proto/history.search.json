@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/history.search.json",
+  "title": "history.search",
+  "description": "Commits and per-file changes matching a query (message boosted, then path and diff); updates the history index first.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "query"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory (a git repository)"
+      },
+      "query": {
+        "type": "string"
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 10
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "hits"
+    ],
+    "properties": {
+      "hits": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "sha",
+            "time",
+            "author",
+            "subject",
+            "path",
+            "diff",
+            "score"
+          ],
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "time": {
+              "type": "integer",
+              "description": "Unix seconds"
+            },
+            "author": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string",
+              "description": "Changed file; empty for a message-only document"
+            },
+            "diff": {
+              "type": "string",
+              "description": "Diff of path in this commit, truncated to 2,000 characters"
+            },
+            "score": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  }
+}

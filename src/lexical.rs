@@ -12,7 +12,7 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Te
 
 use crate::chunk::Chunk;
 
-const TOKENIZER: &str = "code";
+pub(crate) const TOKENIZER: &str = "code";
 const WRITER_HEAP: usize = 50_000_000;
 
 /// Splits identifiers on `_`, case changes and letter/digit boundaries, lowercases every
@@ -232,7 +232,7 @@ impl LexicalIndex {
 }
 
 /// Query syntax characters become spaces, so any user text is a plain bag of terms.
-fn sanitize(query: &str) -> String {
+pub(crate) fn sanitize(query: &str) -> String {
     query
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { ' ' })

@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{Engine, Error, Hit, Result};
+use crate::history::{HistoryHit, HistoryIndex, HistoryReport};
 use crate::walk::{read_text, walk};
 
 /// One regex match.
@@ -39,6 +40,28 @@ impl Engine {
         let mut hits = self.hits(&ranked)?;
         hits.sort_by(|a, b| a.path.cmp(&b.path).then(a.start_line.cmp(&b.start_line)));
         Ok(hits)
+    }
+
+    /// Brings the git-history index up to date (incrementally from the last indexed commit).
+    pub fn index_history(&self, max_commits: usize) -> Result<HistoryReport> {
+        let history = HistoryIndex::open(&self.dir.join("history")).map_err(|e| Error::Other(e.into()))?;
+        let since = self.ledger.meta("history_head")?;
+        let report = history
+            .update(&self.root, since.as_deref(), max_commits)
+            .map_err(|e| Error::Other(e.into()))?;
+        if let Some(head) = &report.head {
+            let mut batch = self.ledger.batch()?;
+            batch.set_meta("history_head", head)?;
+            batch.commit()?;
+        }
+        Ok(report)
+    }
+
+    /// Commits and per-file changes matching `query`, after an incremental history update.
+    pub fn search_history(&self, query: &str, top_k: usize) -> Result<Vec<HistoryHit>> {
+        self.index_history(crate::history::DEFAULT_MAX_COMMITS)?;
+        let history = HistoryIndex::open(&self.dir.join("history")).map_err(|e| Error::Other(e.into()))?;
+        history.search(query, top_k).map_err(|e| Error::Other(e.into()))
     }
 
     /// Regex search over the project's indexable files (the same walk as indexing, so

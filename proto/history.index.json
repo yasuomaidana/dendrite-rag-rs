@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/history.index.json",
+  "title": "history.index",
+  "description": "Indexes commits newer than the last indexed one (all, up to max_commits, on the first run or after a rebase).",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory (a git repository)"
+      },
+      "max_commits": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 2000
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "commits",
+      "documents",
+      "rebuilt"
+    ],
+    "properties": {
+      "commits": {
+        "type": "integer"
+      },
+      "documents": {
+        "type": "integer"
+      },
+      "head": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "rebuilt": {
+        "type": "boolean"
+      }
+    }
+  }
+}

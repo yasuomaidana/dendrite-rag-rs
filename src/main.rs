@@ -72,6 +72,13 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         max: usize,
     },
+    /// Search commit messages and per-file diffs (indexes new commits first).
+    History {
+        root: PathBuf,
+        query: String,
+        #[arg(short = 'k', long, default_value_t = 10)]
+        top_k: usize,
+    },
     /// Index statistics.
     Status { root: PathBuf },
     /// Delete a project's index.
@@ -192,6 +199,26 @@ fn main() -> anyhow::Result<()> {
             } else {
                 for m in matches {
                     println!("{}:{}: {}", m.path, m.line, m.text);
+                }
+            }
+        }
+        Command::History { root, query, top_k } => {
+            let hits = open(&root)?.search_history(&query, top_k)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                for h in hits {
+                    let path = if h.path.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", h.path)
+                    };
+                    println!(
+                        "{:.2}  {} {}{path}",
+                        h.score,
+                        &h.sha[..h.sha.len().min(10)],
+                        h.subject
+                    );
                 }
             }
         }
