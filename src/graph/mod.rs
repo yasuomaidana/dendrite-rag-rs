@@ -6,12 +6,13 @@
 
 pub mod communities;
 pub mod leiden;
+pub mod query;
 pub mod resolve;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
 use crate::engine::{Engine, Result};
@@ -22,7 +23,7 @@ use resolve::Resolver;
 /// Names defined in more places than this are too ambiguous to link (`new`, `run`, `init`).
 const MAX_DEF_FANOUT: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeKind {
     Call,

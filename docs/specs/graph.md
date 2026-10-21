@@ -1,6 +1,6 @@
 # Code graph and communities
 
-The code graph answers "how is this codebase organised, and what connects to what?", the question FEAT-045 (Graphify) asks. It is derived from what the chunker already extracts, so it needs no second parser, no LLM and no Python runtime.
+The code graph answers "how is this codebase organised, and what connects to what?", the question FEAT-045 (Graphify, DEND-201/202) asks. It is derived from what the chunker already extracts, so it needs no second parser, no LLM and no Python runtime.
 
 ## Edges
 
@@ -62,3 +62,14 @@ Files are partitioned with **Leiden** (`src/graph/leiden.rs`, pure Rust) maximiz
 | `community_files` | path | community id |
 | `community_chunks` | chunk id | community id (each chunk inherits its file's) |
 | `communities` | community id | the record, JSON |
+
+## Queries
+
+Served as JSON-RPC methods ([protocol.md](protocol.md)) and as `dendrite-rag graph <op>` subcommands; each answers from the in-memory graph and the stored communities, in well under the FEAT-045 limit of 2 s (1.5 s for a cold CLI run on the Dendrite repository, index check included).
+
+| Method | Answers |
+|---|---|
+| `graph.communities` | Communities with at least `min_size` files, largest first, with their label, files, most-used symbols and a one-paragraph summary |
+| `graph.god_nodes` | Symbols with at least `min_in_degree` users (default 21: FEAT-045's "more than 20"), with the number of files they are used from, their community and a summary |
+| `graph.path` | The shortest path between two symbols over call and type edges, or between two files (a symbol stands for its defining files) over every edge kind; `kinds` restricts the edges. A forward path is preferred; otherwise edges may be followed backwards, marked `reversed` |
+| `graph.explain` | For a symbol: its definitions, users, uses, community and god-node flag. For a file: what it defines, imports and is imported by, external imports, the files it depends on and those that use it |

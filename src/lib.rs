@@ -28,4 +28,4 @@ pub const NAME: &str = "dendrite-rag";
 /// Crate version reported by the `health` handshake.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// JSON-RPC protocol version; clients refuse a server with a different major version.
-pub const PROTOCOL: &str = "1.0.0";
+pub const PROTOCOL: &str = "1.1.0";

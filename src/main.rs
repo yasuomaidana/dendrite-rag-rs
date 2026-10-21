@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use dendrite_rag::engine::{Config, Engine, Hit};
+use dendrite_rag::graph::EdgeKind;
 use dendrite_rag::retrieve::{Mode, SearchOpts};
 use dendrite_rag::rpc;
 use dendrite_rag::server::Server;
@@ -80,6 +81,11 @@ enum Command {
         #[arg(short = 'k', long, default_value_t = 10)]
         top_k: usize,
     },
+    /// Code graph queries (indexes changed files first, without waiting for embeddings).
+    Graph {
+        #[command(subcommand)]
+        op: GraphOp,
+    },
     /// Index statistics.
     Status { root: PathBuf },
     /// Embedding backends of this build, with their default models.
@@ -88,6 +94,56 @@ enum Command {
     Settings { root: PathBuf },
     /// Delete a project's index.
     Purge { root: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum GraphOp {
+    /// Communities of files, largest first.
+    Communities {
+        root: PathBuf,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 2)]
+        min_size: usize,
+    },
+    /// Symbols with the most users.
+    GodNodes {
+        root: PathBuf,
+        #[arg(long, default_value_t = dendrite_rag::graph::query::GOD_NODE_IN_DEGREE)]
+        min_in_degree: usize,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Shortest path between two symbols or files.
+    Path {
+        root: PathBuf,
+        from: String,
+        to: String,
+        /// Edge kinds to follow (repeatable): call, import, type. Default: all.
+        #[arg(long = "kind", value_enum)]
+        kinds: Vec<KindArg>,
+        #[arg(long, default_value_t = 6)]
+        max_hops: usize,
+    },
+    /// Callers, callees, imports and community of a symbol or file.
+    Explain { root: PathBuf, target: String },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum KindArg {
+    Call,
+    Import,
+    Type,
+}
+
+impl From<KindArg> for EdgeKind {
+    fn from(k: KindArg) -> Self {
+        match k {
+            KindArg::Call => EdgeKind::Call,
+            KindArg::Import => EdgeKind::Import,
+            KindArg::Type => EdgeKind::Type,
+        }
+    }
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -225,6 +281,36 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
             }
+        }
+        Command::Graph { op } => {
+            let root = match &op {
+                GraphOp::Communities { root, .. }
+                | GraphOp::GodNodes { root, .. }
+                | GraphOp::Path { root, .. }
+                | GraphOp::Explain { root, .. } => root.clone(),
+            };
+            let mut e = open(&root)?;
+            e.index_with(false, Some(std::time::Duration::ZERO))?;
+            let value = match op {
+                GraphOp::Communities { limit, min_size, .. } => {
+                    serde_json::to_value(e.graph_communities(limit, min_size)?)?
+                }
+                GraphOp::GodNodes {
+                    min_in_degree, limit, ..
+                } => serde_json::to_value(e.graph_god_nodes(min_in_degree, limit)?)?,
+                GraphOp::Path {
+                    from,
+                    to,
+                    kinds,
+                    max_hops,
+                    ..
+                } => {
+                    let kinds: Vec<EdgeKind> = kinds.into_iter().map(Into::into).collect();
+                    serde_json::to_value(e.graph_path(&from, &to, &kinds, max_hops)?)?
+                }
+                GraphOp::Explain { target, .. } => serde_json::to_value(e.graph_explain(&target)?)?,
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
         }
         Command::Status { root } => print_value(&open(&root)?.status()?, cli.json)?,
         Command::Embedders => {
