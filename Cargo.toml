@@ -17,6 +17,11 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+candle-core = { version = "0.11", optional = true }
+candle-nn = { version = "0.11", optional = true }
+candle-transformers = { version = "0.11", optional = true }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"], optional = true }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"], optional = true }
 blake3 = "1"
 clap = { version = "4.6", features = ["derive"] }
 embedag = { git = "https://github.com/yasuomaidana/embedag", branch = "develop", version = "0.1.0", default-features = false, features = ["core"] }
@@ -55,3 +60,9 @@ tempfile = "3"
 default = []
 # In-process static embeddings (model2vec), for fully offline indexing.
 model2vec = ["dep:model2vec-rs"]
+# In-process safetensors encoders (BERT, NomicBERT, JinaBERT) on candle.
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
+# candle on the Apple GPU.
+candle-metal = ["candle", "candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+# candle with Apple Accelerate BLAS on the CPU.
+candle-accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]

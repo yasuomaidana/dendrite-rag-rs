@@ -20,6 +20,10 @@ mod http;
 pub mod ollama;
 pub mod openai;
 
+#[cfg(feature = "candle")]
+pub mod candle;
+#[cfg(feature = "candle")]
+pub mod jina_code;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
 
@@ -102,8 +106,9 @@ impl Backend {
     /// Whether this build can construct the backend.
     pub fn compiled(self) -> bool {
         match self {
-            // In-process engines land with DRAG-19 (candle) and DRAG-20 (oxillama).
-            Backend::Candle | Backend::Oxillama => false,
+            Backend::Candle => cfg!(feature = "candle"),
+            // The in-process GGUF engine lands with DRAG-20.
+            Backend::Oxillama => false,
             Backend::Model2vec => cfg!(feature = "model2vec"),
             _ => true,
         }
@@ -302,6 +307,8 @@ pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
         Backend::Openai => Some(Box::new(OpenAiEmbedder::new(cfg))),
         Backend::Ollama => Some(Box::new(ollama::OllamaEmbedder::new(cfg))),
         Backend::Hf => Some(Box::new(hf::HfEmbedder::new(cfg)?)),
+        #[cfg(feature = "candle")]
+        Backend::Candle => Some(Box::new(candle::CandleEmbedder::load(cfg)?)),
         #[cfg(feature = "model2vec")]
         Backend::Model2vec => Some(Box::new(model2vec::Model2VecEmbedder::load(cfg)?)),
         #[allow(unreachable_patterns)]
