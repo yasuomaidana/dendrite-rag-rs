@@ -14,7 +14,7 @@ const EMBEDDINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("embedding
 const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
 
 /// redb page cache size.
-const CACHE_BYTES: usize = 32 << 20;
+const CACHE_BYTES: usize = 8 << 20;
 
 /// Ledger schema version, stored under `meta.schema`.
 pub const SCHEMA_VERSION: &str = "1";

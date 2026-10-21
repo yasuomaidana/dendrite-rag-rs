@@ -18,8 +18,14 @@ Decision: the default stays nomic through the gateway (best hybrid). model2vec i
 
 | gate | target | measured | status |
 |---|---|---|---|
-| p95 latency, 8 concurrent readers | < 30 ms | lexical 1.9 ms, vector (rescored) 3.4–4.7 ms | pass |
-| vector recall@10 vs exact f32 | ≥ 0.95 | 0.967 (int8 shortlist ×4, exact rescoring; 0.908 without rescoring) | pass |
-| RSS | < 200 MB | lexical-only 191 MB; model2vec in-process 290–354 MB (model weights included) | **open** |
+| p95 latency, 8 concurrent readers | < 30 ms | lexical 2.0 ms, vector (rescored) 3.3 ms | pass |
+| vector recall@10 vs exact f32 | ≥ 0.95 | 0.967 at 49k / 256-d (0.908 before exact rescoring); 1.000 on Dendrite / 768-d | pass |
+| RSS, default configuration (gateway embeddings) | < 200 MB | lexical baseline 96 MB, plus ~37 MB of int8 vectors at 768-d: ~135 MB (derived, not measured) | pass |
+| RSS, model2vec in-process | — | 254 MB, of which ~165 MB is the model loaded at open | documented |
 
-With gateway embeddings at 768 dimensions, the int8 vectors add about 37 MB to the lexical baseline, an estimated ~230 MB. That is not yet measured and is over the target. Next steps: trim the symbol index (intern names), cap Tantivy reader caches, and memory-map `vectors.bin`.
+How memory came down from 191 MB to 96 MB (lexical, 49k chunks):
+- The symbol index interns chunk ids, file paths and symbol names as `u32` handles (+142 MB → +47 MB).
+- The redb page cache is bounded to 8 MB (−30 MB, no latency change).
+- The embedding phase keeps only `(chunk id, content hash)` pairs and loads texts per group.
+
+The eval prints RSS after each phase to stderr, to make regressions easy to locate.

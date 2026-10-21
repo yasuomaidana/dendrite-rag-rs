@@ -72,8 +72,13 @@ fn main() -> anyhow::Result<()> {
     )?)?;
     let mut cfg = Config::from_env();
     cfg.index_dir = args.get(2).map(Into::into);
+    eprintln!("rss start: {:.0} MB", max_rss_mb());
     let mut engine = Engine::open(root.as_ref(), cfg)?;
+    eprintln!("rss after open: {:.0} MB", max_rss_mb());
     let report = engine.index(false)?;
+    eprintln!("rss after index: {:.0} MB", max_rss_mb());
+    engine.symbol_index()?;
+    eprintln!("rss after symbol index: {:.0} MB", max_rss_mb());
     let status = engine.status()?;
     println!("index: {report:?}");
     println!(
@@ -117,6 +122,7 @@ fn main() -> anyhow::Result<()> {
         println!("\nhybrid misses: {hybrid_misses:#?}");
     }
 
+    eprintln!("rss after quality: {:.0} MB", max_rss_mb());
     // Latency with 8 concurrent readers. Query embeddings are computed once up front, so
     // the numbers measure retrieval, not the embedding model.
     let queries: Vec<&str> = golden.queries.iter().map(|q| q.q.as_str()).collect();

@@ -1,23 +1,59 @@
 //! Symbol tables and the reference graph built from chunk definitions and references
 //! (`docs/specs/retrieval.md` § Symbol-name ranking and § Context packing).
+//!
+//! Chunk ids, file paths and symbol names are interned once as `u32` handles: at 50k
+//! chunks the tables would otherwise repeat the same strings millions of times.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::chunk::Chunk;
 
+/// Interns strings as dense `u32` handles.
+#[derive(Debug, Default)]
+struct Interner {
+    names: Vec<Box<str>>,
+    ids: HashMap<Box<str>, u32>,
+}
+
+impl Interner {
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(&id) = self.ids.get(s) {
+            return id;
+        }
+        let id = self.names.len() as u32;
+        self.names.push(s.into());
+        self.ids.insert(s.into(), id);
+        id
+    }
+
+    fn get(&self, s: &str) -> Option<u32> {
+        self.ids.get(s).copied()
+    }
+
+    fn name(&self, id: u32) -> &str {
+        &self.names[id as usize]
+    }
+
+    fn len(&self) -> usize {
+        self.names.len()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SymbolIndex {
-    /// Symbol name → chunks defining it.
-    defs: HashMap<String, Vec<String>>,
-    /// Symbol name → chunks referencing it.
-    refs: HashMap<String, Vec<String>>,
-    chunk_defs: HashMap<String, Vec<String>>,
-    chunk_refs: HashMap<String, Vec<String>>,
-    chunk_file: HashMap<String, usize>,
-    files: Vec<String>,
-    file_ids: HashMap<String, usize>,
-    /// File → (referenced file → number of references).
-    file_edges: Vec<BTreeMap<usize, f32>>,
+    chunks: Interner,
+    files: Interner,
+    symbols: Interner,
+    /// Symbol → chunks defining it.
+    defs: Vec<Vec<u32>>,
+    /// Symbol → chunks referencing it.
+    refs: Vec<Vec<u32>>,
+    /// Chunk → (file, defined symbols, referenced symbols).
+    chunk_file: Vec<u32>,
+    chunk_defs: Vec<Box<[u32]>>,
+    chunk_refs: Vec<Box<[u32]>>,
+    /// File → (referenced file, weight), built by [`SymbolIndex::finish`].
+    file_edges: Vec<Vec<(u32, f32)>>,
 }
 
 /// Names referenced by more chunks than this are too common to link through (`new`,
@@ -34,48 +70,65 @@ impl SymbolIndex {
         idx
     }
 
+    fn symbol(&mut self, name: &str) -> u32 {
+        let id = self.symbols.intern(name);
+        if id as usize == self.defs.len() {
+            self.defs.push(Vec::new());
+            self.refs.push(Vec::new());
+        }
+        id
+    }
+
     /// Adds one chunk's definitions and references; its content is not kept.
     pub fn add(&mut self, c: Chunk) {
-        let f = match self.file_ids.get(&c.path) {
-            Some(&f) => f,
-            None => {
-                self.files.push(c.path.clone());
-                self.file_ids.insert(c.path, self.files.len() - 1);
-                self.files.len() - 1
-            }
-        };
-        self.chunk_file.insert(c.id.clone(), f);
-        for s in &c.symbols {
-            self.defs.entry(s.clone()).or_default().push(c.id.clone());
+        let chunk = self.chunks.intern(&c.id);
+        if chunk as usize != self.chunk_file.len() {
+            return; // already added
         }
-        for r in &c.refs {
-            self.refs.entry(r.clone()).or_default().push(c.id.clone());
+        self.chunk_file.push(self.files.intern(&c.path));
+        let defs: Box<[u32]> = c.symbols.iter().map(|s| self.symbol(s)).collect();
+        let refs: Box<[u32]> = c.refs.iter().map(|s| self.symbol(s)).collect();
+        for &s in defs.iter() {
+            self.defs[s as usize].push(chunk);
         }
-        self.chunk_defs.insert(c.id.clone(), c.symbols);
-        self.chunk_refs.insert(c.id, c.refs);
+        for &s in refs.iter() {
+            self.refs[s as usize].push(chunk);
+        }
+        self.chunk_defs.push(defs);
+        self.chunk_refs.push(refs);
     }
 
     /// Builds the file reference graph once every chunk has been added.
     pub fn finish(&mut self) {
-        self.file_edges = vec![BTreeMap::new(); self.files.len()];
-        for (chunk, names) in &self.chunk_refs {
+        let mut edges: Vec<HashMap<u32, f32>> = vec![HashMap::new(); self.files.len()];
+        for (chunk, names) in self.chunk_refs.iter().enumerate() {
             let from = self.chunk_file[chunk];
-            for name in names {
-                let Some(targets) = self.defs.get(name) else {
-                    continue;
-                };
-                if targets.len() > MAX_REF_FANOUT {
+            for &name in names.iter() {
+                let targets = &self.defs[name as usize];
+                if targets.is_empty() || targets.len() > MAX_REF_FANOUT {
                     continue;
                 }
                 let share = 1.0 / targets.len() as f32;
-                for t in targets {
-                    let to = self.chunk_file[t];
+                for &t in targets {
+                    let to = self.chunk_file[t as usize];
                     if to != from {
-                        *self.file_edges[from].entry(to).or_default() += share;
+                        *edges[from as usize].entry(to).or_default() += share;
                     }
                 }
             }
         }
+        self.file_edges = edges
+            .into_iter()
+            .map(|m| {
+                let mut v: Vec<(u32, f32)> = m.into_iter().collect();
+                v.sort_by_key(|e| e.0);
+                v
+            })
+            .collect();
+    }
+
+    fn chunk_ids(&self, ids: &[u32]) -> Vec<String> {
+        ids.iter().map(|&c| self.chunks.name(c).to_string()).collect()
     }
 
     /// Chunks that define identifier-like tokens of the query, then chunks that reference
@@ -84,17 +137,19 @@ impl SymbolIndex {
     pub fn rank_query(&self, query: &str, limit: usize) -> Vec<(String, f32)> {
         let mut out: Vec<(String, f32)> = Vec::new();
         let mut seen = HashSet::new();
-        let names = identifiers(query);
-        for (pass, table, score) in [(0, &self.defs, 2.0), (1, &self.refs, 1.0)] {
-            for name in &names {
-                if let Some(ids) = table.get(name) {
-                    if pass == 1 && ids.len() > MAX_REF_FANOUT {
-                        continue;
-                    }
-                    for id in ids {
-                        if seen.insert(id.clone()) {
-                            out.push((id.clone(), score));
-                        }
+        let names: Vec<u32> = identifiers(query)
+            .iter()
+            .filter_map(|n| self.symbols.get(n))
+            .collect();
+        for (table, score) in [(&self.defs, 2.0), (&self.refs, 1.0)] {
+            for &name in &names {
+                let ids = &table[name as usize];
+                if score < 2.0 && ids.len() > MAX_REF_FANOUT {
+                    continue;
+                }
+                for &id in ids {
+                    if seen.insert(id) {
+                        out.push((self.chunks.name(id).to_string(), score));
                     }
                 }
             }
@@ -104,42 +159,41 @@ impl SymbolIndex {
     }
 
     /// Chunks defining `name`.
-    pub fn definitions(&self, name: &str) -> &[String] {
-        self.defs.get(name).map(Vec::as_slice).unwrap_or_default()
+    pub fn definitions(&self, name: &str) -> Vec<String> {
+        self.symbols
+            .get(name)
+            .map_or_else(Vec::new, |s| self.chunk_ids(&self.defs[s as usize]))
     }
 
     /// Chunks referencing `name` (calls, type uses).
-    pub fn references(&self, name: &str) -> &[String] {
-        self.refs.get(name).map(Vec::as_slice).unwrap_or_default()
+    pub fn references(&self, name: &str) -> Vec<String> {
+        self.symbols
+            .get(name)
+            .map_or_else(Vec::new, |s| self.chunk_ids(&self.refs[s as usize]))
     }
 
     /// One-hop neighbours of a chunk: definitions of what it references, then chunks that
     /// reference what it defines.
     pub fn neighbours(&self, chunk: &str, limit: usize) -> Vec<String> {
+        let Some(c) = self.chunks.get(chunk) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::from([chunk]);
-        let refs = self.chunk_refs.get(chunk).map(Vec::as_slice).unwrap_or_default();
-        for name in refs {
-            if let Some(ids) = self.defs.get(name).filter(|ids| ids.len() <= 3) {
-                for id in ids {
-                    if seen.insert(id) {
-                        out.push(id.clone());
-                    }
-                }
+        let mut seen: HashSet<u32> = HashSet::from([c]);
+        for &name in self.chunk_refs[c as usize].iter() {
+            let ids = &self.defs[name as usize];
+            if ids.len() <= 3 {
+                out.extend(ids.iter().filter(|&&id| seen.insert(id)));
             }
         }
-        let defs = self.chunk_defs.get(chunk).map(Vec::as_slice).unwrap_or_default();
-        for name in defs {
-            if let Some(ids) = self.refs.get(name).filter(|ids| ids.len() <= 20) {
-                for id in ids {
-                    if seen.insert(id) {
-                        out.push(id.clone());
-                    }
-                }
+        for &name in self.chunk_defs[c as usize].iter() {
+            let ids = &self.refs[name as usize];
+            if ids.len() <= 20 {
+                out.extend(ids.iter().filter(|&&id| seen.insert(id)));
             }
         }
         out.truncate(limit);
-        out
+        self.chunk_ids(&out)
     }
 
     /// Personalized PageRank over the file reference graph, seeded with `seeds`
@@ -149,16 +203,10 @@ impl SymbolIndex {
         if n == 0 {
             return HashMap::new();
         }
-        let file_ids: HashMap<&str, usize> = self
-            .files
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (f.as_str(), i))
-            .collect();
         let mut teleport = vec![0f32; n];
         for (f, w) in seeds {
-            if let Some(&i) = file_ids.get(f.as_str()) {
-                teleport[i] += w.max(0.0);
+            if let Some(i) = self.files.get(f) {
+                teleport[i as usize] += w.max(0.0);
             }
         }
         let total: f32 = teleport.iter().sum();
@@ -166,7 +214,11 @@ impl SymbolIndex {
             return HashMap::new();
         }
         teleport.iter_mut().for_each(|t| *t /= total);
-        let out_weight: Vec<f32> = self.file_edges.iter().map(|e| e.values().sum()).collect();
+        let out_weight: Vec<f32> = self
+            .file_edges
+            .iter()
+            .map(|e| e.iter().map(|(_, w)| w).sum())
+            .collect();
         const DAMPING: f32 = 0.85;
         let mut rank = teleport.clone();
         for _ in 0..20 {
@@ -177,8 +229,8 @@ impl SymbolIndex {
                     dangling += rank[from];
                     continue;
                 }
-                for (&to, &w) in edges {
-                    next[to] += DAMPING * rank[from] * w / out_weight[from];
+                for &(to, w) in edges {
+                    next[to as usize] += DAMPING * rank[from] * w / out_weight[from];
                 }
             }
             // Mass from files without outgoing references returns to the seeds.
@@ -188,11 +240,15 @@ impl SymbolIndex {
             rank = next;
         }
         let max = rank.iter().cloned().fold(0f32, f32::max);
-        self.files
-            .iter()
-            .zip(rank)
+        rank.into_iter()
+            .enumerate()
             .filter(|(_, r)| *r > 0.0)
-            .map(|(f, r)| (f.clone(), if max > 0.0 { r / max } else { 0.0 }))
+            .map(|(i, r)| {
+                (
+                    self.files.name(i as u32).to_string(),
+                    if max > 0.0 { r / max } else { 0.0 },
+                )
+            })
             .collect()
     }
 }

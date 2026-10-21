@@ -36,7 +36,7 @@ If the embedder fails, the run reports `embed_error`, the lexical index stays cu
 **Vector index: exact int8 scan.**
 - Each vector is stored as `i8` components plus one `f32` scale (`max|x| / 127`). The query is quantized the same way, and the score is an integer dot product times both scales. That is 4× less memory than `f32` (50k chunks × 768 dims ≈ 38 MB instead of 150 MB), and the loop auto-vectorizes.
 - Rows are scanned in parallel blocks of 1,024, and the top k comes from `select_nth_unstable`.
-- Recall@10 against exact `f32` search is ≥ 0.95 (unit test over 3,000 random vectors).
+- The int8 scan shortlists `4 × top_k` rows (at least 40), which are rescored with their exact `f32` vectors from the embedding cache. Recall@10 against exact search: 0.967 at 49k chunks / 256 dims (0.908 without rescoring), 1.000 on the Dendrite repository / 768 dims. Results in `eval/RESULTS.md`.
 - The index persists to `vectors.bin` (written atomically) and loads at open.
 
 **Measured on the Dendrite repository** (5,281 chunks, `nomic-embed-text` through the LiteLLM gateway on Ollama, Apple Silicon):
@@ -83,7 +83,7 @@ The result lists the spans in score order, each with `path`, `start_line`, `end_
 
 | Metric | Target |
 |---|---|
-| RSS at 50k chunks | < 200 MB |
+| RSS at 50k chunks | < 200 MB (measured 96 MB lexical baseline at 49k; ~135 MB with 768-d vectors) |
 | p95 search latency, 8 concurrent readers | < 30 ms (embedding the query excluded) |
 | HNSW recall@10 vs exact | ≥ 0.95 |
 | Hybrid recall@10 on the golden set | ≥ lexical-only |

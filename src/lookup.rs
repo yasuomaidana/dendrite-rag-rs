@@ -25,13 +25,13 @@ impl Engine {
     /// Chunks that define `name`.
     pub fn definitions(&self, name: &str) -> Result<Vec<Hit>> {
         let idx = self.symbol_index()?;
-        self.ranked_ids(idx.definitions(name))
+        self.ranked_ids(&idx.definitions(name))
     }
 
     /// Chunks that reference `name`.
     pub fn references(&self, name: &str) -> Result<Vec<Hit>> {
         let idx = self.symbol_index()?;
-        self.ranked_ids(idx.references(name))
+        self.ranked_ids(&idx.references(name))
     }
 
     fn ranked_ids(&self, ids: &[String]) -> Result<Vec<Hit>> {
