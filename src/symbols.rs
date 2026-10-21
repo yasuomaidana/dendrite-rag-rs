@@ -15,6 +15,7 @@ pub struct SymbolIndex {
     chunk_refs: HashMap<String, Vec<String>>,
     chunk_file: HashMap<String, usize>,
     files: Vec<String>,
+    file_ids: HashMap<String, usize>,
     /// File → (referenced file → number of references).
     file_edges: Vec<BTreeMap<usize, f32>>,
 }
@@ -26,27 +27,41 @@ const MAX_REF_FANOUT: usize = 200;
 impl SymbolIndex {
     pub fn build(chunks: impl IntoIterator<Item = Chunk>) -> Self {
         let mut idx = SymbolIndex::default();
-        let mut file_ids: HashMap<String, usize> = HashMap::new();
         for c in chunks {
-            let f = *file_ids.entry(c.path.clone()).or_insert_with(|| {
-                idx.files.push(c.path.clone());
-                idx.files.len() - 1
-            });
-            idx.chunk_file.insert(c.id.clone(), f);
-            for s in &c.symbols {
-                idx.defs.entry(s.clone()).or_default().push(c.id.clone());
-            }
-            for r in &c.refs {
-                idx.refs.entry(r.clone()).or_default().push(c.id.clone());
-            }
-            idx.chunk_defs.insert(c.id.clone(), c.symbols);
-            idx.chunk_refs.insert(c.id.clone(), c.refs);
+            idx.add(c);
         }
-        idx.file_edges = vec![BTreeMap::new(); idx.files.len()];
-        for (chunk, names) in &idx.chunk_refs {
-            let from = idx.chunk_file[chunk];
+        idx.finish();
+        idx
+    }
+
+    /// Adds one chunk's definitions and references; its content is not kept.
+    pub fn add(&mut self, c: Chunk) {
+        let f = match self.file_ids.get(&c.path) {
+            Some(&f) => f,
+            None => {
+                self.files.push(c.path.clone());
+                self.file_ids.insert(c.path, self.files.len() - 1);
+                self.files.len() - 1
+            }
+        };
+        self.chunk_file.insert(c.id.clone(), f);
+        for s in &c.symbols {
+            self.defs.entry(s.clone()).or_default().push(c.id.clone());
+        }
+        for r in &c.refs {
+            self.refs.entry(r.clone()).or_default().push(c.id.clone());
+        }
+        self.chunk_defs.insert(c.id.clone(), c.symbols);
+        self.chunk_refs.insert(c.id, c.refs);
+    }
+
+    /// Builds the file reference graph once every chunk has been added.
+    pub fn finish(&mut self) {
+        self.file_edges = vec![BTreeMap::new(); self.files.len()];
+        for (chunk, names) in &self.chunk_refs {
+            let from = self.chunk_file[chunk];
             for name in names {
-                let Some(targets) = idx.defs.get(name) else {
+                let Some(targets) = self.defs.get(name) else {
                     continue;
                 };
                 if targets.len() > MAX_REF_FANOUT {
@@ -54,14 +69,13 @@ impl SymbolIndex {
                 }
                 let share = 1.0 / targets.len() as f32;
                 for t in targets {
-                    let to = idx.chunk_file[t];
+                    let to = self.chunk_file[t];
                     if to != from {
-                        *idx.file_edges[from].entry(to).or_default() += share;
+                        *self.file_edges[from].entry(to).or_default() += share;
                     }
                 }
             }
         }
-        idx
     }
 
     /// Chunks that define identifier-like tokens of the query, then chunks that reference

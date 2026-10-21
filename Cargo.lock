@@ -576,6 +576,7 @@ dependencies = [
  "embedag",
  "globset",
  "ignore",
+ "libc",
  "model2vec-rs",
  "rayon",
  "redb",

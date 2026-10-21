@@ -47,6 +47,7 @@ lto = "thin"
 codegen-units = 1
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3"
 
 [features]

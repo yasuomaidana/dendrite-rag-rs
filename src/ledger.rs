@@ -13,6 +13,9 @@ const CHUNKS: TableDefinition<&str, &[u8]> = TableDefinition::new("chunks");
 const EMBEDDINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("embeddings");
 const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
 
+/// redb page cache size.
+const CACHE_BYTES: usize = 32 << 20;
+
 /// Ledger schema version, stored under `meta.schema`.
 pub const SCHEMA_VERSION: &str = "1";
 
@@ -50,7 +53,9 @@ pub struct Ledger {
 
 impl Ledger {
     pub fn open(path: &Path) -> Result<Self> {
-        let db = Database::create(path)?;
+        // redb's default page cache is sized for databases, not a sidecar: bound it so
+        // full scans (symbol index, embedding phase) do not inflate resident memory.
+        let db = Database::builder().set_cache_size(CACHE_BYTES).create(path)?;
         let txn = db.begin_write()?;
         txn.open_table(FILES)?;
         txn.open_table(CHUNKS)?;
@@ -120,6 +125,15 @@ impl Ledger {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(EMBEDDINGS)?;
         Ok(table.get(key)?.map(|v| decode_f32(v.value())))
+    }
+
+    /// Several cached embeddings in one read transaction, in the order of `keys`.
+    pub fn embeddings(&self, keys: &[String]) -> Result<Vec<Option<Vec<f32>>>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(EMBEDDINGS)?;
+        keys.iter()
+            .map(|k| Ok(table.get(k.as_str())?.map(|v| decode_f32(v.value()))))
+            .collect()
     }
 
     pub fn embedding_count(&self) -> Result<u64> {

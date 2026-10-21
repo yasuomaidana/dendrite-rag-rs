@@ -366,9 +366,10 @@ impl Engine {
             return Ok(());
         }
 
-        let mut live: BTreeMap<String, Chunk> = BTreeMap::new();
+        // Only ids and content hashes are kept in memory; texts are loaded per group.
+        let mut live: BTreeMap<String, String> = BTreeMap::new();
         self.ledger.for_each_chunk(|c| {
-            live.insert(c.id.clone(), c);
+            live.insert(c.id, c.content_hash);
         })?;
         let stale: Vec<String> = self
             .vectors
@@ -380,18 +381,20 @@ impl Engine {
             self.vectors.remove(id);
         }
 
-        let mut todo: Vec<&Chunk> = Vec::new();
-        let missing: Vec<&Chunk> = live.values().filter(|c| !self.vectors.contains(&c.id)).collect();
-        for c in missing {
-            match self.ledger.embedding(&cache_key(&model, &c.content_hash))? {
-                Some(v) => self.vectors.upsert(&c.id, &v),
-                None => todo.push(c),
+        let mut todo: Vec<String> = Vec::new();
+        let missing: Vec<(&String, &String)> =
+            live.iter().filter(|(id, _)| !self.vectors.contains(id)).collect();
+        for (id, hash) in missing {
+            match self.ledger.embedding(&cache_key(&model, hash))? {
+                Some(v) => self.vectors.upsert(id, hash, &v),
+                None => todo.push(id.clone()),
             }
         }
 
         // Embed in groups, committing each group's cache entries so progress survives
         // interruptions.
-        for group in todo.chunks(EMBED_GROUP) {
+        for ids in todo.chunks(EMBED_GROUP) {
+            let group = self.ledger.chunks(ids)?;
             let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
             let vectors = match embedder.embed_documents(&texts) {
                 Ok(v) => v,
@@ -403,7 +406,7 @@ impl Engine {
             let mut batch = self.ledger.batch()?;
             for (c, v) in group.iter().zip(&vectors) {
                 batch.put_embedding(&cache_key(&model, &c.content_hash), v)?;
-                self.vectors.upsert(&c.id, v);
+                self.vectors.upsert(&c.id, &c.content_hash, v);
             }
             batch.commit()?;
             report.embedded += group.len();
@@ -422,6 +425,37 @@ impl Engine {
         self.hits(&ranked)
     }
 
+    /// Embeds a query with the configured embedder (`None` without one).
+    pub fn embed_query(&self, query: &str) -> Result<Option<Vec<f32>>> {
+        match &self.embedder {
+            Some(e) => Ok(Some(e.embed_query(query)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Nearest chunks to an already-embedded query. The int8 scan shortlists
+    /// `RESCORE_FACTOR × top_k` rows, which are rescored with their exact `f32` vectors
+    /// from the embedding cache.
+    pub fn search_vector(&self, query: &[f32], top_k: usize) -> Result<Vec<(String, f32)>> {
+        let mut shortlist = self
+            .vectors
+            .search(query, (top_k * RESCORE_FACTOR).max(RESCORE_MIN));
+        if let Some(model) = self.embedder.as_ref().map(|e| e.model_id()) {
+            let keys: Vec<String> = shortlist
+                .iter()
+                .map(|(id, _)| cache_key(model, self.vectors.tag(id).unwrap_or_default()))
+                .collect();
+            for ((_, score), exact) in shortlist.iter_mut().zip(self.ledger.embeddings(&keys)?) {
+                if let Some(v) = exact {
+                    *score = v.iter().zip(query).map(|(a, b)| a * b).sum();
+                }
+            }
+            shortlist.sort_by(|a, b| b.1.total_cmp(&a.1));
+        }
+        shortlist.truncate(top_k);
+        Ok(shortlist)
+    }
+
     /// `(chunk_id, cosine)` for the query, best first.
     pub fn dense_ranking(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>> {
         let Some(embedder) = &self.embedder else {
@@ -431,7 +465,7 @@ impl Engine {
             return Ok(Vec::new());
         }
         let q = embedder.embed_query(query)?;
-        Ok(self.vectors.search(&q, top_k))
+        self.search_vector(&q, top_k)
     }
 
     /// BM25-only search.
@@ -477,10 +511,15 @@ impl Engine {
 }
 
 const VECTORS_FILE: &str = "vectors.bin";
+/// The int8 shortlist is this many times `top_k` (at least `RESCORE_MIN`) before exact
+/// rescoring.
+const RESCORE_FACTOR: usize = 4;
+const RESCORE_MIN: usize = 40;
 /// Chunks per embedding call group (and per cache commit).
 const EMBED_GROUP: usize = 256;
 
-fn cache_key(model: &str, content_hash: &str) -> String {
+/// Ledger key of a cached embedding.
+pub fn cache_key(model: &str, content_hash: &str) -> String {
     format!("{model}\u{0}{content_hash}")
 }
 

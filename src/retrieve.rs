@@ -80,9 +80,10 @@ impl Engine {
         if let Some(idx) = self.symbols.read().expect("symbols lock").as_ref() {
             return Ok(idx.clone());
         }
-        let mut chunks = Vec::new();
-        self.ledger.for_each_chunk(|c| chunks.push(c))?;
-        let idx = Arc::new(SymbolIndex::build(chunks));
+        let mut idx = SymbolIndex::default();
+        self.ledger.for_each_chunk(|c| idx.add(c))?;
+        idx.finish();
+        let idx = Arc::new(idx);
         *self.symbols.write().expect("symbols lock") = Some(idx.clone());
         Ok(idx)
     }
