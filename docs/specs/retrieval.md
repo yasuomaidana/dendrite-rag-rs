@@ -17,13 +17,7 @@ Fields:
 
 `Embedder` trait: `model_id()`, `embed_documents(&[String])`, `embed_query(&str)`. Vectors are L2-normalized, so cosine similarity is a dot product.
 
-| Backend | When | Notes |
-|---|---|---|
-| `GatewayEmbedder` | default (`backend = "gateway"`) | OpenAI-compatible `POST {base}/v1/embeddings` in batches of 32. Base from `LITELLM_PROXY_URL` (default `http://localhost:4000`); bearer key from `LITELLM_API_KEY`, `LITELLM_MASTER_KEY` or `OPENAI_API_KEY`. Default model `local-nomic-embed-text-latest` (nomic-embed-text served by Ollama behind the gateway). Inputs over 8,000 bytes are truncated |
-| `Model2VecEmbedder` | cargo feature `model2vec`, `backend = "model2vec"` | In-process static embeddings (model2vec-rs, pure Rust; `fancy-regex` tokenizer, no C). Default model `minishlab/potion-code-16M-v2`, fetched once from the Hugging Face hub or loaded from a local folder. No network afterwards, sub-millisecond per chunk; lower quality than a transformer, but a full offline fallback |
-| none | `backend = "none"` | Lexical and symbol retrieval only |
-
-**Asymmetric prefixes.** nomic models get `search_document: ` for chunks and `search_query: ` for queries (configurable for other models).
+The backend and model are the project's choice: `openai` (LiteLLM gateway or any OpenAI-compatible server), `ollama`, `hf` (Hugging Face Inference or TEI), the in-process `model2vec`, or `none`. Each has a default model. Known model families get their task prefixes and pooling automatically. [embedders.md](embedders.md) covers configuration (`.dendrite/rag.toml` and `DENDRITE_RAG_EMBED_*`), wire formats and how to choose.
 
 **Embedding phase.** It runs after the lexical index and ledger are committed, and is resumable:
 

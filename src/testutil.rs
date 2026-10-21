@@ -73,3 +73,82 @@ impl Embedder for HashEmbedder {
         Ok(Self::vector(text))
     }
 }
+
+/// One HTTP request captured by [`HttpStub`].
+pub struct Captured {
+    /// Request line and headers.
+    pub head: String,
+    pub body: serde_json::Value,
+}
+
+/// A local HTTP server that answers every request with a fixed JSON body and records the
+/// requests, for checking the wire format of the server backends.
+pub struct HttpStub {
+    pub url: String,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<Captured>>>,
+}
+
+impl HttpStub {
+    pub fn serve(response: &'static str) -> Self {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut head = String::new();
+                let mut len = 0;
+                let mut chunked = false;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    chunked |= lower.starts_with("transfer-encoding:") && lower.contains("chunked");
+                    head.push_str(&line);
+                }
+                let mut body = Vec::new();
+                if chunked {
+                    loop {
+                        let mut size = String::new();
+                        reader.read_line(&mut size).unwrap();
+                        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+                        let mut part = vec![0; n + 2];
+                        reader.read_exact(&mut part).unwrap();
+                        if n == 0 {
+                            break;
+                        }
+                        body.extend_from_slice(&part[..n]);
+                    }
+                } else {
+                    body.resize(len, 0);
+                    reader.read_exact(&mut body).unwrap();
+                }
+                seen.lock().unwrap().push(Captured {
+                    head,
+                    body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+                });
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+                    response.len()
+                );
+            }
+        });
+        Self { url, requests }
+    }
+
+    /// The first request received.
+    pub fn request(&self) -> Captured {
+        let mut r = self.requests.lock().unwrap();
+        assert!(!r.is_empty(), "no request reached the stub");
+        r.remove(0)
+    }
+}

@@ -182,7 +182,8 @@ impl HistoryIndex {
                 .unwrap_or_default()
                 .to_string()
         };
-        top.into_iter()
+        let mut hits = top
+            .into_iter()
             .map(|(score, addr)| {
                 let d: TantivyDocument = searcher.doc(addr)?;
                 Ok(HistoryHit {
@@ -198,7 +199,16 @@ impl HistoryIndex {
                     score,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        // Documents of one commit often tie (only the message matched): newest commit
+        // first, then path, so results do not depend on segment order.
+        hits.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then(b.time.cmp(&a.time))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        Ok(hits)
     }
 
     pub fn len(&self) -> u64 {
@@ -494,9 +504,11 @@ mod tests {
             hits[0].subject,
             "fix: prefer the release build when locating sidecars"
         );
-        assert_eq!(hits[0].path, "locate.go");
+        // The commit's README.md and locate.go documents tie on the message.
+        let locate = hits.iter().find(|h| h.path == "locate.go").unwrap();
+        assert_eq!(locate.sha, hits[0].sha);
         assert!(
-            hits[0]
+            locate
                 .diff
                 .contains("+func LocateBinary() string { return \"b\" }")
         );

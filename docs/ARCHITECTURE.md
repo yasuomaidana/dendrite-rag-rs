@@ -11,7 +11,7 @@ flowchart LR
     W[Walker<br/>ignore] --> C[cAST chunker<br/>tree-sitter]
     C --> H[Contextual header]
     H --> L[(Tantivy BM25<br/>code tokenizer)]
-    H --> E[Embedder<br/>gateway / model2vec]
+    H --> E[Embedder<br/>openai / ollama / hf / candle / oxillama / model2vec]
     E --> V[(Vector index<br/>flat / HNSW)]
     C --> G[(Symbol graph<br/>defs / refs)]
     C --> R[(redb ledger<br/>files, chunks, embeddings, Merkle root)]
@@ -38,7 +38,7 @@ flowchart LR
 - **Structure-aware.** Chunks follow syntax boundaries (functions, types, impl blocks) instead of fixed line windows. Each chunk carries its scope chain and signature, so lexical and dense retrieval both see *where* the code lives.
 - **Hybrid by default.** Identifier-heavy queries are won by BM25 with a code tokenizer. Conceptual queries are won by embeddings. Rank fusion combines them without tuning score scales.
 - **Small footprint.** Pure-Rust storage (redb, Tantivy, hnsw_rs). The only native code is the tree-sitter grammars, compiled from C sources by `cc` with no system libraries. Targets: under 200 MB RSS at 50k chunks, p95 query latency under 30 ms with 8 concurrent readers.
-- **Pluggable models.** Embedding and reranking sit behind traits. The default embedder calls an OpenAI-compatible `/v1/embeddings` endpoint (the Dendrite LiteLLM gateway). An in-process model2vec embedder works fully offline.
+- **The project chooses its model.** Embedding and reranking sit behind traits. Every backend is a first-class choice, selected per project in `.dendrite/rag.toml` or the environment ([specs/embedders.md](specs/embedders.md)): OpenAI-compatible servers (the LiteLLM gateway by default), Ollama, Hugging Face Inference or TEI, and in-process engines that work offline.
 
 ## 3. Modules
 
@@ -49,7 +49,8 @@ flowchart LR
 | `chunk` | cAST splitter, Markdown and text splitters, definitions/references/scope, contextual headers |
 | `ledger` | redb tables: files, chunks, embedding cache, metadata |
 | `lexical` | Tantivy schema, code tokenizer, BM25 search |
-| `embed` | `Embedder` trait, gateway and model2vec backends |
+| `embed` | `Embedder` trait and backends: `openai`, `ollama`, `hf`, `model2vec` |
+| `settings` | Per-project settings: `.dendrite/rag.toml` plus `DENDRITE_RAG_*` overrides |
 | `vector` | `VectorIndex` trait, exact int8 flat index |
 | `symbols` | Symbol tables, chunk neighbours, file reference graph, personalized PageRank |
 | `fusion` | Weighted RRF |

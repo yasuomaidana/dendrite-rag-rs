@@ -19,10 +19,12 @@ Protocol version: **1.0.0**
 | `history.search` | `{root, query, top_k?: 10}` | `{hits: [{sha, time, author, subject, path, diff, score}]}`; updates the history index first ([history.md](history.md)) |
 | `status` | `{root}` | `{files, chunks, vectors, embed_model, merkle_root, index_dir, last_indexed}` |
 | `purge` | `{root}` | `{removed: true}` |
+| `embedders` | — | `{backends: [{backend, compiled, default_model, default_url, description}]}` |
+| `settings` | `{root}` | `{file, file_exists, settings: {embed, rerank, index}}`: the project's settings after environment overrides (keys are never returned) |
 
 `root` is the project directory. The server keeps one open engine per root.
 
-Errors use the standard codes: `-32700` parse error, `-32600` invalid request, `-32601` method not found, and `-32602` invalid params (unknown root, bad mode, bad regex or glob). Engine failures use `-32000` with `data.kind`: `not_indexed` (`search`, `context` and `symbols.*` before the first `index`), `io`, `embed` (dense mode with the embedder unreachable; hybrid mode degrades to lexical + symbols instead), or `index`. History methods use `git` for repository errors.
+Errors use the standard codes: `-32700` parse error, `-32600` invalid request, `-32601` method not found, and `-32602` invalid params (unknown root, bad mode, bad regex or glob). Engine failures use `-32000` with `data.kind`: `config` (the project's `.dendrite/rag.toml` or a `DENDRITE_RAG_*` variable is invalid), `not_indexed` (`search`, `context` and `symbols.*` before the first `index`), `io`, `embed` (dense mode with the embedder unreachable; hybrid mode degrades to lexical + symbols instead), or `index`. History methods use `git` for repository errors.
 
 The same operations exist as dev subcommands, each with `--json`:
 - `dendrite-rag index <root> [--full]`
@@ -33,16 +35,9 @@ The same operations exist as dev subcommands, each with `--json`:
 - `history <root> <query> [-k N]`
 - `status <root>`
 - `purge <root>`
+- `embedders`
+- `settings <root>`
 
 ## Configuration
 
-Read from the environment at start-up:
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `DENDRITE_RAG_EMBED_BACKEND` | `gateway`, `model2vec` (needs the `model2vec` build feature) or `none` | `gateway` |
-| `DENDRITE_RAG_EMBED_MODEL` | Embedding model | `local-nomic-embed-text-latest` / `minishlab/potion-code-16M-v2` |
-| `DENDRITE_RAG_RERANK_MODEL` | Cross-encoder served at the gateway's `/v1/rerank`; reranking is off when unset | — |
-| `DENDRITE_RAG_MAX_FILE_BYTES` | Largest file indexed | 1 MiB |
-| `LITELLM_PROXY_URL` | Gateway base URL | `http://localhost:4000` |
-| `LITELLM_API_KEY`, `LITELLM_MASTER_KEY`, `OPENAI_API_KEY` | Gateway key, first one set wins | — |
+Each project is configured by its `.dendrite/rag.toml`, overridden by `DENDRITE_RAG_*` environment variables; the server resolves the settings when it first opens a root. [embedders.md](embedders.md) lists every key and variable. `LITELLM_PROXY_URL`, `OLLAMA_HOST` and the provider keys (`LITELLM_API_KEY`, `HF_TOKEN`, …) are read as the defaults of their backends.

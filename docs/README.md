@@ -7,6 +7,7 @@
 
 - [Walking and chunking](specs/chunking.md): file discovery, cAST syntax-tree chunking, chunk records and contextual headers.
 - [Retrieval](specs/retrieval.md): code-aware BM25, embeddings and vector indexes, symbol ranking, weighted RRF, reranking, context packing and performance targets.
+- [Embedders](specs/embedders.md): choosing the embedding backend and model per project (`.dendrite/rag.toml`, `DENDRITE_RAG_*`), wire formats and model conventions.
 - [Storage](specs/store.md): index layout, the redb ledger, Merkle-based incremental indexing, and the planned segmented analysis store.
 - [Git history search](specs/history.md): (commit, file) documents of messages and diffs, incremental indexing.
 - [Protocol](specs/protocol.md): the `dendrite-rag` JSON-RPC 2.0 stdio methods and error codes.

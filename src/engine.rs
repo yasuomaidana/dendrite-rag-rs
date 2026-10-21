@@ -13,7 +13,7 @@ use crate::chunk::{Chunk, ChunkOptions, chunk_file};
 use crate::embed::{EmbedConfig, Embedder};
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
-use crate::rerank::{GatewayReranker, Reranker};
+use crate::rerank::{GatewayReranker, RerankConfig, Reranker};
 use crate::symbols::SymbolIndex;
 use crate::vector::{FlatIndex, VectorIndex};
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
@@ -26,37 +26,7 @@ pub struct Config {
     pub walk: WalkOptions,
     pub chunk: ChunkOptions,
     pub embed: EmbedConfig,
-    /// Cross-encoder model for reranking through the gateway (`/v1/rerank`); off when unset.
-    pub rerank_model: Option<String>,
-}
-
-impl Config {
-    /// Defaults overridden by the environment: `DENDRITE_RAG_EMBED_BACKEND` (`gateway`,
-    /// `model2vec`, `none`), `DENDRITE_RAG_EMBED_MODEL`, `DENDRITE_RAG_RERANK_MODEL` and
-    /// `DENDRITE_RAG_MAX_FILE_BYTES`.
-    pub fn from_env() -> Self {
-        let mut cfg = Config::default();
-        if let Ok(b) = std::env::var("DENDRITE_RAG_EMBED_BACKEND") {
-            cfg.embed.backend = match b.to_ascii_lowercase().as_str() {
-                "model2vec" => crate::embed::Backend::Model2vec,
-                "none" | "off" => crate::embed::Backend::None,
-                _ => crate::embed::Backend::Gateway,
-            };
-        }
-        cfg.embed.model = std::env::var("DENDRITE_RAG_EMBED_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty());
-        cfg.rerank_model = std::env::var("DENDRITE_RAG_RERANK_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty());
-        if let Some(n) = std::env::var("DENDRITE_RAG_MAX_FILE_BYTES")
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            cfg.walk.max_file_bytes = n;
-        }
-        cfg
-    }
+    pub rerank: RerankConfig,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -191,10 +161,7 @@ impl Engine {
             dir,
             ledger,
             lexical,
-            reranker: cfg
-                .rerank_model
-                .as_deref()
-                .map(|m| Box::new(GatewayReranker::new(m, &cfg.embed)) as Box<dyn Reranker>),
+            reranker: GatewayReranker::new(&cfg.rerank).map(|r| Box::new(r) as Box<dyn Reranker>),
             cfg,
             embedder,
             vectors,

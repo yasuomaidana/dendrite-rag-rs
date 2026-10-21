@@ -70,7 +70,7 @@ fn main() -> anyhow::Result<()> {
             .map(String::as_str)
             .unwrap_or("eval/golden-dendrite.json"),
     )?)?;
-    let mut cfg = Config::from_env();
+    let mut cfg = Config::resolve(root.as_ref())?;
     cfg.index_dir = args.get(2).map(Into::into);
     eprintln!("rss start: {:.0} MB", max_rss_mb());
     let mut engine = Engine::open(root.as_ref(), cfg)?;

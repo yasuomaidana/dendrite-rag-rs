@@ -1,0 +1,73 @@
+# Embedders: choosing a backend and a model
+
+Dense retrieval needs an embedding model. dendrite-rag does not pick one for the project: the project owner chooses the backend and the model, and every backend is a first-class option. Lexical and symbol retrieval work without any model (`backend = "none"`).
+
+## Where the choice lives
+
+1. `<project>/.dendrite/rag.toml`, committed with the project so every clone and agent uses the same model (`DENDRITE_RAG_CONFIG` points to another file).
+2. The environment, which overrides the file for one machine or one run.
+
+```toml
+[embed]
+backend = "ollama"              # openai | ollama | hf | candle | oxillama | model2vec | none
+model = "nomic-embed-text"      # optional: each backend has a default
+url = "http://localhost:11434"  # optional, HTTP backends only
+# api_key_env = "HF_TOKEN"      # the variable holding the bearer key (keys never go in the file)
+# document_prefix = "search_document: "
+# query_prefix = "search_query: "
+# pooling = "mean"              # mean | cls | last (in-process and token-level outputs)
+# batch = 32                    # texts per request or forward pass
+
+[rerank]
+# model = "bge-reranker-v2-m3"  # cross-encoder at a Cohere-style /v1/rerank; off when unset
+# url = "http://localhost:4000"
+
+[index]
+# max_file_bytes = 1048576
+```
+
+| Variable | Overrides |
+|---|---|
+| `DENDRITE_RAG_EMBED_BACKEND` | `embed.backend`. A backend different from the file's drops the file's `model`, `url`, prefixes and pooling, because they belong to the file's backend |
+| `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` | the matching `embed.*` key |
+| `DENDRITE_RAG_RERANK_MODEL`, `DENDRITE_RAG_RERANK_URL` | `rerank.model`, `rerank.url` |
+| `DENDRITE_RAG_MAX_FILE_BYTES` | `index.max_file_bytes` |
+
+Unknown keys, unknown backends and malformed values are errors, never silently replaced by a default.
+
+`dendrite-rag embedders` lists the backends this build supports, with their default models. `dendrite-rag settings <root>` prints the settings in effect for a project. The `embedders` and `settings` RPC methods return the same data.
+
+## Backends
+
+| Backend | Runs | Wire / runtime | Default model | Key |
+|---|---|---|---|---|
+| `openai` (aliases `gateway`, `litellm`) | any OpenAI-compatible server: the LiteLLM gateway (default `LITELLM_PROXY_URL`, then `http://localhost:4000`), vLLM, LM Studio, `oxillama serve` | `POST {url}/v1/embeddings` | `local-nomic-embed-text-latest` | `LITELLM_API_KEY`, `LITELLM_MASTER_KEY`, `OPENAI_API_KEY` |
+| `ollama` | an Ollama server (default `OLLAMA_HOST`, then `http://localhost:11434`) | `POST {url}/api/embed` with `truncate: true` | `nomic-embed-text` | — |
+| `hf` (aliases `huggingface`, `tei`) | Hugging Face Inference: serverless (no `url`), a dedicated endpoint (`*.endpoints.huggingface.cloud`), or any Text Embeddings Inference server (`{url}/embed`) | `POST` `{"inputs": [...], "truncate": true}`. Sentence vectors are used as returned; token-level outputs are pooled | `BAAI/bge-base-en-v1.5` | `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, then the `huggingface-cli login` token file. Serverless without a token is an error |
+| `model2vec` | in process, build feature `model2vec` | static token embeddings (model2vec-rs) | `minishlab/potion-code-16M-v2` | — |
+| `none` | — | lexical and symbol rankings only | — | — |
+
+Server backends send batches of 32 texts. Inputs over 8,000 bytes are cut at a character boundary.
+
+## Model conventions applied automatically
+
+Asymmetric models were trained with task prefixes. They are applied by model family unless `document_prefix` or `query_prefix` is set:
+
+| Family (name contains) | Document prefix | Query prefix | Pooling |
+|---|---|---|---|
+| `nomic-embed` | `search_document: ` | `search_query: ` | mean |
+| `qwen3-embedding` | — | `Instruct: Given a code search query, retrieve relevant code and documentation\nQuery: ` | last token |
+| `e5-` | `passage: ` | `query: ` | mean |
+| `bge-…-en`, `mxbai-embed`, `arctic-embed` | — | `Represent this sentence for searching relevant passages: ` | CLS |
+| anything else | — | — | mean |
+
+## Changing the model
+
+Vectors are only comparable within one model. The ledger records the model id of the stored vectors (`openai` uses the bare model name, the other backends `<backend>:<model>`). When it differs from the configured one, the vector index is rebuilt at open. The embedding cache is keyed by `(model id, content hash)`, so switching back to a previous model reuses its cached vectors instead of calling the model again.
+
+## Choosing
+
+- **Quality first, a server already running:** `ollama` or `openai` with a transformer embedder. `nomic-embed-text` is the measured baseline (`eval/RESULTS.md`).
+- **Shared GPU box or managed service:** `hf` against a TEI server or a dedicated endpoint.
+- **Fully offline, nothing else installed:** `model2vec`, which embeds a repository in seconds at lower quality.
+- **No model at all:** `none`. Lexical and symbol retrieval carry most identifier-shaped queries.

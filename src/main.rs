@@ -9,9 +9,10 @@ use dendrite_rag::server::Server;
 
 /// Retrieval engine for source-code repositories.
 ///
-/// With no subcommand it serves JSON-RPC 2.0 over stdio. Embeddings are configured with
-/// DENDRITE_RAG_EMBED_BACKEND (gateway | model2vec | none), DENDRITE_RAG_EMBED_MODEL and
-/// DENDRITE_RAG_RERANK_MODEL; the gateway is LITELLM_PROXY_URL with LITELLM_API_KEY.
+/// With no subcommand it serves JSON-RPC 2.0 over stdio. Each project chooses its embedding
+/// backend and model in `.dendrite/rag.toml`, overridden by DENDRITE_RAG_EMBED_BACKEND,
+/// DENDRITE_RAG_EMBED_MODEL, DENDRITE_RAG_EMBED_URL and the other DENDRITE_RAG_* variables;
+/// `dendrite-rag embedders` lists the backends of this build.
 #[derive(Parser)]
 #[command(name = "dendrite-rag", version)]
 struct Cli {
@@ -81,6 +82,10 @@ enum Command {
     },
     /// Index statistics.
     Status { root: PathBuf },
+    /// Embedding backends of this build, with their default models.
+    Embedders,
+    /// The settings in effect for a project (file, then environment).
+    Settings { root: PathBuf },
     /// Delete a project's index.
     Purge { root: PathBuf },
 }
@@ -138,11 +143,10 @@ fn print_value<T: serde::Serialize + std::fmt::Debug>(v: &T, json: bool) -> anyh
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = Config::from_env();
-    let open = |root: &PathBuf| Engine::open(root, config.clone());
+    let open = |root: &PathBuf| -> anyhow::Result<Engine> { Ok(Engine::open(root, Config::resolve(root)?)?) };
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => rpc::serve(
-            &mut Server::new(config.clone()),
+            &mut Server::per_project(),
             io::stdin().lock(),
             io::stdout().lock(),
         )?,
@@ -223,6 +227,45 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::Status { root } => print_value(&open(&root)?.status()?, cli.json)?,
+        Command::Embedders => {
+            let backends = dendrite_rag::embed::backends();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&backends)?);
+            } else {
+                for b in backends {
+                    println!(
+                        "{:<10} {:<13} {:<34} {}",
+                        b.backend,
+                        if b.compiled { "available" } else { "not compiled" },
+                        b.default_model.unwrap_or("-"),
+                        b.description
+                    );
+                }
+            }
+        }
+        Command::Settings { root } => {
+            let s = dendrite_rag::settings::Settings::load(&root)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            } else {
+                let file = dendrite_rag::settings::Settings::path(&root);
+                println!(
+                    "# {} ({})",
+                    file.display(),
+                    if file.is_file() {
+                        "found"
+                    } else {
+                        "not found, defaults"
+                    }
+                );
+                println!(
+                    "# model in effect: {} via {}",
+                    s.embed.model(),
+                    s.embed.backend.as_str()
+                );
+                print!("{}", toml::to_string_pretty(&s)?);
+            }
+        }
         Command::Purge { root } => {
             open(&root)?.purge()?;
             println!("removed");

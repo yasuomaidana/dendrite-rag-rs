@@ -4,11 +4,24 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::embed::{EmbedConfig, EmbedError, Result};
+use crate::embed::{EmbedError, Result};
 
 /// Scores `(query, document)` pairs; higher is more relevant.
 pub trait Reranker: Send + Sync {
     fn rerank(&self, query: &str, documents: &[String]) -> Result<Vec<f32>>;
+}
+
+/// Reranking settings (`[rerank]` in `.dendrite/rag.toml`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RerankConfig {
+    /// Cross-encoder model; reranking is off when unset.
+    pub model: Option<String>,
+    /// Server with a Cohere-style `/v1/rerank`; defaults to `LITELLM_PROXY_URL`, then
+    /// `http://localhost:4000`.
+    pub url: Option<String>,
+    /// Environment variable that holds the bearer key; defaults to the LiteLLM keys.
+    pub api_key_env: Option<String>,
 }
 
 /// Cohere-style `POST {base}/v1/rerank`, as served by the LiteLLM gateway.
@@ -20,20 +33,26 @@ pub struct GatewayReranker {
 }
 
 impl GatewayReranker {
-    /// Uses the gateway URL and key resolution of the embedder configuration.
-    pub fn new(model: &str, cfg: &EmbedConfig) -> Self {
-        let g = crate::embed::GatewayEmbedder::new(cfg);
+    /// `None` when no model is configured.
+    pub fn new(cfg: &RerankConfig) -> Option<Self> {
+        let model = cfg.model.clone()?;
+        // Same URL and key resolution as the OpenAI-compatible embedder.
+        let endpoint = crate::embed::EmbedConfig {
+            url: cfg.url.clone(),
+            api_key_env: cfg.api_key_env.clone(),
+            ..Default::default()
+        };
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
             .build()
             .into();
-        Self {
+        Some(Self {
             agent,
-            url: g.base_url().to_string() + "/v1/rerank",
-            key: g.api_key().map(str::to_string),
-            model: model.into(),
-        }
+            url: endpoint.url().unwrap_or_default() + "/v1/rerank",
+            key: endpoint.api_key(),
+            model,
+        })
     }
 }
 

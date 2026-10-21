@@ -12,7 +12,9 @@ use crate::rpc::{self, Handler, RpcError, code};
 
 /// Serves every method, keeping one open engine per project root.
 pub struct Server {
-    config: Config,
+    /// Fixed configuration for every project; `None` resolves each project's own
+    /// (`.dendrite/rag.toml` and the environment).
+    config: Option<Config>,
     engines: HashMap<PathBuf, Engine>,
 }
 
@@ -101,9 +103,18 @@ fn default_max_results() -> usize {
 }
 
 impl Server {
+    /// One configuration for every project.
     pub fn new(config: Config) -> Self {
         Self {
-            config,
+            config: Some(config),
+            engines: HashMap::new(),
+        }
+    }
+
+    /// Each project uses its own settings ([`Config::resolve`]).
+    pub fn per_project() -> Self {
+        Self {
+            config: None,
             engines: HashMap::new(),
         }
     }
@@ -118,7 +129,11 @@ impl Server {
             )));
         }
         if !self.engines.contains_key(&path) {
-            let engine = Engine::open(&path, self.config.clone()).map_err(engine_error)?;
+            let cfg = match &self.config {
+                Some(c) => c.clone(),
+                None => Config::resolve(&path).map_err(|e| RpcError::engine("config", format!("{e:#}")))?,
+            };
+            let engine = Engine::open(&path, cfg).map_err(engine_error)?;
             self.engines.insert(path.clone(), engine);
         }
         Ok(self.engines.get_mut(&path).expect("just inserted"))
@@ -157,6 +172,19 @@ impl Handler for Server {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
             "health" => Ok(rpc::health()),
+            "embedders" => Ok(json!({ "backends": crate::embed::backends() })),
+            "settings" => {
+                let p: RootParams = rpc::params(params)?;
+                let root = Path::new(&p.root);
+                let file = crate::settings::Settings::path(root);
+                let settings = crate::settings::Settings::load(root)
+                    .map_err(|e| RpcError::engine("config", format!("{e:#}")))?;
+                Ok(json!({
+                    "file": file,
+                    "file_exists": file.is_file(),
+                    "settings": settings,
+                }))
+            }
             "index" => {
                 let p: IndexParams = rpc::params(params)?;
                 let budget = p.embed_budget_ms.map(std::time::Duration::from_millis);
@@ -312,5 +340,57 @@ mod tests {
         assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
         let r = call(&mut s, "status", json!({}));
         assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use crate::rpc::handle_line;
+
+    fn call(s: &mut Server, method: &str, params: Value) -> Value {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+        serde_json::from_str(&handle_line(s, &line).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn embedders_and_project_settings() {
+        let mut s = Server::per_project();
+        let r = call(&mut s, "embedders", json!({}));
+        let names: Vec<_> = r["result"]["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["backend"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"ollama".to_string()) && names.contains(&"hf".to_string()));
+
+        let dir = crate::testutil::project();
+        std::fs::create_dir_all(dir.path().join(".dendrite")).unwrap();
+        std::fs::write(
+            dir.path().join(crate::settings::FILE),
+            "[embed]\nbackend = \"none\"\n",
+        )
+        .unwrap();
+        let root = dir.path().to_str().unwrap();
+        let r = call(&mut s, "settings", json!({"root": root}));
+        assert_eq!(r["result"]["file_exists"], true);
+        // The environment may override the backend on developer machines.
+        if std::env::var("DENDRITE_RAG_EMBED_BACKEND").is_err() {
+            assert_eq!(r["result"]["settings"]["embed"]["backend"], "none");
+            // The project's own settings open the engine: no embedder, so indexing works offline.
+            let r = call(&mut s, "index", json!({"root": root}));
+            assert_eq!(r["result"]["embedded"], 0, "{r}");
+        }
+
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(other.path().join(".dendrite")).unwrap();
+        std::fs::write(
+            other.path().join(crate::settings::FILE),
+            "[embed]\nbackend = \"word2vec\"\n",
+        )
+        .unwrap();
+        let r = call(&mut s, "index", json!({"root": other.path().to_str().unwrap()}));
+        assert_eq!(r["error"]["data"]["kind"], "config", "{r}");
     }
 }
