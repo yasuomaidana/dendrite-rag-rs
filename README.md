@@ -1,7 +1,9 @@
 # dendrite-rag-rs
 
-Rust BM25+vector hybrid retrieval, content-addressable store and local-only/edge/push memory sync engine (Pillar 7/9)
+Retrieval engine for source-code repositories: cAST syntax-tree chunking, code-aware BM25 (Tantivy), dense embeddings with flat/HNSW vector search, weighted Reciprocal Rank Fusion, symbol-graph expansion and token-budgeted context packs with `path:line` citations. Indexes are incremental (BLAKE3 + Merkle diff) and stored locally in the project.
 
-`dendrite-rag-rs` owns Dendrite's hybrid Okapi BM25 + dense vector retrieval engine (with Reciprocal Rank Fusion), the BLAKE3 content-addressable persistent segmented store (CAS) with chunk checkpointing and purge lifecycle, structured topic memory parsing with zero-extrapolation fidelity guards, and the multi-tier memory synchronization engine (`local-only`, `edge` WAL, and `push` compaction).
-It is designed to ship a `dendrite-rag` sidecar binary speaking JSON-RPC 2.0 over stdio (`proto/*.json`) consumed by `dendrite-control` and `dendrite-mcp-hub`, while leaving CLI/UI orchestration, token governance, AST/CFG analysis (`dendrite-core-rs`), and Git hunk clustering (`dendrite-git-rs`) to sibling repositories.
-See [docs/RESPONSIBILITIES.md](docs/RESPONSIBILITIES.md) for the complete boundary definition, extraction map, and ticket tracking.
+It ships the `dendrite-rag` binary, which speaks JSON-RPC 2.0 over stdio and is used by `dendrite-control` and `dendrite-mcp-hub`, and the `dendrite_rag` library.
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Specifications](docs/README.md)
+- [Responsibilities and ticket map](docs/RESPONSIBILITIES.md)

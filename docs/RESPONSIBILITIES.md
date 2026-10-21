@@ -126,27 +126,17 @@ Each relocated ticket has its own key in `DRAG`. The DEN original either is arch
 
 ---
 
-## 7. Imported Docs
+## 7. Specifications
 
-The following documentation files from `Dendrite` are listed in [`docs/imports.json`](imports.json) for import under `docs/imported/`:
-
-- `docs/architecture/2026-10-quality-audit-execution-plan.md`: Defines Pillar 7 distributed memory sync modes (`local-only`, `edge`, `push` in §4.5) and Pillar 9 five-subproject decomposition, sidecar JSON-RPC 2.0 contract, and extraction order (§5).
-- `docs/mcp/dendrite_rag_retrieve.md`: Specifies the `dendrite_rag_retrieve` MCP tool input/output schema and top-K BM25 chunk retrieval behavior without LLM invocation.
-- `docs/mcp/dendrite_rag_ask.md`: Specifies the `dendrite_rag_ask` MCP tool input/output schema, execution modes (`local`, `hybrid`, `paid`, `central-rag`), and source citation format.
-- `docs/guides/asking-questions-to-dendrite.md`: Documents the end-to-end RAG indexing pipeline, `.dendrite/rag_cache.json` incremental cache, AST-bounded Go chunking, and central RAG HTTP endpoints (`/api/v1/rag/ask`, `/api/v1/rag/retrieve`).
-- `docs/features/FEAT-022-agent-search-and-capability-discovery.md`: Specifies the hybrid dense vector (TEI/Ollama) + sparse BM25 + Reciprocal Rank Fusion (`k = 60.0`) pipeline implemented in `pkg/agentsearch`.
-- `docs/features/FEAT-031-persistent-store-hybrid-token-scheduler.md`: Specifies the BLAKE3 content-addressed persistent segmented store (`dendrite store`), `meta.db` schema, Zstd blob layout, and chunk checkpoint states (`DEN-059`, `DEN-060`).
-- `docs/features/FEAT-045-code-knowledge-mcp-graphify.md`: Specifies the local-first RAG cascade (`nomic-embed-text` with `0.72` similarity threshold) and global CAS shared library deduplication (`DEND-203`).
-- `docs/cli/ask.md`: Documents the `dendrite ask` CLI flags (`--mode`, `--retrieve-only`, `--top-k`, `--remote-url`, `--paid-model`) that drive the RAG engine.
+The technical specification lives in this repository: [ARCHITECTURE.md](ARCHITECTURE.md) and [`specs/`](specs/). Dendrite's CLI and MCP reference pages (`dendrite ask`, `dendrite store`, `dendrite_rag_*`, `dendrite_store_*`) describe the commands Dendrite exposes on top of this engine and link here for the internals.
 
 ---
 
 ## 8. Open Questions & Boundary Conflicts
 
-1. **Crate and Binary Naming Alignment (`dendrite-rag` vs `dendrite-rag-rs`)**:
-   - `2026-10-quality-audit-execution-plan.md` §5 specifies the Rust crate name as `dendrite-rag` and the sidecar binary as `dendrite-rag`, whereas `Cargo.toml` currently sets `name = "dendrite-rag-rs"` with no `[[bin]]` entry or `proto/*.json` directory yet.
+1. **Crate and Binary Naming** — *resolved (DRAG-9)*: package `dendrite-rag`, library `dendrite_rag`, binary `dendrite-rag`; the repository keeps the `-rs` suffix.
 2. **BLAKE3 & AST Chunking Boundary Between `dendrite-core-rs` and `dendrite-rag-rs`**:
-   - `pkg/rag/indexer.go` currently performs its own Go AST chunking (`chunkGoAST`) and cyclomatic/cognitive complexity annotations, while `dendrite-core-rs` (`DEN-972`) owns tree-sitter folding, complexity metrics, and BLAKE3 hashing. The exact boundary—whether `dendrite-rag-rs` links `dendrite-core` directly for AST chunking/BLAKE3 digests or receives pre-sliced chunks over RPC—must be locked in `proto/*.json`.
+   - *Resolved (DRAG-10)*: retrieval chunking (cAST over tree-sitter) lives in dendrite-rag-rs, which links the tree-sitter grammars itself and hashes chunks with `blake3`. `dendrite-core-rs` keeps signature folding, complexity metrics and token counting; dendrite-rag-rs can move to a shared parser once core-rs publishes one.
 3. **Retrieval vs. LLM Synthesis Split in `pkg/rag/ask.go`**:
    - `pkg/rag/ask.go` currently couples BM25 retrieval (`Indexer.Retrieve`) with local Ollama / paid LiteLLM chat completion calls and interactive terminal confirmation. During extraction, pure indexing and hybrid retrieval belong in `dendrite-rag-rs`, while LLM provider routing, token governance, and interactive CLI prompts remain in `dendrite-control`.
 4. **Split Ownership in `DEN-037` (`pkg/agentsearch`)**:
@@ -156,17 +146,18 @@ The following documentation files from `Dendrite` are listed in [`docs/imports.j
 6. **Direct vs. Proxied Sidecar Invocation from `dendrite-mcp-hub`**:
    - `pkg/mcpserver/tools_rag.go` (moving to `dendrite-mcp-hub`) currently calls `pkg/rag` in-process. Once extracted, `dendrite-mcp-hub` and `dendrite-control` must agree on whether `dendrite-mcp-hub` spawns its own `dendrite-rag` stdio sidecar or delegates through `dendrite-control`.
 
-## 9. Planned Engine Stack (decided 2026-10-18, pending benchmark gate)
+## 9. Engine Stack (decided 2026-10-18, revised 2026-10-20)
 
-Selection criteria: pure Rust (no C FFI), < 200 MB baseline RSS, concurrent readers, incremental updates.
+Selection criteria: pure-Rust storage, < 200 MB baseline RSS, concurrent readers, incremental updates. The tree-sitter grammars are the only native code (C sources compiled by `cc`, no system libraries).
 
 | Concern | Choice | Rejected (reason) |
 |---|---|---|
-| Lexical / BM25 | **Tantivy** (mmap segments, lock-free `Searcher` pool) | SQLite FTS5 (bundled C FFI) |
-| Vector ANN | **hnsw_rs** (cosine, M=16, ef_construction=200; dump/reload; incremental insert) | instant-distance (rebuild-only), sqlite-vec (C extension), embedded LanceDB (footprint, heavy build) |
-| Embeddings | **candle** in-process embedder reused from `embedag-llm` (384-d bge-small/MiniLM class) | fastembed-rs (`ort` → ONNX Runtime C++); OxiLLaMa `/v1/embeddings` only as fallback with a dedicated embedding GGUF |
-| Fusion | **RRF** reused from `embedag-rag::rrf` (instead of re-porting `pkg/agentsearch/rrf.go`) | — |
-| Chunk ledger | BLAKE3 content-addressed ledger in **redb** (pure Rust) | SQLite `meta.db` of the current Go store (FFI) |
+| Chunking | **cAST** split-then-merge over **tree-sitter** syntax trees | fixed line windows (cut functions), whole files (dilute relevance) |
+| Lexical / BM25 | **Tantivy** with a code tokenizer (camelCase / snake_case / digit split + whole identifier) | SQLite FTS5 (bundled C FFI) |
+| Vector ANN | exact **flat** scan below 20k vectors; **hnsw_rs** above (cosine, M=16, ef_construction=200) | instant-distance (rebuild-only), sqlite-vec (C extension), embedded LanceDB (footprint, heavy build) |
+| Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default) and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
+| Fusion | weighted **RRF** (k = 60) over lexical, dense and symbol-name lists, implemented locally | `embedag-rag::RrfRanker` (two lists only, `Uuid` keys, pulls in `oxirag`) |
+| Change detection | **embedag-core** BLAKE3 Merkle tree (`MerkleNode::from_paths` + `diff`) | full rescans |
+| Ledger | **redb** (pure Rust) | SQLite (FFI) |
 
-Benchmark gate before committing (criterion harness in `benches/`, Dendrite repo as corpus, candidates behind cargo features): RSS < 200 MB at 50k chunks, p95 query latency < 30 ms with 8 concurrent readers, recall@10 ≥ 0.95 versus brute force.
-Source: Dendrite plan "Architectural Planning & Execution Blueprint", §3 (RAG Architecture & embedag Specification).
+Benchmark gate (DRAG-15): RSS < 200 MB at 50k chunks, p95 query latency < 30 ms with 8 concurrent readers, HNSW recall@10 ≥ 0.95 versus exact search, hybrid recall@10 ≥ lexical-only on the golden query set.
