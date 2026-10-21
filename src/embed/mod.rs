@@ -22,6 +22,8 @@ pub mod openai;
 
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
+#[cfg(feature = "oxillama")]
+pub mod oxillama;
 
 pub use openai::OpenAiEmbedder;
 
@@ -102,8 +104,9 @@ impl Backend {
     /// Whether this build can construct the backend.
     pub fn compiled(self) -> bool {
         match self {
-            // In-process engines land with DRAG-19 (candle) and DRAG-20 (oxillama).
-            Backend::Candle | Backend::Oxillama => false,
+            // The in-process candle engine lands with DRAG-19.
+            Backend::Candle => false,
+            Backend::Oxillama => cfg!(feature = "oxillama"),
             Backend::Model2vec => cfg!(feature = "model2vec"),
             _ => true,
         }
@@ -302,6 +305,8 @@ pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
         Backend::Openai => Some(Box::new(OpenAiEmbedder::new(cfg))),
         Backend::Ollama => Some(Box::new(ollama::OllamaEmbedder::new(cfg))),
         Backend::Hf => Some(Box::new(hf::HfEmbedder::new(cfg)?)),
+        #[cfg(feature = "oxillama")]
+        Backend::Oxillama => Some(Box::new(oxillama::OxillamaEmbedder::load(cfg)?)),
         #[cfg(feature = "model2vec")]
         Backend::Model2vec => Some(Box::new(model2vec::Model2VecEmbedder::load(cfg)?)),
         #[allow(unreachable_patterns)]

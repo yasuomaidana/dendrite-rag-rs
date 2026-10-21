@@ -44,6 +44,7 @@ Unknown keys, unknown backends and malformed values are errors, never silently r
 | `openai` (aliases `gateway`, `litellm`) | any OpenAI-compatible server: the LiteLLM gateway (default `LITELLM_PROXY_URL`, then `http://localhost:4000`), vLLM, LM Studio, `oxillama serve` | `POST {url}/v1/embeddings` | `local-nomic-embed-text-latest` | `LITELLM_API_KEY`, `LITELLM_MASTER_KEY`, `OPENAI_API_KEY` |
 | `ollama` | an Ollama server (default `OLLAMA_HOST`, then `http://localhost:11434`) | `POST {url}/api/embed` with `truncate: true` | `nomic-embed-text` | — |
 | `hf` (aliases `huggingface`, `tei`) | Hugging Face Inference: serverless (no `url`), a dedicated endpoint (`*.endpoints.huggingface.cloud`), or any Text Embeddings Inference server (`{url}/embed`) | `POST` `{"inputs": [...], "truncate": true}`. Sentence vectors are used as returned; token-level outputs are pooled | `BAAI/bge-base-en-v1.5` | `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, then the `huggingface-cli login` token file. Serverless without a token is an error |
+| `oxillama` | in process, build feature `oxillama` (pure Rust, no C/C++; needs Rust 1.89) | GGUF decoder embedders on OxiLLaMa (`oxillama-runtime`): Qwen3-Embedding and other Llama, Qwen3, Gemma, Mistral or Phi based embedders. The model is a `.gguf` path, a hub repository (its `Q8_0` file is preferred, then `f16`), or `<repo>/<file>.gguf`; the tokenizer comes from the GGUF metadata. One input per forward pass | `Qwen/Qwen3-Embedding-0.6B-GGUF` | `HF_TOKEN` only for gated repos |
 | `model2vec` | in process, build feature `model2vec` | static token embeddings (model2vec-rs) | `minishlab/potion-code-16M-v2` | — |
 | `none` | — | lexical and symbol rankings only | — | — |
 
@@ -69,5 +70,6 @@ Vectors are only comparable within one model. The ledger records the model id of
 
 - **Quality first, a server already running:** `ollama` or `openai` with a transformer embedder. `nomic-embed-text` is the measured baseline (`eval/RESULTS.md`).
 - **Shared GPU box or managed service:** `hf` against a TEI server or a dedicated endpoint.
+- **Offline with a modern decoder embedder:** `oxillama` with Qwen3-Embedding, a code-aware multilingual model that runs from a single GGUF file. An `oxillama serve` process can also be used through the `openai` backend.
 - **Fully offline, nothing else installed:** `model2vec`, which embeds a repository in seconds at lower quality.
 - **No model at all:** `none`. Lexical and symbol retrieval carry most identifier-shaped queries.

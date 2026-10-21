@@ -49,7 +49,7 @@ flowchart LR
 | `chunk` | cAST splitter, Markdown and text splitters, definitions/references/scope, contextual headers |
 | `ledger` | redb tables: files, chunks, embedding cache, metadata |
 | `lexical` | Tantivy schema, code tokenizer, BM25 search |
-| `embed` | `Embedder` trait and backends: `openai`, `ollama`, `hf`, `model2vec` |
+| `embed` | `Embedder` trait and backends: `openai`, `ollama`, `hf`, `oxillama`, `model2vec` |
 | `settings` | Per-project settings: `.dendrite/rag.toml` plus `DENDRITE_RAG_*` overrides |
 | `vector` | `VectorIndex` trait, exact int8 flat index |
 | `symbols` | Symbol tables, chunk neighbours, file reference graph, personalized PageRank |

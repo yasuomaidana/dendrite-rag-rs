@@ -15,3 +15,20 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+  embedders:
+    # Each in-process embedder builds and passes its unit tests on its own; live model
+    # tests stay behind --ignored.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: [model2vec, candle, oxillama]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.feature }}
+      - run: cargo clippy --all-targets --features ${{ matrix.feature }} -- -D warnings
+      - run: cargo test --features ${{ matrix.feature }}
