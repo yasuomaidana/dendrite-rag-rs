@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use embedag::dag::merkle::{MerkleNode, diff};
@@ -12,6 +13,8 @@ use crate::chunk::{Chunk, ChunkOptions, chunk_file};
 use crate::embed::{EmbedConfig, Embedder};
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
+use crate::rerank::{GatewayReranker, Reranker};
+use crate::symbols::SymbolIndex;
 use crate::vector::{FlatIndex, VectorIndex};
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
 
@@ -23,6 +26,8 @@ pub struct Config {
     pub walk: WalkOptions,
     pub chunk: ChunkOptions,
     pub embed: EmbedConfig,
+    /// Cross-encoder model for reranking through the gateway (`/v1/rerank`); off when unset.
+    pub rerank_model: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -109,13 +114,16 @@ pub struct Status {
 }
 
 pub struct Engine {
-    root: PathBuf,
-    dir: PathBuf,
-    cfg: Config,
-    ledger: Ledger,
-    lexical: LexicalIndex,
-    embedder: Option<Box<dyn Embedder>>,
-    vectors: FlatIndex,
+    pub(crate) root: PathBuf,
+    pub(crate) dir: PathBuf,
+    pub(crate) cfg: Config,
+    pub(crate) ledger: Ledger,
+    pub(crate) lexical: LexicalIndex,
+    pub(crate) embedder: Option<Box<dyn Embedder>>,
+    pub(crate) vectors: FlatIndex,
+    pub(crate) reranker: Option<Box<dyn Reranker>>,
+    /// Built lazily from the ledger; cleared whenever an index run changes chunks.
+    pub(crate) symbols: RwLock<Option<Arc<SymbolIndex>>>,
 }
 
 impl Engine {
@@ -148,11 +156,16 @@ impl Engine {
         Ok(Self {
             root,
             dir,
-            cfg,
             ledger,
             lexical,
+            reranker: cfg
+                .rerank_model
+                .as_deref()
+                .map(|m| Box::new(GatewayReranker::new(m, &cfg.embed)) as Box<dyn Reranker>),
+            cfg,
             embedder,
             vectors,
+            symbols: RwLock::new(None),
         })
     }
 
@@ -297,6 +310,9 @@ impl Engine {
         batch.commit()?;
 
         let changed = full || report.files_changed > 0 || report.files_removed > 0;
+        if changed {
+            *self.symbols.write().expect("symbols lock") = None;
+        }
         self.sync_vectors(changed, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
@@ -467,73 +483,11 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{HashEmbedder, project};
     use std::fs;
-
-    fn project() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::create_dir_all(root.join("pkg/sidecar")).unwrap();
-        fs::create_dir_all(root.join("pkg/rag")).unwrap();
-        fs::write(
-            root.join("pkg/sidecar/sidecar.go"),
-            "package sidecar\n\n// LocateBinary finds a sidecar executable.\nfunc LocateBinary(name string) string { return name }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("pkg/rag/indexer.go"),
-            "package rag\n\nfunc IndexProject(root string) error { return nil }\n",
-        )
-        .unwrap();
-        fs::write(root.join("README.md"), "# Demo\n\nA project used in tests.\n").unwrap();
-        dir
-    }
 
     fn open(root: &Path) -> Engine {
         Engine::open_with_embedder(root, Config::default(), None).unwrap()
-    }
-
-    /// Feature-hashed bag of code tokens: deterministic, and texts sharing identifiers
-    /// land close together. `fail` makes every call error.
-    struct HashEmbedder {
-        fail: std::sync::atomic::AtomicBool,
-        calls: std::sync::atomic::AtomicUsize,
-    }
-
-    impl HashEmbedder {
-        fn new() -> Self {
-            Self {
-                fail: false.into(),
-                calls: 0.into(),
-            }
-        }
-
-        fn vector(text: &str) -> Vec<f32> {
-            let mut v = vec![0f32; 64];
-            for t in crate::lexical::tokenize(text) {
-                let h = blake3::hash(t.text.as_bytes());
-                v[h.as_bytes()[0] as usize % 64] += 1.0;
-            }
-            crate::embed::normalize(v)
-        }
-    }
-
-    impl Embedder for HashEmbedder {
-        fn model_id(&self) -> &str {
-            "hash-64"
-        }
-
-        fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
-            use std::sync::atomic::Ordering;
-            if self.fail.load(Ordering::SeqCst) {
-                return Err(crate::embed::EmbedError::Http("gateway down".into()));
-            }
-            self.calls.fetch_add(texts.len(), Ordering::SeqCst);
-            Ok(texts.iter().map(|t| Self::vector(t)).collect())
-        }
-
-        fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
-            Ok(Self::vector(text))
-        }
     }
 
     #[test]

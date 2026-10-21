@@ -87,6 +87,7 @@ const BATCH: usize = 32;
 /// OpenAI-compatible embeddings endpoint (the Dendrite LiteLLM gateway by default).
 pub struct GatewayEmbedder {
     agent: ureq::Agent,
+    base: String,
     url: String,
     key: Option<String>,
     model: String,
@@ -125,11 +126,21 @@ impl GatewayEmbedder {
         Self {
             agent,
             url: format!("{}/v1/embeddings", base.trim_end_matches('/')),
+            base: base.trim_end_matches('/').to_string(),
             key,
             document_prefix: prefix(&cfg.document_prefix, "search_document: "),
             query_prefix: prefix(&cfg.query_prefix, "search_query: "),
             model,
         }
+    }
+
+    /// Gateway base URL without a trailing slash.
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
+    pub fn api_key(&self) -> Option<&str> {
+        self.key.as_deref()
     }
 
     fn request(&self, inputs: Vec<String>) -> Result<Vec<Vec<f32>>> {

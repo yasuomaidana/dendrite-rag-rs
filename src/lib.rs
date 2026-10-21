@@ -5,10 +5,16 @@
 pub mod chunk;
 pub mod embed;
 pub mod engine;
+pub mod fusion;
 pub mod lang;
 pub mod ledger;
 pub mod lexical;
+pub mod rerank;
+pub mod retrieve;
 pub mod rpc;
+pub mod symbols;
+#[cfg(test)]
+pub(crate) mod testutil;
 pub mod vector;
 pub mod walk;
 
