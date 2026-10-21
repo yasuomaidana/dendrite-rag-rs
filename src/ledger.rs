@@ -16,8 +16,10 @@ const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
 /// redb page cache size.
 const CACHE_BYTES: usize = 8 << 20;
 
-/// Ledger schema version, stored under `meta.schema`.
-pub const SCHEMA_VERSION: &str = "1";
+/// Ledger schema version, stored under `meta.schema`. Version 2 added call references
+/// and file imports; an older ledger is cleared on open (embeddings are kept) so the next
+/// index run re-chunks every file.
+pub const SCHEMA_VERSION: &str = "2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -45,6 +47,9 @@ pub struct FileEntry {
     pub size: u64,
     pub mtime_ns: u128,
     pub chunk_ids: Vec<String>,
+    /// Import specifiers as written in the source (see [`crate::chunk::analyze_file`]).
+    #[serde(default)]
+    pub imports: Vec<String>,
 }
 
 pub struct Ledger {
@@ -60,7 +65,17 @@ impl Ledger {
         txn.open_table(FILES)?;
         txn.open_table(CHUNKS)?;
         txn.open_table(EMBEDDINGS)?;
-        txn.open_table(META)?.insert("schema", SCHEMA_VERSION)?;
+        let mut meta = txn.open_table(META)?;
+        let stored = meta.get("schema")?.map(|v| v.value().to_string());
+        if stored.is_some_and(|v| v != SCHEMA_VERSION) {
+            meta.remove("merkle_root")?;
+            drop(meta);
+            txn.open_table(FILES)?.retain(|_, _| false)?;
+            txn.open_table(CHUNKS)?.retain(|_, _| false)?;
+            meta = txn.open_table(META)?;
+        }
+        meta.insert("schema", SCHEMA_VERSION)?;
+        drop(meta);
         txn.commit()?;
         Ok(Self { db })
     }
@@ -240,6 +255,7 @@ mod tests {
                 size: 3,
                 mtime_ns: 7,
                 chunk_ids: vec![chunks[0].id.clone()],
+                imports: vec!["fmt".into()],
             };
             b.put_file("a.go", &entry).unwrap();
             b.put_chunk(&chunks[0]).unwrap();
@@ -260,5 +276,35 @@ mod tests {
         assert!(ledger.files().unwrap().is_empty());
         assert_eq!(ledger.chunk_count().unwrap(), 0);
         assert_eq!(ledger.embedding_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn an_older_schema_is_cleared_but_keeps_embeddings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.redb");
+        {
+            let ledger = Ledger::open(&path).unwrap();
+            let mut b = ledger.batch().unwrap();
+            b.put_file(
+                "a.go",
+                &FileEntry {
+                    hash: "h".into(),
+                    size: 1,
+                    mtime_ns: 1,
+                    chunk_ids: Vec::new(),
+                    imports: Vec::new(),
+                },
+            )
+            .unwrap();
+            b.put_embedding("m:x", &[1.0]).unwrap();
+            b.set_meta("merkle_root", "abc").unwrap();
+            b.set_meta("schema", "1").unwrap();
+            b.commit().unwrap();
+        }
+        let ledger = Ledger::open(&path).unwrap();
+        assert!(ledger.files().unwrap().is_empty());
+        assert_eq!(ledger.meta("merkle_root").unwrap(), None);
+        assert_eq!(ledger.embedding_count().unwrap(), 1);
+        assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
     }
 }

@@ -29,6 +29,7 @@ flowchart LR
 | Index | Code-aware BM25 (Tantivy), dense vectors (flat scan or HNSW), symbol graph | [specs/retrieval.md](specs/retrieval.md) |
 | Incremental update | BLAKE3 file hashes and a Merkle tree detect changed files; only their chunks are re-indexed, and only new chunk hashes are embedded | [specs/store.md](specs/store.md) |
 | Search | Weighted Reciprocal Rank Fusion over lexical, dense and symbol-name rankings; optional cross-encoder rerank | [specs/retrieval.md](specs/retrieval.md) |
+| Graph | Typed call, import and type edges between files and symbols | [specs/graph.md](specs/graph.md) |
 | Context | Symbol-graph expansion, overlap removal, packing to a token budget with `path:line` citations | [specs/retrieval.md](specs/retrieval.md) |
 | Serve | JSON-RPC 2.0 over stdio | [specs/protocol.md](specs/protocol.md) |
 

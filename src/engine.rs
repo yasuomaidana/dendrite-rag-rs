@@ -9,8 +9,9 @@ use embedag::dag::merkle::{MerkleNode, diff};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::chunk::{Chunk, ChunkOptions, chunk_file};
+use crate::chunk::{Chunk, ChunkOptions, analyze_file};
 use crate::embed::{EmbedConfig, Embedder};
+use crate::graph::CodeGraph;
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
 use crate::rerank::{GatewayReranker, RerankConfig, Reranker};
@@ -127,6 +128,8 @@ pub struct Engine {
     pub(crate) reranker: Option<Box<dyn Reranker>>,
     /// Built lazily from the ledger; cleared whenever an index run changes chunks.
     pub(crate) symbols: RwLock<Option<Arc<SymbolIndex>>>,
+    /// The typed code graph, built and cleared like `symbols`.
+    pub(crate) graph: RwLock<Option<Arc<CodeGraph>>>,
 }
 
 impl Engine {
@@ -166,6 +169,7 @@ impl Engine {
             embedder,
             vectors,
             symbols: RwLock::new(None),
+            graph: RwLock::new(None),
         })
     }
 
@@ -238,13 +242,13 @@ impl Engine {
 
         // Chunk the added and modified files.
         let opts = self.cfg.chunk;
-        let fresh: Vec<(&SourceFile, &String, Vec<Chunk>)> = scanned
+        let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = scanned
             .par_iter()
             .filter(|(f, _)| added.contains(&f.path))
             .map(|(f, h)| {
-                let chunks =
-                    read_text(&f.abs).map_or_else(Vec::new, |src| chunk_file(&f.path, f.lang, &src, opts));
-                (f, h, chunks)
+                let (chunks, imports) = read_text(&f.abs)
+                    .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
+                (f, h, chunks, imports)
             })
             .collect();
 
@@ -264,7 +268,7 @@ impl Engine {
         for p in &removed {
             lw.remove_file(p);
         }
-        for (_, _, chunks) in &fresh {
+        for (_, _, chunks, _) in &fresh {
             for c in chunks {
                 lw.add(c)?;
             }
@@ -286,7 +290,7 @@ impl Engine {
                 batch.remove_file(p)?;
             }
         }
-        for (f, h, chunks) in &fresh {
+        for (f, h, chunks, imports) in &fresh {
             for c in chunks {
                 batch.put_chunk(c)?;
             }
@@ -296,6 +300,7 @@ impl Engine {
                 size: f.size,
                 mtime_ns: f.mtime_ns,
                 chunk_ids: chunks.iter().map(|c| c.id.clone()).collect(),
+                imports: imports.clone(),
             };
             batch.put_file(&f.path, &entry)?;
         }
@@ -324,6 +329,7 @@ impl Engine {
         let changed = full || report.files_changed > 0 || report.files_removed > 0;
         if changed {
             *self.symbols.write().expect("symbols lock") = None;
+            *self.graph.write().expect("graph lock") = None;
         }
         self.sync_vectors(changed, deadline, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;

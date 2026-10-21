@@ -15,10 +15,12 @@ redb tables:
 
 | Table | Key | Value |
 |---|---|---|
-| `files` | path | `{blake3, size, mtime_ns, chunk_ids}` |
+| `files` | path | `{blake3, size, mtime_ns, chunk_ids, imports}` |
 | `chunks` | chunk_id | chunk record (see chunking.md) |
 | `embeddings` | `model_id ‖ 0x00 ‖ content_hash` | `f32` vector, little-endian (the cache; kept across rebuilds) |
 | `meta` | key | schema version, Merkle root, embed model, last indexed time |
+
+The schema version is `2` (version 2 added `calls`, `method_calls` and `imports`). A ledger with another version is cleared on open, keeping the embedding cache, so the next `index` re-chunks every file without re-embedding unchanged content.
 
 ## Incremental indexing
 

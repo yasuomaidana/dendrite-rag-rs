@@ -25,6 +25,8 @@ Gaps between packed nodes (comments, blank lines) stay attached to the following
 
 Definitions and references come from each grammar's official tag query (`tags.scm`, the same queries GitHub code navigation uses): `@definition.*` captures give the symbols a chunk defines, and `@reference.*` captures give the names it calls or uses. A chunk's **scope** is every definition, plus every `impl` block, whose node fully contains the chunk's non-blank text, outermost first, rendered as `<kind> <name>` (`impl Engine › method search`).
 
+Each code file also yields its **imports**: the module specifiers of its import statements, stored on the file's ledger entry and resolved into graph edges ([graph.md](graph.md)).
+
 ## Chunk record
 
 | Field | Meaning |
@@ -37,6 +39,8 @@ Definitions and references come from each grammar's official tag query (`tags.sc
 | `scope` | Enclosing named scopes, outermost first, e.g. `impl Engine › fn search` |
 | `symbols` | Names defined in the chunk |
 | `refs` | Names referenced in the chunk (up to 64), used for the symbol graph |
+| `calls` | The subset of `refs` that are calls |
+| `method_calls` | The subset of `calls` made through a receiver or qualifier (`x.len()`, `pkg.F()`) |
 | `content` | Source text |
 
 ## Contextual header

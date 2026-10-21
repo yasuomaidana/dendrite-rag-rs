@@ -6,6 +6,7 @@ pub mod chunk;
 pub mod embed;
 pub mod engine;
 pub mod fusion;
+pub mod graph;
 pub mod history;
 pub mod lang;
 pub mod ledger;
