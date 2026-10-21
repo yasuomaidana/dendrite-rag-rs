@@ -41,8 +41,8 @@ If the embedder fails, the run reports `embed_error`, the lexical index stays cu
 The cache makes the first embedding a one-time cost per content hash.
 
 **Why not HNSW (yet).**
-- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall.
-- HNSW (`hnsw_rs`) needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
+- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall. Vectors are flat int8 today, HNSW planned (DRAG-37).
+- HNSW needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
 - It stays an option behind the `VectorIndex` trait for corpora where a scan exceeds the latency target.
 
 ## Symbol-name ranking
@@ -79,5 +79,5 @@ The result lists the spans in score order, each with `path`, `start_line`, `end_
 |---|---|
 | RSS at 50k chunks | < 200 MB (measured 96 MB lexical baseline at 49k; ~135 MB with 768-d vectors) |
 | p95 search latency, 8 concurrent readers | < 30 ms (embedding the query excluded) |
-| HNSW recall@10 vs exact | ≥ 0.95 |
+| Quantized recall@10 vs exact | ≥ 0.95 |
 | Hybrid recall@10 on the golden set | ≥ lexical-only |
