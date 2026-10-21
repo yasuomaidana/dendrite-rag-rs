@@ -22,12 +22,14 @@ redb tables:
 
 ## Incremental indexing
 
-1. Walk the project. A file whose `(size, mtime)` matches the ledger is reused without reading its content. Every other file is read and hashed with BLAKE3.
-2. Build a Merkle tree over `path → file hash` (`embedag-core` `MerkleNode::from_paths`). If its root equals the stored root, stop: nothing changed.
-3. Otherwise `diff` the trees to get added, modified and removed paths. Unchanged subtrees are pruned without being visited.
+1. Walk the project. A file whose `(size, mtime)` matches the ledger reuses its stored hash without being read. Every other file is read and hashed with BLAKE3 (in parallel).
+2. Build Merkle trees over `path → file hash` for the ledger and for the walk (`embedag::dag::merkle::MerkleNode::from_paths`) and `diff` them. Equal subtrees are pruned, so the cost follows the size of the change. A path in the delta that names a directory stands for every file under it.
+3. A file whose content is unchanged but whose mtime moved only gets its ledger entry refreshed.
 4. For removed and modified files, delete their chunks from Tantivy, the vector index and the ledger.
 5. Re-chunk added and modified files. Embed only chunks whose `(model, content_hash)` is not cached, then insert them everywhere.
-6. Commit Tantivy and redb, and store the new Merkle root.
+6. Commit Tantivy first, then redb with the new Merkle root and `last_indexed`. Re-running after a crash between the two is safe: files are removed from Tantivy by path before their chunks are added again.
+
+Measured on the Dendrite repository (828 files, 5,281 chunks, Apple Silicon, lexical only): full index 0.93 s, no-op re-index 43 ms, BM25 query 0.1–0.5 ms.
 
 A rename is a delete plus an add. Its chunks keep their content hashes, so they hit the embedding cache.
 

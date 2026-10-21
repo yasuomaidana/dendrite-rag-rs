@@ -16,19 +16,33 @@ fn main() -> anyhow::Result<()> {
     let chunks: Vec<_> = files
         .par_iter()
         .flat_map(|f| {
-            read_text(&f.abs).map_or_else(Vec::new, |src| chunk_file(&f.path, f.lang, &src, ChunkOptions::default()))
+            read_text(&f.abs).map_or_else(Vec::new, |src| {
+                chunk_file(&f.path, f.lang, &src, ChunkOptions::default())
+            })
         })
         .collect();
     let total = t.elapsed();
     let with_scope = chunks.iter().filter(|c| !c.scope.is_empty()).count();
     let with_symbols = chunks.iter().filter(|c| !c.symbols.is_empty()).count();
-    println!("files {} chunks {} walk {walked:?} total {total:?}", files.len(), chunks.len());
+    println!(
+        "files {} chunks {} walk {walked:?} total {total:?}",
+        files.len(),
+        chunks.len()
+    );
     println!("chunks with scope {with_scope}, with symbols {with_symbols}");
-    let mut by_size: Vec<_> = chunks.iter().map(|c| (c.content.len(), &c.path, c.start_line, c.end_line)).collect();
+    let mut by_size: Vec<_> = chunks
+        .iter()
+        .map(|c| (c.content.len(), &c.path, c.start_line, c.end_line))
+        .collect();
     by_size.sort();
     let n = by_size.len();
     if n > 0 {
-        println!("median bytes {} p95 {} max {:?}", by_size[n / 2].0, by_size[n * 95 / 100].0, by_size[n - 1]);
+        println!(
+            "median bytes {} p95 {} max {:?}",
+            by_size[n / 2].0,
+            by_size[n * 95 / 100].0,
+            by_size[n - 1]
+        );
     }
     Ok(())
 }
