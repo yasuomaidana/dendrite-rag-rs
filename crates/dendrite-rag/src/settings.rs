@@ -1,0 +1,363 @@
+//! Per-project settings: `<root>/.dendrite/rag.toml`, overridden by the environment.
+//!
+//! ```toml
+//! [embed]
+//! backend = "ollama"            # auto (default) | openai | ollama | hf | candle | oxillama | model2vec | none
+//! model = "nomic-embed-text"
+//! url = "http://localhost:11434"
+//! # api_key_env = "HF_TOKEN"   document_prefix / query_prefix / pooling / batch
+//!
+//! [rerank]
+//! backend = "gateway"            # gateway (default) | candle | none
+//! model = "bge-reranker-v2-m3"
+//!
+//! [index]
+//! max_file_bytes = 1048576
+//! query_cache = 256
+//!
+//! [fusion]                      # hybrid weights; unset keys keep the embedder's defaults
+//! lexical = 1.0
+//! dense = 1.0
+//! symbol = 1.5
+//! community = 0.0               # boost for code in the best-matching communities
+//!
+//! [storage]
+//! mode = "local"                # local (default) | remote (shared PostgreSQL) | edge
+//! # repo = "github.com/acme/app" # name in the shared tier; default: the origin URL
+//!
+//! [graph]
+//! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
+//!
+//! [graph.llm]
+//! enabled = false
+//! model = "gpt-4o-mini"
+//! summaries = false
+//! concepts = false
+//! ```
+//!
+//! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
+//! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
+//! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
+//! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
+//! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
+//! `_MODEL`, `_SUMMARIES`, `_CONCEPTS` (all `DENDRITE_RAG_GRAPH_LLM_*`), and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
+//! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, bail};
+use serde::{Deserialize, Serialize};
+
+use loom_rag::config::{GraphLlmSettings, VectorIndexChoice};
+use loom_rag::embed::{Backend, EmbedConfig, Pooling};
+use loom_rag::engine::Config;
+use loom_rag::rerank::{RerankBackend, RerankConfig};
+
+/// Project-relative location of the settings file.
+pub const FILE: &str = ".dendrite/rag.toml";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Settings {
+    pub embed: EmbedConfig,
+    pub rerank: RerankConfig,
+    pub index: IndexSettings,
+    pub graph: GraphSettings,
+    pub fusion: loom_rag::retrieve::FusionConfig,
+    pub storage: StorageSettings,
+    pub ask: AskSettings,
+    /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
+    #[serde(skip)]
+    pub pg_url: Option<String>,
+}
+
+/// `[ask]`: the gateway models `ask` uses (`docs/specs/ask.md`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AskSettings {
+    pub local_model: Option<String>,
+    pub paid_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageSettings {
+    pub mode: Option<loom_rag::store::StorageMode>,
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GraphSettings {
+    pub resolution: Option<f64>,
+    pub llm: GraphLlmSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IndexSettings {
+    pub max_file_bytes: Option<u64>,
+    pub query_cache: Option<usize>,
+    pub vector_index: Option<VectorIndexChoice>,
+    pub hnsw_ef_search: Option<usize>,
+}
+
+impl Settings {
+    /// The settings file for `root`: `DENDRITE_RAG_CONFIG`, else `<root>/.dendrite/rag.toml`.
+    pub fn path(root: &Path) -> PathBuf {
+        match std::env::var_os("DENDRITE_RAG_CONFIG").filter(|v| !v.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => root.join(FILE),
+        }
+    }
+
+    /// Reads the settings file of `root` (defaults when there is none) and applies the
+    /// environment.
+    pub fn load(root: &Path) -> anyhow::Result<Self> {
+        let path = Self::path(root);
+        let mut s = match std::fs::read_to_string(&path) {
+            Ok(text) => Self::parse(&text).with_context(|| format!("{}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e).with_context(|| format!("{}", path.display())),
+        };
+        s.apply_env(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))?;
+        Ok(s)
+    }
+
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        let s: Self = toml::from_str(text)?;
+        if s.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
+        Ok(s)
+    }
+
+    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
+        let e = &mut self.embed;
+        if let Some(b) = var("DENDRITE_RAG_EMBED_BACKEND") {
+            let Some(backend) = Backend::parse(&b) else {
+                let names: Vec<_> = Backend::ALL.iter().map(|b| b.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_EMBED_BACKEND={b:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            if backend != e.backend {
+                *e = EmbedConfig {
+                    backend,
+                    ..Default::default()
+                };
+            }
+        }
+        let set = |field: &mut Option<String>, key: &str| {
+            if let Some(v) = var(key) {
+                *field = Some(v);
+            }
+        };
+        set(&mut e.model, "DENDRITE_RAG_EMBED_MODEL");
+        set(&mut e.url, "DENDRITE_RAG_EMBED_URL");
+        set(&mut e.api_key_env, "DENDRITE_RAG_EMBED_API_KEY_ENV");
+        set(&mut e.document_prefix, "DENDRITE_RAG_EMBED_DOCUMENT_PREFIX");
+        set(&mut e.query_prefix, "DENDRITE_RAG_EMBED_QUERY_PREFIX");
+        if let Some(p) = var("DENDRITE_RAG_EMBED_POOLING") {
+            e.pooling = Some(
+                serde_json::from_value::<Pooling>(serde_json::Value::String(p.to_ascii_lowercase()))
+                    .with_context(|| {
+                        format!("DENDRITE_RAG_EMBED_POOLING={p:?}: expected mean, cls or last")
+                    })?,
+            );
+        }
+        if let Some(n) = var("DENDRITE_RAG_EMBED_BATCH") {
+            e.batch = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_EMBED_BATCH={n:?}"))?,
+            );
+        }
+        let r = &mut self.rerank;
+        if let Some(b) = var("DENDRITE_RAG_RERANK_BACKEND") {
+            let Some(backend) = RerankBackend::parse(&b) else {
+                let names: Vec<_> = RerankBackend::ALL.iter().map(|b| b.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_RERANK_BACKEND={b:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            if backend != r.backend {
+                *r = RerankConfig {
+                    backend,
+                    ..Default::default()
+                };
+            }
+        }
+        set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
+        set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
+        set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
+        if let Some(n) = var("DENDRITE_RAG_RERANK_BATCH") {
+            self.rerank.batch = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_RERANK_BATCH={n:?}"))?,
+            );
+        }
+        if let Some(n) = var("DENDRITE_RAG_MAX_FILE_BYTES") {
+            self.index.max_file_bytes = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_MAX_FILE_BYTES={n:?}"))?,
+            );
+        }
+        if let Some(n) = var("DENDRITE_RAG_QUERY_CACHE") {
+            self.index.query_cache = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
+            );
+        }
+        for (key, field) in [
+            ("DENDRITE_RAG_FUSION_LEXICAL", &mut self.fusion.lexical),
+            ("DENDRITE_RAG_FUSION_DENSE", &mut self.fusion.dense),
+            ("DENDRITE_RAG_FUSION_SYMBOL", &mut self.fusion.symbol),
+            ("DENDRITE_RAG_FUSION_COMMUNITY", &mut self.fusion.community),
+        ] {
+            if let Some(v) = var(key) {
+                *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
+            }
+        }
+        let f = &self.fusion;
+        for (name, w) in [
+            ("lexical", f.lexical),
+            ("dense", f.dense),
+            ("symbol", f.symbol),
+            ("community", f.community),
+        ] {
+            if let Some(w) = w
+                && !(w >= 0.0 && w.is_finite())
+            {
+                bail!("fusion.{name} must be a non-negative number, got {w}");
+            }
+        }
+        if let Some(m) = var("DENDRITE_RAG_STORAGE_MODE") {
+            let Some(mode) = loom_rag::store::StorageMode::parse(&m) else {
+                bail!("DENDRITE_RAG_STORAGE_MODE={m:?}: expected local, remote or edge");
+            };
+            self.storage.mode = Some(mode);
+        }
+        set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
+        set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
+        set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
+        set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
+        if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
+            self.graph.resolution = Some(
+                r.parse()
+                    .with_context(|| format!("DENDRITE_RAG_GRAPH_RESOLUTION={r:?}"))?,
+            );
+        }
+        let parse_bool = |v: &str, name: &str| -> anyhow::Result<bool> {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Ok(true),
+                "false" | "0" | "no" | "off" => Ok(false),
+                _ => bail!("{name}={v:?}: expected true or false"),
+            }
+        };
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_ENABLED") {
+            self.graph.llm.enabled = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_ENABLED")?;
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_MODEL") {
+            self.graph.llm.model = Some(v);
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_SUMMARIES") {
+            self.graph.llm.summaries = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_SUMMARIES")?;
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_CONCEPTS") {
+            self.graph.llm.concepts = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_CONCEPTS")?;
+        }
+        if let Some(v) = var("DENDRITE_RAG_VECTOR_INDEX") {
+            let Some(choice) = VectorIndexChoice::parse(&v) else {
+                let names: Vec<_> = VectorIndexChoice::ALL.iter().map(|c| c.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_VECTOR_INDEX={v:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            self.index.vector_index = Some(choice);
+        }
+        if let Some(n) = var("DENDRITE_RAG_HNSW_EF_SEARCH") {
+            self.index.hnsw_ef_search = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_HNSW_EF_SEARCH={n:?}"))?,
+            );
+        }
+        self.validate()?;
+        Ok(())
+    }
+
+    /// Validates the settings consistency.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(r) = self.graph.resolution
+            && !(r > 0.0 && r.is_finite())
+        {
+            bail!("graph.resolution must be a positive number, got {r}");
+        }
+        if self.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
+        if self.graph.llm.enabled && self.graph.llm.model.as_deref().unwrap_or("").trim().is_empty() {
+            bail!(
+                "graph.llm is enabled but no model is configured (set graph.llm.model or DENDRITE_RAG_GRAPH_LLM_MODEL)"
+            );
+        }
+        Ok(())
+    }
+
+    /// [`Settings::config`] for the project at `root`, with the index in [`INDEX_DIR`].
+    pub fn config_at(&self, root: &Path) -> Config {
+        Config {
+            index_dir: Some(root.join(INDEX_DIR)),
+            ..self.config()
+        }
+    }
+
+    /// The engine configuration these settings describe.
+    pub fn config(&self) -> Config {
+        let mut cfg = Config {
+            embed: self.embed.clone(),
+            rerank: self.rerank.clone(),
+            graph_llm: self.graph.llm.clone(),
+            ..Config::default()
+        };
+        if let Some(n) = self.index.max_file_bytes {
+            cfg.walk.max_file_bytes = n;
+        }
+        if let Some(n) = self.index.query_cache {
+            cfg.query_cache = n;
+        }
+        if let Some(r) = self.graph.resolution {
+            cfg.graph_resolution = r;
+        }
+        if let Some(vi) = self.index.vector_index {
+            cfg.vector_index = vi;
+        }
+        if let Some(ef) = self.index.hnsw_ef_search {
+            cfg.hnsw_ef_search = ef;
+        }
+        cfg.fusion = self.fusion;
+        // Dendrite keeps its own state under `.dendrite/`; only the index is ours.
+        cfg.walk.exclude.push(".dendrite/**".to_string());
+        cfg.storage = loom_rag::store::StorageConfig {
+            mode: self.storage.mode.unwrap_or_default(),
+            repo: self.storage.repo.clone(),
+            pg_url: self.pg_url.clone(),
+        };
+        cfg
+    }
+}
+
+/// Where Dendrite keeps a project's index, under the project root.
+pub const INDEX_DIR: &str = ".dendrite/rag";
+
+/// The engine configuration of the project at `root`: defaults, its `.dendrite/rag.toml`,
+/// then the environment, with the index in [`INDEX_DIR`].
+pub fn resolve(root: &Path) -> anyhow::Result<Config> {
+    Ok(Settings::load(root)?.config_at(root))
+}
+
+#[cfg(test)]
+mod tests;

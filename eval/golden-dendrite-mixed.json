@@ -1,0 +1,18 @@
+{
+  "corpus": "Dendrite repository (github.com/yasuomaidana/Dendrite)",
+  "note": "Questions that need both a documentation file and the code it describes. `expect` lists both; the eval reports any-hit as usual and `both`, whether the context pack holds an expected doc and an expected code file.",
+  "queries": [
+    {"q": "how does asking a project question escalate to the paid model when the local model fails?", "expect": ["docs/guides/asking-questions-to-dendrite.md", "docs/cli/ask.md", "pkg/rag/ask.go", "cmd/dendrite/ask.go"]},
+    {"q": "how is the retrieval helper process located, started and version checked?", "expect": ["docs/architecture/sidecar-protocol.md", "pkg/sidecar/sidecar.go"]},
+    {"q": "how does the gateway enforce token budget governance?", "expect": ["docs/architecture/02-token-governance-litellm.md", "pkg/gateway/governance.go"]},
+    {"q": "how does the local CI verification script gate on coverage?", "expect": ["docs/guides/local-cicd-verification.md", "scripts/verify-cicd-local.sh"]},
+    {"q": "how do session checkpoints get written and resumed?", "expect": ["docs/cli/session.md", "cmd/dendrite/session.go"]},
+    {"q": "how does finishing a work item clean up its working copy?", "expect": ["docs/cli/work.md", "cmd/dendrite/work.go"]},
+    {"q": "how does the move plan evaluate the remote server capacity?", "expect": ["docs/guides/moving-services-to-ssh-server.md", "cmd/dendrite/move.go"]},
+    {"q": "what does the JetBrains setup command generate?", "expect": ["docs/guides/using-dendrite-tools-with-jetbrains.md", "cmd/dendrite/jetbrains.go"]},
+    {"q": "how does the engine probe report latency of the inference engines?", "expect": ["docs/cli/spike.md", "cmd/dendrite/inference.go"]},
+    {"q": "how is the 24 hour and 7 day token consumption computed?", "expect": ["docs/cli/vesicle.md", "cmd/dendrite/tokens.go"]},
+    {"q": "how does synapse heal repair broken link paths?", "expect": ["docs/cli/synapse.md", "cmd/dendrite/synapse_heal.go"]},
+    {"q": "how does installing from a git repository and branch work?", "expect": ["docs/DEVELOPMENT.md", "docs/cli/install.md", "cmd/dendrite/install.go"]}
+  ]
+}

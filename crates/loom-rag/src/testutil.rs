@@ -1,0 +1,237 @@
+//! Shared test fixtures.
+
+use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use crate::embed::{EmbedError, Embedder, Result, normalize};
+
+/// A small Go + Markdown project.
+pub fn project() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("pkg/sidecar")).unwrap();
+    fs::create_dir_all(root.join("pkg/rag")).unwrap();
+    fs::write(
+        root.join("pkg/sidecar/sidecar.go"),
+        "package sidecar\n\n// LocateBinary finds a sidecar executable.\nfunc LocateBinary(name string) string { return name }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("pkg/rag/indexer.go"),
+        "package rag\n\nfunc IndexProject(root string) error { return nil }\n",
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "# Demo\n\nA project used in tests.\n").unwrap();
+    dir
+}
+
+/// Feature-hashed bag of code tokens: deterministic, and texts sharing identifiers land
+/// close together. Setting `fail` makes every document call error.
+pub struct HashEmbedder {
+    pub fail: AtomicBool,
+    /// Makes query embedding fail (the gateway went down after indexing).
+    pub fail_queries: AtomicBool,
+    pub calls: Arc<AtomicUsize>,
+    pub model: &'static str,
+}
+
+impl Default for HashEmbedder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HashEmbedder {
+    pub fn new() -> Self {
+        Self::with_model("hash-64")
+    }
+
+    pub fn with_model(model: &'static str) -> Self {
+        Self {
+            fail: false.into(),
+            fail_queries: false.into(),
+            calls: Arc::new(AtomicUsize::new(0)),
+            model,
+        }
+    }
+
+    pub fn vector(text: &str) -> Vec<f32> {
+        let mut v = vec![0f32; 64];
+        for t in crate::lexical::tokenize(text) {
+            let h = blake3::hash(t.text.as_bytes());
+            v[h.as_bytes()[0] as usize % 64] += 1.0;
+        }
+        normalize(v)
+    }
+}
+
+impl Embedder for HashEmbedder {
+    fn model_id(&self) -> &str {
+        self.model
+    }
+
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(EmbedError::Http("gateway down".into()));
+        }
+        self.calls.fetch_add(texts.len(), Ordering::SeqCst);
+        Ok(texts.iter().map(|t| Self::vector(t)).collect())
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        if self.fail_queries.load(Ordering::SeqCst) {
+            return Err(EmbedError::Http("gateway down".into()));
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Self::vector(text))
+    }
+}
+
+/// One HTTP request captured by [`HttpStub`].
+pub struct Captured {
+    /// Request line and headers.
+    pub head: String,
+    pub body: serde_json::Value,
+}
+
+/// A local HTTP server that answers every request with a fixed JSON body and records the
+/// requests, for checking the wire format of the server backends.
+pub struct HttpStub {
+    pub url: String,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<Captured>>>,
+}
+
+impl HttpStub {
+    pub fn serve(response: &'static str) -> Self {
+        Self::serve_status(200, "OK", response)
+    }
+
+    pub fn serve_status(status: u16, status_text: &'static str, response: &'static str) -> Self {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut head = String::new();
+                let mut len = 0;
+                let mut chunked = false;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    chunked |= lower.starts_with("transfer-encoding:") && lower.contains("chunked");
+                    head.push_str(&line);
+                }
+                let mut body = Vec::new();
+                if chunked {
+                    loop {
+                        let mut size = String::new();
+                        reader.read_line(&mut size).unwrap();
+                        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+                        let mut part = vec![0; n + 2];
+                        reader.read_exact(&mut part).unwrap();
+                        if n == 0 {
+                            break;
+                        }
+                        body.extend_from_slice(&part[..n]);
+                    }
+                } else {
+                    body.resize(len, 0);
+                    reader.read_exact(&mut body).unwrap();
+                }
+                seen.lock().unwrap().push(Captured {
+                    head,
+                    body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+                });
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} {status_text}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+                    response.len()
+                );
+            }
+        });
+        Self { url, requests }
+    }
+
+    /// The first request received.
+    pub fn request(&self) -> Captured {
+        let mut r = self.requests.lock().unwrap();
+        assert!(!r.is_empty(), "no request reached the stub");
+        r.remove(0)
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+}
+
+/// A PostgreSQL 16 + pgvector database for the shared-tier tests: `LOOM_TEST_PG_URL` when
+/// set (CI's service container), otherwise a container started for this test with
+/// testcontainers and removed when the value drops.
+#[cfg(all(test, feature = "postgres"))]
+pub struct TestPg {
+    pub url: String,
+    _container: Option<testcontainers::Container<testcontainers::GenericImage>>,
+}
+
+/// Starts (or names) the test database; `None` when neither the variable nor Docker is
+/// available, and the test then passes without doing anything.
+#[cfg(all(test, feature = "postgres"))]
+pub fn test_pg() -> Option<TestPg> {
+    use testcontainers::core::{IntoContainerPort, WaitFor};
+    use testcontainers::runners::SyncRunner;
+    use testcontainers::{GenericImage, ImageExt};
+
+    if let Some(url) = std::env::var("LOOM_TEST_PG_URL").ok().filter(|u| !u.is_empty()) {
+        return Some(TestPg {
+            url,
+            _container: None,
+        });
+    }
+    let started = GenericImage::new("pgvector/pgvector", "pg16")
+        .with_exposed_port(5432.tcp())
+        .with_wait_for(WaitFor::message_on_stderr(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_USER", "rag")
+        .with_env_var("POSTGRES_PASSWORD", "rag")
+        .with_env_var("POSTGRES_DB", "ragtest")
+        .start();
+    let container = match started {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("skipping: no LOOM_TEST_PG_URL and no Docker for a pgvector container ({e})");
+            return None;
+        }
+    };
+    let port = container.get_host_port_ipv4(5432.tcp()).ok()?;
+    let url = format!("postgresql://rag:rag@127.0.0.1:{port}/ragtest");
+    // The first boot restarts the server after initdb: wait until it answers queries.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Ok(mut c) = postgres::Client::connect(&url, postgres::NoTls)
+            && c.simple_query("SELECT 1").is_ok()
+        {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            eprintln!("skipping: the pgvector container did not accept connections");
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Some(TestPg {
+        url,
+        _container: Some(container),
+    })
+}

@@ -1,0 +1,195 @@
+//! Retrieval evaluation: quality, tokens read and latency of the engine against baselines,
+//! and the repeat-question timing run.
+//!
+//!     loom-eval quality <root> eval/golden-dendrite.json [more sets…] [--index-dir DIR]
+//!     loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--corpus code] [--llm]
+
+mod baselines;
+mod golden;
+mod methods;
+mod metrics;
+mod repeat;
+mod report;
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use clap::{Parser, Subcommand};
+use loom_rag::engine::Engine;
+
+use crate::baselines::Baselines;
+use crate::methods::Method;
+use crate::metrics::{BUDGETS, Scores};
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Score every method on golden sets.
+    Quality {
+        root: PathBuf,
+        #[arg(required = true)]
+        golden: Vec<PathBuf>,
+        /// Index directory (default: the project's own).
+        #[arg(long)]
+        index_dir: Option<PathBuf>,
+        /// Only methods whose label contains this text.
+        #[arg(long)]
+        only: Option<String>,
+    },
+    /// Print each query's corpus probe (best code and docs scores) as CSV, with the corpus
+    /// its expected files belong to, to tune `corpus: auto`.
+    Probe {
+        root: PathBuf,
+        #[arg(required = true)]
+        golden: Vec<PathBuf>,
+    },
+    /// Ask one question twice, each in a fresh sidecar process, timing every stage.
+    Repeat {
+        root: PathBuf,
+        question: String,
+        /// The `dendrite-rag` binary.
+        #[arg(long)]
+        bin: PathBuf,
+        #[arg(long, default_value = "code")]
+        corpus: String,
+        /// Also call `ask` (the configured local model through the gateway).
+        #[arg(long)]
+        llm: bool,
+        #[arg(long, default_value_t = 2)]
+        runs: usize,
+    },
+}
+
+fn main() -> anyhow::Result<()> {
+    match Cli::parse().command {
+        Cmd::Quality {
+            root,
+            golden,
+            index_dir,
+            only,
+        } => quality(root, golden, index_dir, only),
+        Cmd::Probe { root, golden } => probe(root, golden),
+        Cmd::Repeat {
+            root,
+            question,
+            bin,
+            corpus,
+            llm,
+            runs,
+        } => {
+            let runs = (0..runs)
+                .map(|_| repeat::run_once(&bin, &root, &question, &corpus, llm))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            print!("{}", repeat::report(&question, &corpus, &runs));
+            Ok(())
+        }
+    }
+}
+
+fn quality(
+    root: PathBuf,
+    golden: Vec<PathBuf>,
+    index_dir: Option<PathBuf>,
+    only: Option<String>,
+) -> anyhow::Result<()> {
+    let mut cfg = dendrite_rag::settings::resolve(&root)?;
+    if index_dir.is_some() {
+        cfg.index_dir = index_dir;
+    }
+    let walk = cfg.walk.clone();
+    let mut engine = Engine::open(&root, cfg)?;
+    let started = Instant::now();
+    let report = engine.index(false)?;
+    let status = engine.status()?;
+    eprintln!(
+        "index: {} files, {} chunks, {} vectors ({:?} coverage, model {:?}) in {:.1} s; {} changed",
+        status.files,
+        status.chunks,
+        status.vectors,
+        status.embed_coverage,
+        status.embed_model,
+        started.elapsed().as_secs_f64(),
+        report.files_changed
+    );
+    let started = Instant::now();
+    let baselines = Baselines::build(&root, &walk)?;
+    eprintln!("baselines built in {:.1} s", started.elapsed().as_secs_f64());
+
+    let dense = engine.has_vectors();
+    let methods: Vec<Method> = Method::all(dense)
+        .into_iter()
+        .filter(|m| only.as_ref().is_none_or(|o| m.label().contains(o.as_str())))
+        .collect();
+    println!(
+        "Corpus: {} ({} files, {} chunks, embedder {}, vector coverage {:.0}%)\n",
+        root.display(),
+        status.files,
+        status.chunks,
+        status.embed_model.as_deref().unwrap_or("none"),
+        status.embed_coverage.unwrap_or(0.0) * 100.0
+    );
+    for path in golden {
+        let set = golden::load(&path)?;
+        let mut rows = Vec::new();
+        for m in &methods {
+            let mut scores = Scores::default();
+            for q in &set.queries {
+                let started = Instant::now();
+                let units = m.run(&engine, &baselines, &q.q, *BUDGETS.last().expect("budgets"))?;
+                let elapsed = started.elapsed();
+                let per_budget = if m.packs_per_budget() {
+                    Some(
+                        BUDGETS
+                            .iter()
+                            .map(|&b| m.run(&engine, &baselines, &q.q, b))
+                            .collect::<anyhow::Result<Vec<_>>>()?,
+                    )
+                } else {
+                    None
+                };
+                scores.add(q, &units, per_budget.as_deref(), elapsed);
+            }
+            rows.push((m.label(), scores));
+        }
+        println!(
+            "{}",
+            report::table(&format!("{} ({} queries)", set.name, set.queries.len()), &rows)
+        );
+    }
+    Ok(())
+}
+
+fn probe(root: PathBuf, golden: Vec<PathBuf>) -> anyhow::Result<()> {
+    let engine = Engine::open(&root, dendrite_rag::settings::resolve(&root)?)?;
+    println!("set,kind,dense_code,dense_docs,lexical_code,lexical_docs,docs_share,query");
+    let f = |v: Option<f32>| v.map_or(String::new(), |x| format!("{x:.4}"));
+    for path in golden {
+        let set = golden::load(&path)?;
+        for q in &set.queries {
+            let p = engine.probe(&q.q, &mut Default::default())?;
+            let kind = if q.is_mixed() {
+                "mixed"
+            } else if q.expect.iter().all(|e| golden::is_doc(e)) {
+                "docs"
+            } else {
+                "code"
+            };
+            println!(
+                "{},{kind},{},{},{},{},{:.3},\"{}\"",
+                set.name,
+                f(p.dense_code),
+                f(p.dense_docs),
+                f(p.lexical_code),
+                f(p.lexical_docs),
+                p.docs_share,
+                q.q.replace('"', "'")
+            );
+        }
+    }
+    Ok(())
+}

@@ -13,8 +13,12 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - name: No Rust file over 500 lines
+        run: |
+          long=$(find crates -name '*.rs' -exec wc -l {} + | awk '$2 != "total" && $1 > 500')
+          if [ -n "$long" ]; then echo "$long"; exit 1; fi
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
   embedders:
     # Each in-process embedder builds and passes its unit tests on its own; live model
     # tests stay behind --ignored.
@@ -30,8 +34,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.feature }}
-      - run: cargo clippy --all-targets --features ${{ matrix.feature }} -- -D warnings
-      - run: cargo test --features ${{ matrix.feature }}
+      - run: cargo clippy --workspace --all-targets --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }} -- -D warnings
+      - run: cargo test --workspace --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }}
   postgres:
     # The shared tier against a real PostgreSQL 16 with pgvector.
     runs-on: ubuntu-latest
@@ -46,7 +50,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U rag" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DENDRITE_RAG_TEST_PG_URL: postgresql://rag:rag@localhost:5432/ragtest
+      LOOM_TEST_PG_URL: postgresql://rag:rag@localhost:5432/ragtest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -55,5 +59,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: postgres
-      - run: cargo clippy --all-targets --features postgres -- -D warnings
-      - run: cargo test --features postgres
+      - run: cargo clippy --workspace --all-targets --features loom-rag/postgres,dendrite-rag/postgres -- -D warnings
+      - run: cargo test --workspace --features loom-rag/postgres,dendrite-rag/postgres

@@ -1,0 +1,15 @@
+[package]
+name = "loom-eval"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Retrieval evaluation: quality, tokens read and latency against baselines"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6.7", features = ["derive"] }
+dendrite-rag = { path = "../dendrite-rag" }
+loom-rag = { path = "../loom-rag" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
