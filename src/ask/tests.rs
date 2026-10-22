@@ -136,11 +136,16 @@ fn paths_restrict_retrieval() {
     let (_d, e) = engine();
     let g = ScriptedGateway::new(&[("local", Ok(LOCAL))]);
     let req = AskRequest {
+        question: "how do I check the sidecar status".into(),
         paths: vec!["README.md".into()],
         ..request(AskMode::Local, false)
     };
     let a = e.ask(&req, &g).unwrap();
-    assert!(!a.hits.is_empty() && a.hits.iter().all(|h| h.path == "README.md"));
+    assert!(
+        !a.hits.is_empty() && a.hits.iter().all(|h| h.path == "README.md"),
+        "{:?}",
+        a.hits
+    );
 }
 
 #[test]
