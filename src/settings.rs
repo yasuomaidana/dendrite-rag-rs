@@ -15,6 +15,12 @@
 //! max_file_bytes = 1048576
 //! query_cache = 256
 //!
+//! [fusion]                      # hybrid weights; unset keys keep the embedder's defaults
+//! lexical = 1.0
+//! dense = 1.0
+//! symbol = 1.5
+//! community = 0.0               # boost for code in the best-matching communities
+//!
 //! [graph]
 //! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
 //! ```
@@ -22,7 +28,8 @@
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`,
+//! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
 use std::path::{Path, PathBuf};
@@ -44,6 +51,7 @@ pub struct Settings {
     pub rerank: RerankConfig,
     pub index: IndexSettings,
     pub graph: GraphSettings,
+    pub fusion: crate::retrieve::FusionConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -163,6 +171,29 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
             );
         }
+        for (key, field) in [
+            ("DENDRITE_RAG_FUSION_LEXICAL", &mut self.fusion.lexical),
+            ("DENDRITE_RAG_FUSION_DENSE", &mut self.fusion.dense),
+            ("DENDRITE_RAG_FUSION_SYMBOL", &mut self.fusion.symbol),
+            ("DENDRITE_RAG_FUSION_COMMUNITY", &mut self.fusion.community),
+        ] {
+            if let Some(v) = var(key) {
+                *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
+            }
+        }
+        let f = &self.fusion;
+        for (name, w) in [
+            ("lexical", f.lexical),
+            ("dense", f.dense),
+            ("symbol", f.symbol),
+            ("community", f.community),
+        ] {
+            if let Some(w) = w
+                && !(w >= 0.0 && w.is_finite())
+            {
+                bail!("fusion.{name} must be a non-negative number, got {w}");
+            }
+        }
         if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
             self.graph.resolution = Some(
                 r.parse()
@@ -193,6 +224,7 @@ impl Settings {
         if let Some(r) = self.graph.resolution {
             cfg.graph_resolution = r;
         }
+        cfg.fusion = self.fusion;
         cfg
     }
 }
@@ -351,5 +383,22 @@ model = "BAAI/bge-reranker-base"
             s.apply_env(env(&[("DENDRITE_RAG_GRAPH_RESOLUTION", "0")]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn fusion_weights_from_file_and_env() {
+        let mut s = Settings::parse("[fusion]\ndense = 2.0\n").unwrap();
+        s.apply_env(env(&[("DENDRITE_RAG_FUSION_COMMUNITY", "0.25")]))
+            .unwrap();
+        let w = s
+            .config()
+            .fusion
+            .resolve(crate::retrieve::FusionWeights::default());
+        assert_eq!((w.lexical, w.dense, w.symbol, w.community), (1.0, 2.0, 1.5, 0.25));
+        assert!(
+            s.apply_env(env(&[("DENDRITE_RAG_FUSION_LEXICAL", "-1")]))
+                .is_err()
+        );
+        assert!(Settings::parse("[fusion]\nbogus = 1\n").is_err());
     }
 }

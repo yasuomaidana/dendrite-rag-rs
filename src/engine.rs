@@ -40,6 +40,7 @@ pub struct Config {
     pub query_cache: usize,
     /// Leiden resolution for communities: higher gives more, smaller communities.
     pub graph_resolution: f64,
+    pub fusion: crate::retrieve::FusionConfig,
 }
 
 impl Default for Config {
@@ -52,6 +53,7 @@ impl Default for Config {
             rerank: RerankConfig::default(),
             query_cache: DEFAULT_QUERY_CACHE,
             graph_resolution: 1.0,
+            fusion: Default::default(),
         }
     }
 }

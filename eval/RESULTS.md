@@ -14,6 +14,23 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Fusion weight sweep (DRAG-26, 2026-10-22)
+
+`EVAL_SWEEP=all`: hybrid MRR@10 for lexical ∈ {0.5, 1, 1.5}, dense ∈ {0.5, 1, 1.5, 2}, symbol ∈ {0.5, 1, 1.5, 2}, community ∈ {0, 0.25} on the three golden sets; chosen by the mean over the corpora, with the worst corpus as a check, so no single repository decides.
+
+| embedder | weights (lexical, dense, symbol, community) | mean MRR@10 | worst corpus | mean broad MRR@10 |
+|---|---|---|---|---|
+| jina-code (candle) | 1, 1, 1.5, 0 (old default) | 0.842 | 0.797 | 0.723 |
+| | **1.5, 1, 2, 0 (new default)** | **0.854** | **0.820** | 0.721 |
+| model2vec potion-code-16M | 1, 1, 1.5, 0 (old default) | 0.681 | 0.625 | 0.491 |
+| | **1, 0.5, 1, 0 (new default)** | **0.738** | **0.650** | **0.572** |
+
+Findings:
+- The symbol weight changes nothing between 0.5 and 2 on these sets: symbol-name hits are already found by BM25.
+- Corpora disagree for jina: Dendrite (Go) is best dense-heavy (0.5, 1.5: 0.828), the Rust repositories lexical-heavy (1.5, 0.5: up to 0.908). The mean favours a slightly lexical-heavy mix.
+- model2vec embeddings need a smaller dense weight: the old weights made hybrid worse than dense alone, the new ones beat both on every corpus.
+- The community boost wins on no mean, so it stays off.
+
 ## Community summaries (DRAG-31, 2026-10-22)
 
 Same three golden sets and embedder as DRAG-25 (dendrite-rag-rs had grown to 75 files / 382 chunks, so its rows are not comparable with DRAG-25). Indexes rebuilt with `EVAL_FULL=1`.

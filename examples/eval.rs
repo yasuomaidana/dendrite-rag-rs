@@ -3,13 +3,15 @@
 //!     cargo run --release --example eval -- <root> eval/golden-dendrite.json [index-dir]
 //!
 //! Embeddings follow the usual environment (`DENDRITE_RAG_EMBED_BACKEND`, `..._MODEL`).
-//! `EVAL_FULL=1` re-indexes from scratch (the embedding cache is kept).
+//! `EVAL_FULL=1` re-indexes from scratch (the embedding cache is kept). `EVAL_SWEEP=1` prints
+//! hybrid MRR@10 (all queries and the broad subset) for a grid of fusion weights instead, the
+//! best ten or, with `EVAL_SWEEP=all`, every combination.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use dendrite_rag::engine::{Config, Engine, cache_key};
-use dendrite_rag::retrieve::{Mode, SearchOpts};
+use dendrite_rag::retrieve::{FusionWeights, Mode, SearchOpts};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -35,11 +37,21 @@ struct Scores {
 }
 
 fn rank(engine: &Engine, q: &Query, mode: Mode) -> anyhow::Result<Option<usize>> {
+    rank_with(engine, q, mode, None)
+}
+
+fn rank_with(
+    engine: &Engine,
+    q: &Query,
+    mode: Mode,
+    weights: Option<FusionWeights>,
+) -> anyhow::Result<Option<usize>> {
     let hits = engine.search(
         &q.q,
         &SearchOpts {
             top_k: 10,
             mode,
+            weights,
             ..SearchOpts::default()
         },
     )?;
@@ -63,6 +75,54 @@ fn max_rss_mb() -> f64 {
         u.ru_maxrss as f64 * 1024.0
     };
     bytes / (1024.0 * 1024.0)
+}
+
+/// Hybrid MRR@10 of every weight combination on the grid, best first (all queries, broad).
+fn sweep(engine: &Engine, queries: &[Query]) -> anyhow::Result<()> {
+    let mrr = |w: FusionWeights, broad_only: bool| -> anyhow::Result<f32> {
+        let qs: Vec<&Query> = queries.iter().filter(|q| !broad_only || q.broad).collect();
+        let mut rr = 0.0;
+        for q in &qs {
+            rr += rank_with(engine, q, Mode::Hybrid, Some(w))?.map_or(0.0, |r| 1.0 / r as f32);
+        }
+        Ok(rr / qs.len().max(1) as f32)
+    };
+    let mut rows = Vec::new();
+    for lexical in [0.5, 1.0, 1.5] {
+        for dense in [0.5, 1.0, 1.5, 2.0] {
+            for symbol in [0.5, 1.0, 1.5, 2.0] {
+                for community in [0.0, 0.25] {
+                    let w = FusionWeights {
+                        lexical,
+                        dense,
+                        symbol,
+                        community,
+                    };
+                    rows.push((mrr(w, false)?, mrr(w, true)?, w));
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
+    let default = FusionWeights::default();
+    println!(
+        "default {default:?}: MRR {:.3}, broad {:.3}",
+        mrr(default, false)?,
+        mrr(default, true)?
+    );
+    println!("| lexical | dense | symbol | community | MRR@10 | broad MRR@10 |\n|---|---|---|---|---|---|");
+    let shown = if std::env::var("EVAL_SWEEP").as_deref() == Ok("all") {
+        rows.len()
+    } else {
+        10
+    };
+    for (all, broad, w) in rows.iter().take(shown) {
+        println!(
+            "| {} | {} | {} | {} | {all:.3} | {broad:.3} |",
+            w.lexical, w.dense, w.symbol, w.community
+        );
+    }
+    Ok(())
 }
 
 /// Prints hit@k and MRR@10 per mode over `queries`, then the hybrid misses.
@@ -123,6 +183,10 @@ fn main() -> anyhow::Result<()> {
         "corpus: {} files, {} chunks, {} vectors, model {:?}\n",
         status.files, status.chunks, status.vectors, status.embed_model
     );
+
+    if std::env::var_os("EVAL_SWEEP").is_some() {
+        return sweep(&engine, &golden.queries);
+    }
 
     // Quality per mode.
     let mut modes = vec![Mode::Lexical, Mode::Hybrid];
