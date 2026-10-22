@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pgvector::Vector;
 use postgres::{Client, NoTls, Transaction};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{LedgerStore, LedgerWrite, LexicalStore, LexicalWrite, Store};
@@ -104,13 +105,98 @@ const POOL: usize = 4;
 /// A lexical commit adding more documents than this refreshes the planner statistics.
 const ANALYZE_AFTER: usize = 500;
 
-struct Pg {
+pub(crate) struct Pg {
     clients: Vec<Mutex<Client>>,
     next: AtomicUsize,
     repo: i32,
 }
 
 impl Pg {
+    /// Connects a pool, migrates the schema and registers repository `repo`.
+    pub(crate) fn connect(url: &str, repo: &str) -> Result<Self, String> {
+        let pg = |e: postgres::Error| format!("postgres: {e}");
+        let mut client = Client::connect(url, NoTls).map_err(pg)?;
+        client.batch_execute(MIGRATION).map_err(pg)?;
+        let version: Option<i32> = client
+            .query_opt("SELECT version FROM rag_schema LIMIT 1", &[])
+            .map_err(pg)?
+            .map(|r| r.get(0));
+        match version {
+            None => {
+                client
+                    .execute("INSERT INTO rag_schema (version) VALUES ($1)", &[&SCHEMA_VERSION])
+                    .map_err(pg)?;
+            }
+            Some(v) if v > SCHEMA_VERSION => {
+                return Err(format!(
+                    "postgres schema version {v} is newer than this dendrite-rag ({SCHEMA_VERSION})"
+                ));
+            }
+            Some(_) => {}
+        }
+        let repo_id: i32 = client
+            .query_one(
+                "INSERT INTO rag_repos (name) VALUES ($1)
+                 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+                &[&repo],
+            )
+            .map_err(pg)?
+            .get(0);
+        let mut clients = vec![Mutex::new(client)];
+        for _ in 1..POOL {
+            clients.push(Mutex::new(Client::connect(url, NoTls).map_err(pg)?));
+        }
+        Ok(Self {
+            clients,
+            next: AtomicUsize::new(0),
+            repo: repo_id,
+        })
+    }
+
+    /// Applies a batch of changes in one transaction.
+    pub(crate) fn apply(&self, batch: SyncBatch) -> Result<(), postgres::Error> {
+        let repo = self.repo;
+        let mut client = self.client();
+        let mut tx = client.transaction()?;
+        let mut analyze = false;
+        match batch {
+            SyncBatch::Ledger(ops) => {
+                for op in ops {
+                    apply_ledger(&mut tx, repo, op)?;
+                }
+            }
+            SyncBatch::Lexical(ops) => {
+                analyze = ops.iter().filter(|op| matches!(op, LexicalOp::Add(_))).count() > ANALYZE_AFTER;
+                for op in ops {
+                    apply_lexical(&mut tx, repo, op)?;
+                }
+            }
+            SyncBatch::Vectors(ops) => {
+                for op in ops {
+                    apply_vector(&mut tx, repo, op)?;
+                }
+            }
+        }
+        tx.commit()?;
+        if analyze {
+            client.batch_execute("ANALYZE rag_docs, rag_postings, rag_chunks")?;
+        }
+        Ok(())
+    }
+
+    /// The repository's vectors, for the in-memory scan.
+    pub(crate) fn load_vectors(&self) -> Result<FlatIndex, postgres::Error> {
+        let mut flat = FlatIndex::new();
+        for row in self.client().query(
+            "SELECT id, tag, vec FROM rag_vectors WHERE repo = $1 ORDER BY id",
+            &[&self.repo],
+        )? {
+            let v: Vector = row.get(2);
+            flat.upsert(row.get(0), row.get(1), v.as_slice());
+        }
+        Ok(flat)
+    }
+
     /// A free connection if there is one, else the next in turn: concurrent readers do not
     /// queue behind each other.
     fn client(&self) -> MutexGuard<'_, Client> {
@@ -136,54 +222,9 @@ fn lexical_err(e: impl std::fmt::Display) -> tantivy::TantivyError {
 
 /// Opens (and migrates) the shared tier at `url` for repository `repo`.
 pub fn open(url: &str, repo: &str) -> crate::engine::Result<Store> {
-    let other = |e: postgres::Error| crate::engine::Error::Other(anyhow::anyhow!("postgres: {e}"));
-    let mut client = Client::connect(url, NoTls).map_err(other)?;
-    client.batch_execute(MIGRATION).map_err(other)?;
-    let version: Option<i32> = client
-        .query_opt("SELECT version FROM rag_schema LIMIT 1", &[])
-        .map_err(other)?
-        .map(|r| r.get(0));
-    match version {
-        None => {
-            client
-                .execute("INSERT INTO rag_schema (version) VALUES ($1)", &[&SCHEMA_VERSION])
-                .map_err(other)?;
-        }
-        Some(v) if v > SCHEMA_VERSION => {
-            return Err(crate::engine::Error::Other(anyhow::anyhow!(
-                "postgres schema version {v} is newer than this dendrite-rag ({SCHEMA_VERSION})"
-            )));
-        }
-        Some(_) => {}
-    }
-    let repo_id: i32 = client
-        .query_one(
-            "INSERT INTO rag_repos (name) VALUES ($1)
-             ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
-            &[&repo],
-        )
-        .map_err(other)?
-        .get(0);
-    let mut flat = FlatIndex::new();
-    for row in client
-        .query(
-            "SELECT id, tag, vec FROM rag_vectors WHERE repo = $1 ORDER BY id",
-            &[&repo_id],
-        )
-        .map_err(other)?
-    {
-        let v: Vector = row.get(2);
-        flat.upsert(row.get(0), row.get(1), v.as_slice());
-    }
-    let mut clients = vec![Mutex::new(client)];
-    for _ in 1..POOL {
-        clients.push(Mutex::new(Client::connect(url, NoTls).map_err(other)?));
-    }
-    let pg = Arc::new(Pg {
-        clients,
-        next: AtomicUsize::new(0),
-        repo: repo_id,
-    });
+    let other = |e: String| crate::engine::Error::Other(anyhow::anyhow!(e));
+    let pg = Arc::new(Pg::connect(url, repo).map_err(other)?);
+    let flat = pg.load_vectors().map_err(|e| other(format!("postgres: {e}")))?;
     Ok(Store {
         ledger: Box::new(PgLedger(pg.clone())),
         lexical: Box::new(PgLexical(pg.clone())),
@@ -195,6 +236,15 @@ pub fn open(url: &str, repo: &str) -> crate::engine::Result<Store> {
     })
 }
 
+/// One commit's worth of changes to one part of the store: what remote mode applies
+/// directly and edge mode journals while the shared tier is unreachable.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum SyncBatch {
+    Ledger(Vec<LedgerOp>),
+    Lexical(Vec<LexicalOp>),
+    Vectors(Vec<VectorOp>),
+}
+
 /// `model ‖ 0 ‖ content_hash` (Postgres text cannot hold the NUL byte, so it is split).
 fn split_key(key: &str) -> (&str, &str) {
     key.split_once('\0').unwrap_or(("", key))
@@ -203,7 +253,7 @@ fn split_key(key: &str) -> (&str, &str) {
 // ---------------------------------------------------------------------------------------------
 // Ledger
 
-struct PgLedger(Arc<Pg>);
+pub(crate) struct PgLedger(pub(crate) Arc<Pg>);
 
 impl LedgerStore for PgLedger {
     fn files(&self) -> crate::ledger::Result<BTreeMap<String, FileEntry>> {
@@ -415,12 +465,13 @@ impl LedgerStore for PgLedger {
     }
 }
 
-enum LedgerOp {
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum LedgerOp {
     PutFile(String, Value),
     RemoveFile(String),
     PutChunk(String, String, Value),
     RemoveChunk(String),
-    PutEmbedding(String, String, Vector),
+    PutEmbedding(String, String, Vec<f32>),
     SetMeta(String, String),
     PutLlmCache(String, String, String),
     PutConcepts(String, String),
@@ -428,6 +479,28 @@ enum LedgerOp {
     /// Records, `(path, id)` and `(chunk, id)` rows.
     PutCommunities(Vec<(i32, Value)>, Vec<(String, i32)>, Vec<(String, i32)>),
     ClearIndex,
+}
+
+impl LedgerOp {
+    /// Every community, with the id of each member file and of its chunks.
+    pub(crate) fn communities(
+        communities: &[Community],
+        files: &BTreeMap<String, FileEntry>,
+    ) -> crate::ledger::Result<Self> {
+        let mut records = Vec::new();
+        let mut by_file = Vec::new();
+        let mut by_chunk = Vec::new();
+        for c in communities {
+            records.push((c.id as i32, serde_json::to_value(c)?));
+            for f in &c.files {
+                by_file.push((f.clone(), c.id as i32));
+                for chunk in files.get(f).map_or(&[][..], |e| e.chunk_ids.as_slice()) {
+                    by_chunk.push((chunk.clone(), c.id as i32));
+                }
+            }
+        }
+        Ok(LedgerOp::PutCommunities(records, by_file, by_chunk))
+    }
 }
 
 struct PgLedgerWrite<'a> {
@@ -466,7 +539,7 @@ impl LedgerWrite for PgLedgerWrite<'_> {
         self.ops.push(LedgerOp::PutEmbedding(
             m.to_string(),
             h.to_string(),
-            Vector::from(vector.to_vec()),
+            vector.to_vec(),
         ));
         Ok(())
     }
@@ -502,20 +575,7 @@ impl LedgerWrite for PgLedgerWrite<'_> {
         communities: &[Community],
         files: &BTreeMap<String, FileEntry>,
     ) -> crate::ledger::Result<()> {
-        let mut records = Vec::new();
-        let mut by_file = Vec::new();
-        let mut by_chunk = Vec::new();
-        for c in communities {
-            records.push((c.id as i32, serde_json::to_value(c)?));
-            for f in &c.files {
-                by_file.push((f.clone(), c.id as i32));
-                for chunk in files.get(f).map_or(&[][..], |e| e.chunk_ids.as_slice()) {
-                    by_chunk.push((chunk.clone(), c.id as i32));
-                }
-            }
-        }
-        self.ops
-            .push(LedgerOp::PutCommunities(records, by_file, by_chunk));
+        self.ops.push(LedgerOp::communities(communities, files)?);
         Ok(())
     }
 
@@ -525,13 +585,7 @@ impl LedgerWrite for PgLedgerWrite<'_> {
     }
 
     fn commit(self: Box<Self>) -> crate::ledger::Result<()> {
-        let repo = self.pg.repo;
-        let mut client = self.pg.client();
-        let mut tx = client.transaction().map_err(backend)?;
-        for op in self.ops {
-            apply_ledger(&mut tx, repo, op).map_err(backend)?;
-        }
-        tx.commit().map_err(backend)
+        self.pg.apply(SyncBatch::Ledger(self.ops)).map_err(backend)
     }
 }
 
@@ -558,7 +612,7 @@ fn apply_ledger(tx: &mut Transaction<'_>, repo: i32, op: LedgerOp) -> Result<(),
         LedgerOp::PutEmbedding(model, hash, vec) => tx.execute(
             "INSERT INTO rag_embeddings (model, hash, vec) VALUES ($1, $2, $3)
              ON CONFLICT (model, hash) DO NOTHING",
-            &[&model, &hash, &vec],
+            &[&model, &hash, &Vector::from(vec)],
         )?,
         LedgerOp::SetMeta(key, value) => tx.execute(
             "INSERT INTO rag_meta (repo, key, value) VALUES ($1, $2, $3)
@@ -677,8 +731,9 @@ impl Doc {
     }
 }
 
-enum LexicalOp {
-    Add(Doc),
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum LexicalOp {
+    Add(Box<Chunk>),
     RemoveFile(String),
     Clear,
 }
@@ -690,7 +745,7 @@ struct PgLexicalWrite<'a> {
 
 impl LexicalWrite for PgLexicalWrite<'_> {
     fn add(&mut self, chunk: &Chunk) -> tantivy::Result<()> {
-        self.ops.push(LexicalOp::Add(Doc::of(chunk)));
+        self.ops.push(LexicalOp::Add(Box::new(chunk.clone())));
         Ok(())
     }
 
@@ -704,30 +759,14 @@ impl LexicalWrite for PgLexicalWrite<'_> {
     }
 
     fn commit(self: Box<Self>) -> tantivy::Result<()> {
-        let repo = self.pg.repo;
-        let added = self
-            .ops
-            .iter()
-            .filter(|op| matches!(op, LexicalOp::Add(_)))
-            .count();
-        let mut client = self.pg.client();
-        let mut tx = client.transaction().map_err(lexical_err)?;
-        for op in self.ops {
-            apply_lexical(&mut tx, repo, op).map_err(lexical_err)?;
-        }
-        tx.commit().map_err(lexical_err)?;
-        if added > ANALYZE_AFTER {
-            client
-                .batch_execute("ANALYZE rag_docs, rag_postings, rag_chunks")
-                .map_err(lexical_err)?;
-        }
-        Ok(())
+        self.pg.apply(SyncBatch::Lexical(self.ops)).map_err(lexical_err)
     }
 }
 
 fn apply_lexical(tx: &mut Transaction<'_>, repo: i32, op: LexicalOp) -> Result<(), postgres::Error> {
     match op {
-        LexicalOp::Add(d) => {
+        LexicalOp::Add(chunk) => {
+            let d = Doc::of(&chunk);
             tx.execute(
                 "DELETE FROM rag_postings WHERE repo = $1 AND chunk = $2",
                 &[&repo, &d.chunk],
@@ -776,8 +815,9 @@ fn apply_lexical(tx: &mut Transaction<'_>, repo: i32, op: LexicalOp) -> Result<(
 // ---------------------------------------------------------------------------------------------
 // Vectors
 
-enum VectorOp {
-    Upsert(String, String, Vector),
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum VectorOp {
+    Upsert(String, String, Vec<f32>),
     Remove(String),
     Clear,
 }
@@ -799,11 +839,7 @@ impl PgVectors {
 impl VectorIndex for PgVectors {
     fn upsert(&mut self, id: &str, tag: &str, vector: &[f32]) {
         self.flat.upsert(id, tag, vector);
-        self.push(VectorOp::Upsert(
-            id.to_string(),
-            tag.to_string(),
-            Vector::from(vector.to_vec()),
-        ));
+        self.push(VectorOp::Upsert(id.to_string(), tag.to_string(), vector.to_vec()));
     }
 
     fn remove(&mut self, id: &str) -> bool {
@@ -845,27 +881,26 @@ impl VectorIndex for PgVectors {
         if ops.is_empty() {
             return Ok(());
         }
-        let io = |e: postgres::Error| std::io::Error::other(format!("postgres: {e}"));
-        let repo = self.pg.repo;
-        let mut client = self.pg.client();
-        let mut tx = client.transaction().map_err(io)?;
-        for op in ops {
-            match op {
-                VectorOp::Upsert(id, tag, vec) => tx.execute(
-                    "INSERT INTO rag_vectors (repo, id, tag, vec) VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (repo, id) DO UPDATE SET tag = EXCLUDED.tag, vec = EXCLUDED.vec",
-                    &[&repo, &id, &tag, &vec],
-                ),
-                VectorOp::Remove(id) => tx.execute(
-                    "DELETE FROM rag_vectors WHERE repo = $1 AND id = $2",
-                    &[&repo, &id],
-                ),
-                VectorOp::Clear => tx.execute("DELETE FROM rag_vectors WHERE repo = $1", &[&repo]),
-            }
-            .map_err(io)?;
-        }
-        tx.commit().map_err(io)
+        self.pg
+            .apply(SyncBatch::Vectors(ops))
+            .map_err(|e| std::io::Error::other(format!("postgres: {e}")))
     }
+}
+
+fn apply_vector(tx: &mut Transaction<'_>, repo: i32, op: VectorOp) -> Result<(), postgres::Error> {
+    match op {
+        VectorOp::Upsert(id, tag, vec) => tx.execute(
+            "INSERT INTO rag_vectors (repo, id, tag, vec) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (repo, id) DO UPDATE SET tag = EXCLUDED.tag, vec = EXCLUDED.vec",
+            &[&repo, &id, &tag, &Vector::from(vec)],
+        )?,
+        VectorOp::Remove(id) => tx.execute(
+            "DELETE FROM rag_vectors WHERE repo = $1 AND id = $2",
+            &[&repo, &id],
+        )?,
+        VectorOp::Clear => tx.execute("DELETE FROM rag_vectors WHERE repo = $1", &[&repo])?,
+    };
+    Ok(())
 }
 
 /// Run against a scratch database: `DENDRITE_RAG_TEST_PG_URL=postgresql://… cargo test

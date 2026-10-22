@@ -79,4 +79,16 @@ A content-addressed store for analysis artefacts (files, functions, CFG blocks, 
 - **Measured** (Dendrite, 833 files, 5,286 chunks, local Docker, lexical only): first index 15 s, communities 0.35 s, search with 8 concurrent readers p50 36 ms / p95 104 ms over a pool of 4 connections (a single query takes about 6 ms in the database). Local storage stays the default for latency (p50 0.4 ms).
 - `purge` removes only the local index directory; repository rows stay in the shared tier.
 
-`edge` mode (local cache, write journal) and `push` with compaction follow in DRAG-34 and DRAG-35.
+## Edge mode (DRAG-34)
+
+`[storage] mode = "edge"` keeps the local store (redb, Tantivy, flat or HNSW vectors) for every read and write, so queries keep local latency and work offline, and mirrors every commit to the shared tier (`src/store/edge.rs`):
+
+- **Mirroring.** Each ledger, lexical and vector commit is applied to PostgreSQL right after the local commit, as the same upserts remote mode uses.
+- **Write journal.** When the tier is unreachable the commit is appended to `memory-wal.journal` in the index directory (one JSON batch per line, fsynced; inside the index directory so it stays out of version control). Before the next mirror, at open, and on `sync`, the journal is replayed in order and emptied; replaying twice changes nothing, since every statement is an upsert or a keyed delete. A line cut by a crash mid-write is skipped. While the tier is down it is tried again at most every 30 s, so an outage costs one connection attempt per interval, not one per commit.
+- **Read-through embeddings.** An embedding missing from the local cache is looked up in the shared tier and cached locally before anything is embedded, so a fresh checkout or a new machine reuses what the team has already computed (the test `reads_embeddings_through_from_the_shared_tier` indexes a project with zero embedder calls).
+- **`pull`** (RPC and CLI) fetches every embedding the current chunks need and fills the vector index, to prepare for working offline. Chunking and the lexical index are rebuilt locally (about 1.6 s for the Dendrite repository), which is why edge mode shares embeddings, the expensive part (about 17 minutes for the same repository on candle Metal), rather than index segments.
+- `status` reports `sync_pending`, the commits still in the journal.
+
+The spec's Merkle-subtree pull was not built: measured, re-chunking is three orders of magnitude cheaper than embedding, and read-through gives the saving with no extra protocol. Fetching the slice of a synapse (several repositories) is a loop over `pull` per repository, for Dendrite to drive.
+
+`push` with compaction follows in DRAG-35.

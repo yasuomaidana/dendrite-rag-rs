@@ -112,6 +112,15 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// What `pull` found.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PullReport {
+    pub chunks: usize,
+    /// Chunks whose embedding is now in the local cache.
+    pub cached: usize,
+    pub vectors: usize,
+}
+
 /// What one `index` run did.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IndexReport {
@@ -180,6 +189,9 @@ pub struct Status {
     pub vectors: usize,
     pub embed_model: Option<String>,
     pub communities: usize,
+    /// Commits waiting for the shared tier (edge mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_pending: Option<usize>,
 }
 
 pub struct Engine {
@@ -614,6 +626,42 @@ impl Engine {
             vectors: self.vectors.len(),
             embed_model: self.embedder.as_ref().map(|e| e.model_id().to_string()),
             communities: self.ledger.communities()?.len(),
+            sync_pending: self.ledger.sync_pending(),
+        })
+    }
+
+    /// Sends commits journaled while the shared tier was unreachable (edge mode); returns
+    /// how many are still waiting.
+    pub fn sync(&self) -> Result<usize> {
+        Ok(self.ledger.sync_now()?)
+    }
+
+    /// Fetches every embedding the current chunks need that is missing locally (edge mode
+    /// reads them from the shared tier), then fills the vector index, so the project can be
+    /// searched offline. Returns how many chunks have a vector.
+    pub fn pull(&mut self) -> Result<PullReport> {
+        let Some(embedder) = &self.embedder else {
+            return Ok(PullReport::default());
+        };
+        let model = embedder.model_id().to_string();
+        let mut keys: Vec<String> = Vec::new();
+        self.ledger
+            .for_each_chunk(&mut |c| keys.push(cache_key(&model, &c.content_hash)))?;
+        let mut available = 0;
+        for group in keys.chunks(512) {
+            available += self
+                .ledger
+                .embeddings(group)?
+                .iter()
+                .filter(|v| v.is_some())
+                .count();
+        }
+        let mut report = IndexReport::default();
+        self.sync_vectors(true, Some(Instant::now()), &mut report)?;
+        Ok(PullReport {
+            chunks: keys.len(),
+            cached: available,
+            vectors: self.vectors.len(),
         })
     }
 

@@ -58,6 +58,10 @@
       "communities": {
         "type": "integer",
         "description": "Communities of the code graph"
+      },
+      "sync_pending": {
+        "type": "integer",
+        "description": "Commits waiting for the shared tier (edge mode only)"
       }
     }
   }

@@ -4,11 +4,11 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.1.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`)
+Protocol version: **1.2.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull` and `status.sync_pending`)
 
 | Method | Params | Result |
 |---|---|---|
-| `health` | — | `{name: "dendrite-rag", version, protocol: "1.1.0"}` |
+| `health` | — | `{name: "dendrite-rag", version, protocol: "1.2.0"}` |
 | `index` | `{root, full?: false, embed_budget_ms?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content}]}` |
 | `context` | `{root, query, token_budget?: 4000}` | `{spans: [hit...], tokens}` |
@@ -21,6 +21,8 @@ Protocol version: **1.1.0** (1.1 added the `graph.*` methods and the `communitie
 | `grep` | `{root, pattern, paths?, max_results?: 200}` | `{matches: [{path, line, text}]}` (no index needed) |
 | `history.index` | `{root, max_commits?: 2000}` | `{commits, documents, head, rebuilt}` |
 | `history.search` | `{root, query, top_k?: 10}` | `{hits: [{sha, time, author, subject, path, diff, score}]}`; updates the history index first ([history.md](history.md)) |
+| `sync` | `{root}` | `{pending}`: sends commits journaled while the shared tier was unreachable (edge mode) |
+| `pull` | `{root}` | `{chunks, cached, vectors}`: fetches missing embeddings (from the shared tier in edge mode) for offline use |
 | `status` | `{root}` | `{files, chunks, vectors, embed_model, merkle_root, index_dir, last_indexed}` |
 | `purge` | `{root}` | `{removed: true}` |
 | `embedders` | — | `{backends: [{backend, compiled, default_model, default_url, description}]}` |

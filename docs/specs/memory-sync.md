@@ -1,6 +1,6 @@
 # Memory synchronization modes (DRAG-2)
 
-`remote` mode (everything in the shared tier) is implemented: [store.md](store.md) § PostgreSQL (DRAG-33). `edge` and `push` follow (DRAG-34, DRAG-35).
+Implemented: `remote` ([store.md](store.md) § PostgreSQL, DRAG-33) and `edge` ([store.md](store.md) § Edge mode, DRAG-34, with read-through embeddings instead of a slice download). `push` follows (DRAG-35).
 
 Two storage tiers:
 

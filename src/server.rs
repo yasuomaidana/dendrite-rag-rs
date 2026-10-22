@@ -270,6 +270,15 @@ impl Handler for Server {
                         .map_err(engine_error)?,
                 )
             }
+            "sync" => {
+                let p: RootParams = rpc::params(params)?;
+                let pending = self.engine(&p.root)?.sync().map_err(engine_error)?;
+                Ok(json!({ "pending": pending }))
+            }
+            "pull" => {
+                let p: RootParams = rpc::params(params)?;
+                to_value(self.indexed(&p.root)?.pull().map_err(engine_error)?)
+            }
             "status" => {
                 let p: RootParams = rpc::params(params)?;
                 to_value(self.engine(&p.root)?.status().map_err(engine_error)?)

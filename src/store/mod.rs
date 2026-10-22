@@ -1,6 +1,8 @@
 //! Storage backend abstraction (`docs/specs/store.md` § Storage backends).
 
 #[cfg(feature = "postgres")]
+pub mod edge;
+#[cfg(feature = "postgres")]
 pub mod pg;
 
 use std::collections::BTreeMap;
@@ -35,6 +37,14 @@ pub trait LedgerStore: Send + Sync {
     fn llm_cache(&self, model: &str, prompt_hash: &str) -> crate::ledger::Result<Option<String>>;
     fn concepts(&self, path: &str) -> crate::ledger::Result<Option<String>>;
     fn batch(&self) -> crate::ledger::Result<Box<dyn LedgerWrite + '_>>;
+    /// Commits waiting for the shared tier (edge mode); `None` for other backends.
+    fn sync_pending(&self) -> Option<usize> {
+        None
+    }
+    /// Sends waiting commits to the shared tier now; returns how many are still waiting.
+    fn sync_now(&self) -> crate::ledger::Result<usize> {
+        Ok(0)
+    }
 }
 
 /// An atomic write transaction for the ledger.
@@ -159,9 +169,30 @@ impl Store {
                     ))
                 }
             }
-            StorageMode::Edge => Err(config_err(
-                "storage mode edge is not available yet (DRAG-34)".to_string(),
-            )),
+            StorageMode::Edge => {
+                let Some(url) = cfg.storage.pg_url.as_deref() else {
+                    return Err(config_err(
+                        "storage mode edge needs DENDRITE_RAG_PG_URL".to_string(),
+                    ));
+                };
+                #[cfg(feature = "postgres")]
+                {
+                    let local = Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search)?;
+                    let edge = edge::Edge::new(
+                        url,
+                        &repo_name(root, cfg.storage.repo.as_deref()),
+                        dir.join(edge::JOURNAL_FILE),
+                    );
+                    Ok(edge::wrap(local, edge))
+                }
+                #[cfg(not(feature = "postgres"))]
+                {
+                    let _ = (url, root);
+                    Err(config_err(
+                        "this dendrite-rag was built without the `postgres` feature".to_string(),
+                    ))
+                }
+            }
         }
     }
 

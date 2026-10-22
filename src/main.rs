@@ -86,6 +86,10 @@ enum Command {
         #[command(subcommand)]
         op: GraphOp,
     },
+    /// Send commits journaled while the shared tier was unreachable (edge mode).
+    Sync { root: PathBuf },
+    /// Fetch every missing embedding (from the shared tier in edge mode) for offline use.
+    Pull { root: PathBuf },
     /// Index statistics.
     Status { root: PathBuf },
     /// Embedding backends of this build, with their default models.
@@ -313,6 +317,11 @@ fn main() -> anyhow::Result<()> {
             };
             println!("{}", serde_json::to_string_pretty(&value)?);
         }
+        Command::Sync { root } => {
+            let pending = open(&root)?.sync()?;
+            print_value(&serde_json::json!({ "pending": pending }), cli.json)?
+        }
+        Command::Pull { root } => print_value(&open(&root)?.pull()?, cli.json)?,
         Command::Status { root } => print_value(&open(&root)?.status()?, cli.json)?,
         Command::Embedders => {
             let backends = dendrite_rag::embed::backends();
