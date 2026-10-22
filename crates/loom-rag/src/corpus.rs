@@ -43,7 +43,7 @@ impl Corpus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CorpusFilter {
-    /// Code and documentation in one ranking (the behaviour before corpora existed).
+    /// Code and documentation: one ranking for search, both pipelines for context packs.
     #[default]
     All,
     Code,

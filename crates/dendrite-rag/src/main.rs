@@ -64,7 +64,8 @@ enum Command {
         query: String,
         #[arg(long, default_value_t = 4000)]
         budget: usize,
-        /// Pack code, documentation (Markdown, txt, rst), or both in one ranking.
+        /// Pack code, documentation (Markdown, txt, rst), or both (each through its own
+        /// pipeline, with 20% of the budget kept for documentation).
         #[arg(long, value_enum, default_value = "all")]
         corpus: CorpusArg,
         /// Text of retrieved spans with outlines of their graph neighbours (auto), text of

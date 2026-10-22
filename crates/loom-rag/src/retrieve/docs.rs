@@ -6,7 +6,7 @@ use super::{
     CONTEXT_HITS, ContextPack, Detail, FusionWeights, Mode, Ranking, SearchOpts, Timings, outline, pack,
 };
 use crate::corpus::CorpusFilter;
-use crate::engine::{Engine, Error, Result};
+use crate::engine::{Engine, Error, Hit, Result};
 use crate::fusion::{RRF_K, rrf};
 
 impl Engine {
@@ -45,6 +45,11 @@ impl Engine {
         detail: Detail,
         t: &mut Timings,
     ) -> Result<ContextPack> {
+        Ok(pack(self.docs_spans(query, detail, t)?, token_budget))
+    }
+
+    /// The documentation sections a docs pack is packed from, best first, at `detail`.
+    pub(super) fn docs_spans(&self, query: &str, detail: Detail, t: &mut Timings) -> Result<Vec<Hit>> {
         let hits = self.search_timed(
             query,
             &SearchOpts {
@@ -54,10 +59,9 @@ impl Engine {
             },
             t,
         )?;
-        let hits = match detail {
+        Ok(match detail {
             Detail::Map => hits.into_iter().map(outline).collect(),
             Detail::Auto | Detail::Full => hits,
-        };
-        Ok(pack(hits, token_budget))
+        })
     }
 }

@@ -4,10 +4,12 @@
 //! Two pipelines share the stores: [`code`] ranks source code with lexical, dense and
 //! symbol-name rankings and expands context packs through the symbol graph; [`docs`] ranks
 //! documentation with lexical and dense rankings only. A query names its corpus with
-//! [`CorpusFilter`]; `all` keeps code and documentation in one ranking.
+//! [`CorpusFilter`]; `all` keeps code and documentation in one ranking for search, and
+//! context packs over both run each pipeline on its own corpus ([`mixed`]).
 
 mod code;
 mod docs;
+mod mixed;
 mod pack;
 mod route;
 #[cfg(test)]
@@ -262,13 +264,14 @@ impl Engine {
     }
 
     /// The most relevant spans for `query` from code and documentation, packed into
-    /// `token_budget` estimated tokens.
+    /// `token_budget` estimated tokens with part of it kept for documentation ([`mixed`]).
     pub fn context(&self, query: &str, token_budget: usize) -> Result<ContextPack> {
         self.context_for(query, token_budget, CorpusFilter::All)
     }
 
     /// A context pack from the corpora `corpus` admits: code packs are expanded through
-    /// the symbol graph ([`code`]), documentation packs are the best sections ([`docs`]).
+    /// the symbol graph ([`code`]), documentation packs are the best sections ([`docs`]), and
+    /// `all` packs hold both with part of the budget kept for documentation ([`mixed`]).
     pub fn context_for(&self, query: &str, token_budget: usize, corpus: CorpusFilter) -> Result<ContextPack> {
         self.context_with(query, token_budget, corpus, Detail::Auto)
     }
@@ -285,7 +288,8 @@ impl Engine {
         let mut t = Timings::default();
         let mut pack = match corpus {
             CorpusFilter::Docs => self.docs_context(query, token_budget, detail, &mut t)?,
-            corpus => self.code_context(query, token_budget, corpus, detail, &mut t)?,
+            CorpusFilter::Code => self.code_context(query, token_budget, CorpusFilter::Code, detail, &mut t)?,
+            CorpusFilter::All => self.mixed_context(query, token_budget, detail, &mut t)?,
         };
         t.total_ms = ms_since(started);
         pack.timings = t;
