@@ -39,9 +39,8 @@ pub const SCHEMA_VERSION: i32 = 1;
 const MIGRATION: &str = r#"
 DO $$
 BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('loom-rag:vector-extension'));
     CREATE EXTENSION IF NOT EXISTS vector;
-EXCEPTION
-    WHEN duplicate_object OR unique_violation THEN NULL;
 END
 $$;
 CREATE TABLE IF NOT EXISTS rag_schema (version int NOT NULL);
