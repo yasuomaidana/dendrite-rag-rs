@@ -17,6 +17,7 @@ pub mod retrieve;
 pub mod rpc;
 pub mod server;
 pub mod settings;
+pub mod store;
 pub mod symbols;
 #[cfg(test)]
 pub(crate) mod testutil;

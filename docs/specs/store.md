@@ -25,6 +25,22 @@ The schema version is `2` (version 2 added `calls`, `method_calls` and `imports`
 
 `vectors.bin` (format `DRV3`): magic, `u32` dimension, `u32` row count, then per row a `u16`-length id, a `u16`-length tag, an `f32` scale and the `i8` components, followed by a BLAKE3 checksum of everything before it. It is written to a temporary file that is fsynced before the rename, and the directory is fsynced after. `DRV2` files (with `u8` lengths and no checksum) still load. A missing, truncated or corrupt file is not an error: the engine starts with an empty vector index and the next `index` refills it from the `embeddings` cache, without calling the embedder. That run also compares the stored ids with the ledger's, so a stale file with the right row count is repaired too.
 
+## Storage backends
+
+Engine access to index storage is abstracted behind traits in `src/store.rs`:
+
+- `LedgerStore` / `LedgerWrite`: file metadata, chunk records, embedding cache, metadata entries, and graph communities.
+- `LexicalStore` / `LexicalWrite`: full-text lexical search and chunk document indexing.
+- `VectorIndex`: nearest-neighbour vector search over quantized embeddings.
+
+The `Store` struct aggregates these handles (`ledger`, `lexical`, `vectors`):
+
+- **LocalStore** (current implementation, via `Store::open_local`):
+  - Ledger: redb (`ledger.redb`).
+  - Lexical: Tantivy BM25 index (`tantivy/`).
+  - Vectors: memory-mapped / binary FlatIndex (`vectors.bin`) with self-healing on corruption.
+- **PgStore** (planned in DRAG-33): PostgreSQL backend storing ledger tables, BM25 / tsvector lexical search, and vector embeddings directly in PostgreSQL.
+
 ## Incremental indexing
 
 1. Walk the project. A file whose `(size, mtime)` matches the ledger reuses its stored hash without being read. Every other file is read and hashed with BLAKE3 (in parallel).

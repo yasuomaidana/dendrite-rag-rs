@@ -332,7 +332,7 @@ impl Engine {
             .filter_map(|p| Some((p.clone(), std::fs::read_to_string(self.root.join(p)).ok()?)))
             .collect();
         let mut chunks = Vec::new();
-        self.ledger.for_each_chunk(|c| chunks.push(c))?;
+        self.ledger.for_each_chunk(&mut |c| chunks.push(c))?;
         let g = Arc::new(CodeGraph::build(chunks, &files, go_mods));
         *self.graph.write().expect("graph lock") = Some(g.clone());
         Ok(g)

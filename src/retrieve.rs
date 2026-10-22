@@ -81,7 +81,7 @@ impl Engine {
             return Ok(idx.clone());
         }
         let mut idx = SymbolIndex::default();
-        self.ledger.for_each_chunk(|c| idx.add(c))?;
+        self.ledger.for_each_chunk(&mut |c| idx.add(c))?;
         idx.finish();
         let idx = Arc::new(idx);
         *self.symbols.write().expect("symbols lock") = Some(idx.clone());

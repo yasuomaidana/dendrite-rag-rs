@@ -7,12 +7,12 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
 /// A nearest-neighbour index keyed by chunk id.
-pub trait VectorIndex {
+pub trait VectorIndex: Send + Sync {
     /// Inserts or replaces `id`. `tag` is an opaque label kept with the row (the engine
     /// stores the chunk's content hash, to find its exact vector for rescoring).
     fn upsert(&mut self, id: &str, tag: &str, vector: &[f32]);
@@ -24,6 +24,11 @@ pub trait VectorIndex {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    fn dim(&self) -> usize;
+    fn ids(&self) -> Box<dyn Iterator<Item = &str> + '_>;
+    fn tag(&self, id: &str) -> Option<&str>;
+    fn clear(&mut self);
+    fn persist(&self) -> std::io::Result<()>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -34,6 +39,7 @@ pub struct FlatIndex {
     scales: Vec<f32>,
     data: Vec<i8>,
     pos: HashMap<String, usize>,
+    path: Option<PathBuf>,
 }
 
 const MAGIC: &[u8; 4] = b"DRV3";
@@ -48,12 +54,25 @@ impl FlatIndex {
         Self::default()
     }
 
+    pub fn set_path(&mut self, path: impl Into<PathBuf>) {
+        self.path = Some(path.into());
+    }
+
+    pub fn with_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     pub fn dim(&self) -> usize {
         self.dim
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = &str> {
-        self.ids.iter().map(String::as_str)
+    pub fn ids(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(self.ids.iter().map(String::as_str))
     }
 
     /// The tag stored with `id`.
@@ -62,7 +81,19 @@ impl FlatIndex {
     }
 
     pub fn clear(&mut self) {
+        let path = self.path.take();
         *self = Self::default();
+        self.path = path;
+    }
+
+    pub fn persist(&self) -> std::io::Result<()> {
+        match &self.path {
+            Some(path) => self.save(path),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no path configured for vector index persistence",
+            )),
+        }
     }
 
     /// Writes the index atomically (temporary file, then rename).
@@ -132,7 +163,11 @@ impl FlatIndex {
     pub fn load(path: &Path) -> std::io::Result<Self> {
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut idx = Self::new();
+                idx.path = Some(path.to_path_buf());
+                return Ok(idx);
+            }
             Err(e) => return Err(e),
         };
         let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt vector index");
@@ -141,7 +176,9 @@ impl FlatIndex {
         }
         let magic = &bytes[0..4];
         if magic == MAGIC_V1 {
-            return Ok(Self::new());
+            let mut idx = Self::new();
+            idx.path = Some(path.to_path_buf());
+            return Ok(idx);
         }
         let is_v3 = if magic == MAGIC {
             true
@@ -223,6 +260,7 @@ impl FlatIndex {
         if !r.is_empty() {
             return Err(bad());
         }
+        idx.path = Some(path.to_path_buf());
         Ok(idx)
     }
 }
@@ -327,6 +365,26 @@ impl VectorIndex for FlatIndex {
     fn len(&self) -> usize {
         self.ids.len()
     }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn ids(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(self.ids.iter().map(String::as_str))
+    }
+
+    fn tag(&self, id: &str) -> Option<&str> {
+        self.pos.get(id).map(|&row| self.tags[row].as_str())
+    }
+
+    fn clear(&mut self) {
+        FlatIndex::clear(self);
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        FlatIndex::persist(self)
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +462,8 @@ mod tests {
         assert_eq!(back.tag("c4"), Some("t4"));
         assert_eq!(back.tag("c0"), Some("t"));
         assert_eq!(back.search(&vs[3], 1)[0].0, "c3");
+        back.persist().unwrap();
+        assert_eq!(FlatIndex::load(&p).unwrap().len(), 4);
         assert_eq!(FlatIndex::load(&dir.path().join("missing")).unwrap().len(), 0);
     }
 

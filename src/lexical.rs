@@ -11,6 +11,7 @@ use tantivy::tokenizer::{TextAnalyzer, Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, doc};
 
 use crate::chunk::Chunk;
+use crate::store::{LexicalStore, LexicalWrite};
 
 pub(crate) const TOKENIZER: &str = "code";
 const WRITER_HEAP: usize = 50_000_000;
@@ -53,6 +54,11 @@ impl TokenStream for CodeTokenStream {
 }
 
 const MAX_TOKEN_LEN: usize = 64;
+
+/// Produces exactly the terms the [`CodeTokenizer`] Tantivy tokenizer emits, in order.
+pub fn code_terms(text: &str) -> Vec<String> {
+    tokenize(text).into_iter().map(|t| t.text).collect()
+}
 
 /// The tokens [`CodeTokenizer`] produces, in order.
 pub fn tokenize(text: &str) -> Vec<Token> {
@@ -291,6 +297,42 @@ impl LexicalWriter<'_> {
     }
 }
 
+impl LexicalStore for LexicalIndex {
+    fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>> {
+        self.search(query, limit)
+    }
+
+    fn writer(&self) -> tantivy::Result<Box<dyn LexicalWrite + '_>> {
+        Ok(Box::new(self.writer()?))
+    }
+
+    fn len(&self) -> u64 {
+        self.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl LexicalWrite for LexicalWriter<'_> {
+    fn add(&mut self, chunk: &Chunk) -> tantivy::Result<()> {
+        self.add(chunk)
+    }
+
+    fn remove_file(&mut self, path: &str) {
+        self.remove_file(path);
+    }
+
+    fn clear(&mut self) -> tantivy::Result<()> {
+        self.clear()
+    }
+
+    fn commit(self: Box<Self>) -> tantivy::Result<()> {
+        (*self).commit()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,7 +340,18 @@ mod tests {
     use crate::lang::Lang;
 
     fn texts(s: &str) -> Vec<String> {
-        tokenize(s).into_iter().map(|t| t.text).collect()
+        code_terms(s)
+    }
+
+    #[test]
+    fn code_terms_matches_tokenizer_output() {
+        assert_eq!(
+            code_terms("parseHTTPResponse2"),
+            ["parsehttpresponse2", "parse", "http", "response", "2"]
+        );
+        let sample = "fooBar_baz 123";
+        let from_tokens: Vec<String> = tokenize(sample).into_iter().map(|t| t.text).collect();
+        assert_eq!(code_terms(sample), from_tokens);
     }
 
     #[test]

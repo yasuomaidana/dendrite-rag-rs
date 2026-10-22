@@ -14,11 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::chunk::{Chunk, ChunkOptions, analyze_file};
 use crate::embed::{EmbedConfig, Embedder};
 use crate::graph::CodeGraph;
-use crate::ledger::{FileEntry, Ledger};
-use crate::lexical::LexicalIndex;
+use crate::ledger::FileEntry;
 use crate::rerank::{RerankConfig, Reranker};
+use crate::store::{LedgerStore, LexicalStore, Store};
 use crate::symbols::SymbolIndex;
-use crate::vector::{FlatIndex, VectorIndex};
+use crate::vector::VectorIndex;
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
 
 /// Query embeddings kept by default (`[index] query_cache`).
@@ -154,10 +154,10 @@ pub struct Engine {
     pub(crate) root: PathBuf,
     pub(crate) dir: PathBuf,
     pub(crate) cfg: Config,
-    pub(crate) ledger: Ledger,
-    pub(crate) lexical: LexicalIndex,
+    pub(crate) ledger: Box<dyn LedgerStore>,
+    pub(crate) lexical: Box<dyn LexicalStore>,
     pub(crate) embedder: Option<Box<dyn Embedder>>,
-    pub(crate) vectors: FlatIndex,
+    pub(crate) vectors: Box<dyn VectorIndex>,
     pub(crate) reranker: Option<Box<dyn Reranker>>,
     /// Built lazily from the ledger; cleared whenever an index run changes chunks.
     pub(crate) symbols: RwLock<Option<Arc<SymbolIndex>>>,
@@ -181,39 +181,21 @@ impl Engine {
             .index_dir
             .clone()
             .unwrap_or_else(|| root.join(".dendrite").join("rag"));
-        std::fs::create_dir_all(&dir)?;
-        // The index is per-machine state: keep it out of version control.
-        let ignore = dir.join(".gitignore");
-        if !ignore.exists() {
-            std::fs::write(ignore, "*\n")?;
-        }
-        let ledger = Ledger::open(&dir.join("ledger.redb"))?;
-        let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
-        let vectors_path = dir.join(VECTORS_FILE);
-        let mut vectors = match FlatIndex::load(&vectors_path) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to load vector index at {}: {e}; starting with empty index",
-                    vectors_path.display()
-                );
-                FlatIndex::new()
-            }
-        };
+        let mut store = Store::open_local(&dir)?;
         // Vectors from another model are useless: rebuild them (from the cache when possible).
-        if ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
-            vectors.clear();
+        if store.ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
+            store.vectors.clear();
         }
         let query_cache = NonZeroUsize::new(cfg.query_cache).map(|n| Mutex::new(LruCache::new(n)));
         Ok(Self {
             root,
             dir,
-            ledger,
-            lexical,
+            ledger: store.ledger,
+            lexical: store.lexical,
             reranker: crate::rerank::from_config(&cfg.rerank)?,
             cfg,
             embedder,
-            vectors,
+            vectors: store.vectors,
             symbols: RwLock::new(None),
             graph: RwLock::new(None),
             query_cache,
@@ -224,8 +206,8 @@ impl Engine {
         &self.root
     }
 
-    pub fn ledger(&self) -> &Ledger {
-        &self.ledger
+    pub fn ledger(&self) -> &dyn LedgerStore {
+        self.ledger.as_ref()
     }
 
     /// Whether dense retrieval is available.
@@ -400,11 +382,10 @@ impl Engine {
         deadline: Option<Instant>,
         report: &mut IndexReport,
     ) -> Result<()> {
-        let path = self.dir.join(VECTORS_FILE);
         let Some(embedder) = &self.embedder else {
             if !self.vectors.is_empty() {
                 self.vectors.clear();
-                self.vectors.save(&path)?;
+                self.vectors.persist()?;
             }
             return Ok(());
         };
@@ -426,7 +407,7 @@ impl Engine {
 
         // Only ids and content hashes are kept in memory; texts are loaded per group.
         let mut live: BTreeMap<String, String> = BTreeMap::new();
-        self.ledger.for_each_chunk(|c| {
+        self.ledger.for_each_chunk(&mut |c| {
             live.insert(c.id, c.content_hash);
         })?;
         let stale: Vec<String> = self
@@ -483,7 +464,7 @@ impl Engine {
         let mut batch = self.ledger.batch()?;
         batch.set_meta("embed_model", &model)?;
         batch.commit()?;
-        self.vectors.save(&path)?;
+        self.vectors.persist()?;
         Ok(())
     }
 
@@ -604,7 +585,6 @@ impl Engine {
     }
 }
 
-const VECTORS_FILE: &str = "vectors.bin";
 /// The int8 shortlist is this many times `top_k` (at least `RESCORE_MIN`) before exact
 /// rescoring.
 const RESCORE_FACTOR: usize = 4;
@@ -647,7 +627,9 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::VECTORS_FILE;
     use crate::testutil::{HashEmbedder, project};
+    use crate::vector::FlatIndex;
     use std::fs;
 
     fn open(root: &Path) -> Engine {

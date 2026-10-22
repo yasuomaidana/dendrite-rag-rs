@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
 use crate::graph::communities::Community;
+use crate::store::{LedgerStore, LedgerWrite};
 
 const FILES: TableDefinition<&str, &[u8]> = TableDefinition::new("files");
 const CHUNKS: TableDefinition<&str, &[u8]> = TableDefinition::new("chunks");
@@ -285,6 +286,112 @@ impl LedgerBatch {
     pub fn commit(self) -> Result<()> {
         self.txn.commit()?;
         Ok(())
+    }
+}
+
+impl LedgerStore for Ledger {
+    fn files(&self) -> Result<BTreeMap<String, FileEntry>> {
+        self.files()
+    }
+
+    fn chunk(&self, id: &str) -> Result<Option<Chunk>> {
+        self.chunk(id)
+    }
+
+    fn chunks(&self, ids: &[String]) -> Result<Vec<Chunk>> {
+        self.chunks(ids)
+    }
+
+    fn for_each_chunk(&self, f: &mut dyn FnMut(Chunk)) -> Result<()> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CHUNKS)?;
+        for row in table.iter()? {
+            let (_, v) = row?;
+            f(serde_json::from_slice(v.value())?);
+        }
+        Ok(())
+    }
+
+    fn chunk_count(&self) -> Result<u64> {
+        self.chunk_count()
+    }
+
+    fn meta(&self, key: &str) -> Result<Option<String>> {
+        self.meta(key)
+    }
+
+    fn embedding(&self, key: &str) -> Result<Option<Vec<f32>>> {
+        self.embedding(key)
+    }
+
+    fn embeddings(&self, keys: &[String]) -> Result<Vec<Option<Vec<f32>>>> {
+        self.embeddings(keys)
+    }
+
+    fn embedding_count(&self) -> Result<u64> {
+        self.embedding_count()
+    }
+
+    fn community_files(&self) -> Result<BTreeMap<String, u32>> {
+        self.community_files()
+    }
+
+    fn community_of_chunk(&self, chunk: &str) -> Result<Option<u32>> {
+        self.community_of_chunk(chunk)
+    }
+
+    fn community(&self, id: u32) -> Result<Option<Community>> {
+        self.community(id)
+    }
+
+    fn communities(&self) -> Result<Vec<Community>> {
+        self.communities()
+    }
+
+    fn batch(&self) -> Result<Box<dyn LedgerWrite + '_>> {
+        Ok(Box::new(self.batch()?))
+    }
+}
+
+impl LedgerWrite for LedgerBatch {
+    fn put_file(&mut self, path: &str, entry: &FileEntry) -> Result<()> {
+        self.put_file(path, entry)
+    }
+
+    fn remove_file(&mut self, path: &str) -> Result<()> {
+        self.remove_file(path)
+    }
+
+    fn put_chunk(&mut self, chunk: &Chunk) -> Result<()> {
+        self.put_chunk(chunk)
+    }
+
+    fn remove_chunk(&mut self, id: &str) -> Result<()> {
+        self.remove_chunk(id)
+    }
+
+    fn put_embedding(&mut self, key: &str, vector: &[f32]) -> Result<()> {
+        self.put_embedding(key, vector)
+    }
+
+    fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
+        self.set_meta(key, value)
+    }
+
+    fn put_communities(
+        &mut self,
+        communities: &[Community],
+        files: &BTreeMap<String, FileEntry>,
+    ) -> Result<()> {
+        self.put_communities(communities, files)
+    }
+
+    fn clear_index(&mut self) -> Result<()> {
+        self.clear_index()
+    }
+
+    fn commit(self: Box<Self>) -> Result<()> {
+        (*self).commit()
     }
 }
 

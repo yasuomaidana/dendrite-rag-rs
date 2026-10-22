@@ -215,7 +215,7 @@ fn main() -> anyhow::Result<()> {
     // check loads every vector, so it runs after the RSS measurement).
     if let Some(model) = &status.embed_model {
         let mut exact: Vec<(String, Vec<f32>)> = Vec::new();
-        engine.ledger().for_each_chunk(|c| {
+        engine.ledger().for_each_chunk(&mut |c| {
             if let Ok(Some(v)) = engine.ledger().embedding(&cache_key(model, &c.content_hash)) {
                 exact.push((c.id, v));
             }
