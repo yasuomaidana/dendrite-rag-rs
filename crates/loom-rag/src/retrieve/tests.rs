@@ -265,33 +265,80 @@ fn mixed_packs_keep_room_for_documentation() {
         )
         .unwrap();
     }
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    let sections: String = (0..6)
+        .map(|i| format!("## Step {i}\n\nStart the helper process of the project, step {i}: the helper process starts before the project indexes.\n\n"))
+        .collect();
+    fs::write(
+        dir.path().join("docs/helpers.md"),
+        format!("# Helpers\n\n{sections}"),
+    )
+    .unwrap();
     let e = engine(dir.path());
     let code = e
         .context_for("start helper process project", 300, CorpusFilter::Code)
         .unwrap();
-    assert!(code.tokens > 300 - 60, "code alone fills the budget: {}", code.tokens);
+    assert!(
+        code.tokens > 300 - 60,
+        "code alone fills the budget: {}",
+        code.tokens
+    );
     let all = e
         .context_for("start helper process project", 300, CorpusFilter::All)
         .unwrap();
     let paths: Vec<&str> = all.spans.iter().map(|s| s.path.as_str()).collect();
-    assert!(paths.contains(&"README.md"), "{paths:?}");
+    assert!(paths.iter().any(|p| p.ends_with(".md")), "{paths:?}");
     assert!(paths.iter().any(|p| p.ends_with(".go")), "{paths:?}");
     assert!(all.tokens <= 300);
+
+    // The share moves the budget between the corpora.
+    let docs_tokens = |share: f32| {
+        let p = e
+            .context_shared(
+                "start helper process project",
+                300,
+                CorpusFilter::All,
+                Detail::Auto,
+                share,
+            )
+            .unwrap();
+        assert!(p.tokens <= 300);
+        p.spans
+            .iter()
+            .filter(|s| s.path.ends_with(".md"))
+            .map(|s| estimate_tokens(&s.content))
+            .sum::<usize>()
+    };
+    assert!(
+        docs_tokens(1.0) > docs_tokens(0.0),
+        "{} vs {}",
+        docs_tokens(1.0),
+        docs_tokens(0.0)
+    );
+    assert_eq!(docs_tokens(f32::NAN), docs_tokens(DEFAULT_DOCS_SHARE));
 }
 
 #[test]
 fn mixed_packs_without_code_are_documentation_packs() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("docs")).unwrap();
-    fs::write(dir.path().join("README.md"), "# Demo\n\nA project used in tests.\n").unwrap();
+    fs::write(
+        dir.path().join("README.md"),
+        "# Demo\n\nA project used in tests.\n",
+    )
+    .unwrap();
     fs::write(
         dir.path().join("docs/guide.md"),
         "# Guide\n\nHow the project is used in tests.\n\n## Setup\n\nInstall the project first.\n",
     )
     .unwrap();
     let e = engine(dir.path());
-    let mut docs = e.context_for("project used in tests", 2000, CorpusFilter::Docs).unwrap();
-    let mut all = e.context_for("project used in tests", 2000, CorpusFilter::All).unwrap();
+    let mut docs = e
+        .context_for("project used in tests", 2000, CorpusFilter::Docs)
+        .unwrap();
+    let mut all = e
+        .context_for("project used in tests", 2000, CorpusFilter::All)
+        .unwrap();
     docs.timings = Timings::default();
     all.timings = Timings::default();
     assert!(!docs.spans.is_empty());

@@ -25,6 +25,7 @@ use crate::corpus::{Corpus, CorpusFilter};
 use crate::engine::{Engine, Error, Hit, Result};
 use crate::symbols::SymbolIndex;
 
+pub use mixed::DEFAULT_DOCS_SHARE;
 use pack::{dedup, outline, pack};
 pub use pack::{estimate_tokens, signature};
 pub use route::Probe;
@@ -284,12 +285,27 @@ impl Engine {
         corpus: CorpusFilter,
         detail: Detail,
     ) -> Result<ContextPack> {
+        self.context_shared(query, token_budget, corpus, detail, DEFAULT_DOCS_SHARE)
+    }
+
+    /// [`Engine::context_with`] keeping `docs_share` of an `all` pack's budget for
+    /// documentation (0 to 1; `code` and `docs` packs ignore it).
+    pub fn context_shared(
+        &self,
+        query: &str,
+        token_budget: usize,
+        corpus: CorpusFilter,
+        detail: Detail,
+        docs_share: f32,
+    ) -> Result<ContextPack> {
         let started = Instant::now();
         let mut t = Timings::default();
         let mut pack = match corpus {
             CorpusFilter::Docs => self.docs_context(query, token_budget, detail, &mut t)?,
-            CorpusFilter::Code => self.code_context(query, token_budget, CorpusFilter::Code, detail, &mut t)?,
-            CorpusFilter::All => self.mixed_context(query, token_budget, detail, &mut t)?,
+            CorpusFilter::Code => {
+                self.code_context(query, token_budget, CorpusFilter::Code, detail, &mut t)?
+            }
+            CorpusFilter::All => self.mixed_context(query, token_budget, detail, docs_share, &mut t)?,
         };
         t.total_ms = ms_since(started);
         pack.timings = t;

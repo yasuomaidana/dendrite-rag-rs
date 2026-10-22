@@ -65,13 +65,17 @@ enum Command {
         #[arg(long, default_value_t = 4000)]
         budget: usize,
         /// Pack code, documentation (Markdown, txt, rst), or both (each through its own
-        /// pipeline, with 20% of the budget kept for documentation).
+        /// pipeline, with part of the budget kept for documentation: --docs-share).
         #[arg(long, value_enum, default_value = "all")]
         corpus: CorpusArg,
         /// Text of retrieved spans with outlines of their graph neighbours (auto), text of
         /// every span (full), or outlines only (map).
         #[arg(long, value_enum, default_value = "auto")]
         detail: DetailArg,
+        /// Share of an `all` pack kept for documentation, 0 to 1 (default: `[ask] docs_share`
+        /// in .dendrite/rag.toml, else 0.2).
+        #[arg(long, value_parser = parse_docs_share)]
+        docs_share: Option<f32>,
     },
     /// The full text of chunks by id (the bodies behind `context --detail map` outlines).
     Show {
@@ -176,6 +180,13 @@ impl From<KindArg> for EdgeKind {
             KindArg::Import => EdgeKind::Import,
             KindArg::Type => EdgeKind::Type,
         }
+    }
+}
+
+fn parse_docs_share(s: &str) -> Result<f32, String> {
+    match s.parse::<f32>() {
+        Ok(v) if dendrite_rag::settings::valid_docs_share(v) => Ok(v),
+        _ => Err(format!("{s:?} is not a number from 0 to 1")),
     }
 }
 
@@ -313,8 +324,12 @@ fn main() -> anyhow::Result<()> {
             budget,
             corpus,
             detail,
+            docs_share,
         } => {
-            let pack = open(&root)?.context_with(&query, budget, corpus.into(), detail.into())?;
+            let share = dendrite_rag::settings::Settings::load(&root)?
+                .ask
+                .docs_share(docs_share);
+            let pack = open(&root)?.context_shared(&query, budget, corpus.into(), detail.into(), share)?;
             if !cli.json {
                 println!("~{} tokens in {} spans\n", pack.tokens, pack.spans.len());
             }

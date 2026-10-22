@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use loom_rag::corpus::CorpusFilter;
 use loom_rag::engine::{Engine, Hit, Result};
 use loom_rag::llm::Completion;
-use loom_rag::retrieve::{SearchOpts, Timings};
+use loom_rag::retrieve::{Detail, SearchOpts, Timings};
 
 use crate::settings::AskSettings;
 
@@ -53,6 +53,9 @@ pub struct AskRequest {
     pub paths: Vec<String>,
     /// Which corpora the context comes from (default: code and documentation).
     pub corpus: CorpusFilter,
+    /// Share of an `all` context pack kept for documentation, 0 to 1 (default: the project's
+    /// `[ask] docs_share`, else 0.2).
+    pub docs_share: Option<f32>,
     pub local_model: Option<String>,
     pub paid_model: Option<String>,
     /// The person already agreed to paid escalation (`dendrite ask -y`).
@@ -150,7 +153,8 @@ pub fn ask(
         };
         engine.search_timed(&req.question, &opts, &mut retrieval)?
     } else {
-        let pack = engine.context_for(&req.question, CONTEXT_TOKENS, req.corpus)?;
+        let share = settings.docs_share(req.docs_share);
+        let pack = engine.context_shared(&req.question, CONTEXT_TOKENS, req.corpus, Detail::Auto, share)?;
         retrieval = pack.timings;
         pack.spans
     };

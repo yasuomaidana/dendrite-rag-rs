@@ -12,22 +12,29 @@ use super::{CANDIDATES, ContextPack, Detail, Mode, Timings, pack};
 use crate::corpus::CorpusFilter;
 use crate::engine::{Engine, Hit, Result};
 
-/// Share of a mixed pack's budget kept for documentation; room the documentation leaves goes
-/// to code, and room code leaves goes back to documentation.
-pub(super) const DOCS_SHARE: f32 = 0.2;
+/// Default share of a mixed pack's budget kept for documentation; room the documentation
+/// leaves goes to code, and room code leaves goes back to documentation. It leans on code,
+/// which documentation can contradict (eval/RESULTS.md).
+pub const DEFAULT_DOCS_SHARE: f32 = 0.2;
 
 impl Engine {
-    /// A documentation pack within [`DOCS_SHARE`] of `token_budget` and a code pack in the
-    /// rest, each in its own order, interleaved by the mixed ranking.
+    /// A documentation pack within `docs_share` (clamped to 0..=1) of `token_budget` and a
+    /// code pack in the rest, each in its own order, interleaved by the mixed ranking.
     pub(super) fn mixed_context(
         &self,
         query: &str,
         token_budget: usize,
         detail: Detail,
+        docs_share: f32,
         t: &mut Timings,
     ) -> Result<ContextPack> {
         let docs_spans = self.docs_spans(query, detail, t)?;
-        let reserve = (token_budget as f32 * DOCS_SHARE) as usize;
+        let share = if docs_share.is_nan() {
+            DEFAULT_DOCS_SHARE
+        } else {
+            docs_share.clamp(0.0, 1.0)
+        };
+        let reserve = (token_budget as f32 * share) as usize;
         let mut docs = pack(docs_spans.clone(), reserve);
         let code = self.code_context(query, token_budget - docs.tokens, CorpusFilter::Code, detail, t)?;
         let room = token_budget - code.tokens;
@@ -37,8 +44,19 @@ impl Engine {
                 docs = wider;
             }
         }
-        let joint = self.code_ranking(query, CANDIDATES, Mode::Hybrid, self.fusion_weights(), CorpusFilter::All, t)?;
-        let rank: HashMap<String, usize> = joint.into_iter().enumerate().map(|(i, (id, _))| (id, i)).collect();
+        let joint = self.code_ranking(
+            query,
+            CANDIDATES,
+            Mode::Hybrid,
+            self.fusion_weights(),
+            CorpusFilter::All,
+            t,
+        )?;
+        let rank: HashMap<String, usize> = joint
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, _))| (id, i))
+            .collect();
         Ok(ContextPack {
             tokens: code.tokens + docs.tokens,
             spans: interleave(code.spans, docs.spans, |h| rank.get(&h.chunk_id).copied()),

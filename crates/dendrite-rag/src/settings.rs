@@ -28,6 +28,10 @@
 //! [graph]
 //! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
 //!
+//! [ask]
+//! # local_model = "local-coder" paid_model = "gemini-2.5-pro"
+//! docs_share = 0.2              # share of an `all` context pack kept for documentation (0 to 1)
+//!
 //! [graph.llm]
 //! enabled = false
 //! model = "gpt-4o-mini"
@@ -38,7 +42,8 @@
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
+//! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
 //! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
 //! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
 //! `_MODEL`, `_SUMMARIES`, `_CONCEPTS` (all `DENDRITE_RAG_GRAPH_LLM_*`), and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
@@ -53,6 +58,7 @@ use loom_rag::config::{GraphLlmSettings, VectorIndexChoice};
 use loom_rag::embed::{Backend, EmbedConfig, Pooling};
 use loom_rag::engine::Config;
 use loom_rag::rerank::{RerankBackend, RerankConfig};
+use loom_rag::retrieve::DEFAULT_DOCS_SHARE;
 
 /// Project-relative location of the settings file.
 pub const FILE: &str = ".dendrite/rag.toml";
@@ -78,6 +84,22 @@ pub struct Settings {
 pub struct AskSettings {
     pub local_model: Option<String>,
     pub paid_model: Option<String>,
+    /// Share of an `all` context pack kept for documentation, 0 to 1 (default
+    /// [`DEFAULT_DOCS_SHARE`]); `ask` and `context` use it when a request names none.
+    pub docs_share: Option<f32>,
+}
+
+impl AskSettings {
+    /// The documentation share for a request: `requested`, else the project's, else the
+    /// engine's default.
+    pub fn docs_share(&self, requested: Option<f32>) -> f32 {
+        requested.or(self.docs_share).unwrap_or(DEFAULT_DOCS_SHARE)
+    }
+}
+
+/// Whether `share` is a documentation share: a number from 0 to 1.
+pub fn valid_docs_share(share: f32) -> bool {
+    (0.0..=1.0).contains(&share)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -243,6 +265,12 @@ impl Settings {
         set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
         set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
         set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
+        if let Some(v) = var("DENDRITE_RAG_ASK_DOCS_SHARE") {
+            self.ask.docs_share = Some(
+                v.parse()
+                    .with_context(|| format!("DENDRITE_RAG_ASK_DOCS_SHARE={v:?}"))?,
+            );
+        }
         set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
         if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
             self.graph.resolution = Some(
@@ -291,6 +319,11 @@ impl Settings {
 
     /// Validates the settings consistency.
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(s) = self.ask.docs_share
+            && !valid_docs_share(s)
+        {
+            bail!("ask.docs_share must be a number from 0 to 1, got {s}");
+        }
         if let Some(r) = self.graph.resolution
             && !(r > 0.0 && r.is_finite())
         {

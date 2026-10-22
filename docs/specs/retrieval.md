@@ -90,7 +90,7 @@ Each corpus has its own pipeline over the shared stores:
 - **code** (`retrieve/code.rs`): lexical, dense and symbol-name rankings fused as in § Fusion, the community boost, and context packs expanded through the symbol graph (§ Context packing).
 - **docs** (`retrieve/docs.rs`): lexical and dense rankings fused with the project's `lexical` and `dense` weights. Prose defines no symbols, so there is no symbol ranking or expansion. A context pack is the best sections, each keeping its heading path as `scope`.
 
-`search`, `context` and `ask` take `corpus`: `all` (the default: both corpora in one ranking, the code pipeline over every chunk), `code` or `docs`. Dendrite's `dendrite ask` searches code unless `-d` is given.
+`search`, `context` and `ask` take `corpus`: `all` (the default), `code` or `docs`. `search` over `all` ranks both corpora in one ranking (the code pipeline over every chunk); `context` and `ask` packs over `all` run each pipeline on its own corpus and keep `docs_share` of the budget for documentation (§ Mixed packs). Dendrite's `dendrite ask` searches code unless `-d` (`all`) or `--corpus` is given.
 
 The corpus is the caller's choice because no rule found on the golden sets routes a question to the right corpus by itself (`loom-eval probe`, `retrieve/route.rs`). Neither the best dense similarity of each corpus, nor its BM25 score, nor the rank-weighted share of documentation among the best candidates of both separates code questions from documentation questions: every threshold that keeps documentation questions out of a code-only search also keeps most code questions in `all`. Weighting the two pipelines against each other (measured at symbol boost 1.5) ranked the other corpus's answer too low (MRR 0.71 against 0.76 for `all` on code questions, 0.64 against 0.76 on documentation questions), and narrowing `all` to one corpus only when the other was absent from the top ten matched `all` within 0.02. A fixed corpus costs the other kind of question everything (MRR 0 for documentation questions under `code`), while `code` is worth 0.05 to 0.12 MRR over `all` on code questions:
 
@@ -103,6 +103,10 @@ The corpus is the caller's choice because no rule found on the golden sets route
 | dendrite-rag-rs | 0.883 | 0 | 0.768 |
 
 A filtered ranking fetches 4× its candidates and keeps the first ones in the corpus. Results report `timings` (milliseconds for the lexical, dense, symbol, rerank and expansion stages, and the total).
+
+## Mixed packs
+
+An `all` context pack (`retrieve/mixed.rs`) is a documentation pack within `docs_share` of the budget and a code pack (code pipeline, `code` corpus) in the rest; room the documentation leaves goes to code, and room code leaves goes back to documentation. The spans keep each pipeline's order and interleave by the `all` ranking: the pipelines' scores are not comparable, and alternating them put code first on documentation questions (MRR 0.40). `docs_share` is 0 to 1: the request's, else the project's `[ask] docs_share` (`DENDRITE_RAG_ASK_DOCS_SHARE`), else 0.2, which leans on code because documentation can contradict the implementation. One mixed ranking let six code chunks fill 2,500 tokens before Dendrite's AGENTS.md (7th); the share was measured at 0.2, 0.3 and 0.4 (eval/RESULTS.md).
 
 ## Duplicate text
 

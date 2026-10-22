@@ -43,6 +43,24 @@ fn full_method_table() {
     assert!(r["result"]["tokens"].as_u64().unwrap() <= 500);
     let r = call(
         &mut s,
+        "context",
+        json!({"root": root, "query": "LocateBinary", "token_budget": 500, "docs_share": 1.0}),
+    );
+    assert!(r["result"]["tokens"].as_u64().unwrap() <= 500);
+    let r = call(
+        &mut s,
+        "context",
+        json!({"root": root, "query": "LocateBinary", "docs_share": 1.5}),
+    );
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    let r = call(
+        &mut s,
+        "ask",
+        json!({"root": root, "question": "LocateBinary", "docs_share": -1}),
+    );
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    let r = call(
+        &mut s,
         "symbols.definitions",
         json!({"root": root, "name": "IndexProject"}),
     );

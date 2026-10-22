@@ -255,3 +255,24 @@ fn fusion_weights_from_file_and_env() {
     );
     assert!(Settings::parse("[fusion]\nbogus = 1\n").is_err());
 }
+
+#[test]
+fn docs_share_from_file_and_env() {
+    let mut s = Settings::parse("[ask]\ndocs_share = 0.5\n").unwrap();
+    s.apply_env(env(&[])).unwrap();
+    assert_eq!(s.ask.docs_share(None), 0.5);
+    assert_eq!(
+        s.ask.docs_share(Some(0.9)),
+        0.9,
+        "a request overrides the project"
+    );
+    s.apply_env(env(&[("DENDRITE_RAG_ASK_DOCS_SHARE", "0")])).unwrap();
+    assert_eq!(s.ask.docs_share(None), 0.0);
+    assert_eq!(AskSettings::default().docs_share(None), DEFAULT_DOCS_SHARE);
+    assert!(
+        s.apply_env(env(&[("DENDRITE_RAG_ASK_DOCS_SHARE", "1.5")]))
+            .is_err()
+    );
+    let mut s = Settings::parse("[ask]\ndocs_share = -0.1\n").unwrap();
+    assert!(s.apply_env(env(&[])).is_err());
+}

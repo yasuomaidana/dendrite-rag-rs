@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::rpc::{self, Handler, RpcError, code};
-use crate::settings::{AskSettings, Settings};
+use crate::settings::{AskSettings, Settings, valid_docs_share};
 use loom_rag::corpus::CorpusFilter;
 use loom_rag::engine::{Config, Engine, Error};
 use loom_rag::graph::EdgeKind;
@@ -66,6 +66,8 @@ struct ContextParams {
     corpus: CorpusFilter,
     #[serde(default)]
     detail: Detail,
+    /// Share of an `all` pack kept for documentation (default: the project's `[ask]`).
+    docs_share: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -253,6 +255,16 @@ impl Server {
     }
 }
 
+/// A requested documentation share outside 0 to 1 is invalid params.
+fn check_docs_share(share: Option<f32>) -> Result<(), RpcError> {
+    match share {
+        Some(s) if !valid_docs_share(s) => Err(RpcError::invalid_params(format!(
+            "docs_share must be a number from 0 to 1, got {s}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 fn engine_error(e: Error) -> RpcError {
     RpcError::engine(e.kind(), e.to_string())
 }
@@ -315,9 +327,19 @@ impl Handler for Server {
             }
             "context" => {
                 let p: ContextParams = rpc::params(params)?;
+                check_docs_share(p.docs_share)?;
+                let engine = self.indexed(&p.root)?;
+                let root = engine.root().to_path_buf();
+                let share = self
+                    .asks
+                    .get(&root)
+                    .cloned()
+                    .unwrap_or_default()
+                    .docs_share(p.docs_share);
+                let engine = self.engines.get(&root).expect("opened above");
                 to_value(
-                    self.indexed(&p.root)?
-                        .context_with(&p.query, p.token_budget, p.corpus, p.detail)
+                    engine
+                        .context_shared(&p.query, p.token_budget, p.corpus, p.detail, share)
                         .map_err(engine_error)?,
                 )
             }
@@ -383,6 +405,7 @@ impl Handler for Server {
             }
             "ask" => {
                 let p: AskParams = rpc::params(params)?;
+                check_docs_share(p.request.docs_share)?;
                 let gateway = loom_rag::llm::Client::new(None, None, String::new());
                 let engine = self.indexed(&p.root)?;
                 let root = engine.root().to_path_buf();
