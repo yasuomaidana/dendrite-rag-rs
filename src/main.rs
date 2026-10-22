@@ -228,6 +228,7 @@ fn main() -> anyhow::Result<()> {
                 paths,
                 min_score,
                 offset: 0,
+                weights: None,
             };
             print_hits(&open(&root)?.search(&query, &opts)?, cli.json, false)?;
         }

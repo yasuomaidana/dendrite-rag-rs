@@ -490,6 +490,7 @@ fn explain_file(g: &CodeGraph, f: u32, comms: &Communities) -> Explanation {
             path: path.clone(),
             line: g.sites(s)[0].line,
             in_degree: g.in_degree(s),
+            chunk: g.sites(s)[0].chunk.clone(),
         })
         .collect();
     let mut imports = Vec::new();

@@ -56,7 +56,15 @@ Query tokens that look like identifiers (contain `_`, `::`, `.` or an inner capi
 
 Weighted Reciprocal Rank Fusion over the ranked lists:
 
-`score(d) = Σ_i w_i / (k + rank_i(d))`, with k = 60 and default weights lexical 1.0, dense 1.0, symbol 1.5.
+`score(d) = Σ_i w_i / (k + rank_i(d))`, with k = 60. The weights depend on the embedder, from the weight sweep over the three golden sets (eval/RESULTS.md, DRAG-26), and `[fusion]` in `.dendrite/rag.toml` (`lexical`, `dense`, `symbol`, `community`; `DENDRITE_RAG_FUSION_*`) overrides any of them:
+
+| Embedder | lexical | dense | symbol | community |
+|---|---|---|---|---|
+| model2vec (static embeddings) | 1.0 | 0.5 | 1.0 | 0 |
+| jina-embeddings-v2-base-code | 1.5 | 1.0 | 2.0 | 0 |
+| any other | 1.0 | 1.0 | 1.5 | 0 |
+
+`community` raises code inside the communities whose summaries match best ([graph.md](graph.md) § Summary chunks); it is off everywhere because no corpus gained from it on average. `EVAL_SWEEP=1 cargo run --release --example eval -- …` repeats the sweep for another corpus or embedder.
 
 RRF uses ranks only, so BM25 and cosine scores never need calibrating against each other. Each list contributes its top `candidates` (default 50).
 

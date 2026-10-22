@@ -8,6 +8,7 @@ pub mod communities;
 pub mod leiden;
 pub mod query;
 pub mod resolve;
+pub mod summary;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -82,6 +83,9 @@ impl CodeGraph {
         // Collect definitions first, keeping per chunk what it uses.
         let mut uses: Vec<Uses> = Vec::new();
         for c in chunks {
+            if summary::is_summary(&c.path) {
+                continue;
+            }
             let file = g.file(&c.path);
             let mut owners: Vec<u32> = Vec::new();
             for s in &c.symbols {

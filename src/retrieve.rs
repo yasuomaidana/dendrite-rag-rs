@@ -32,6 +32,9 @@ pub struct SearchOpts {
     pub min_score: Option<f32>,
     /// Skip this many hits (pagination).
     pub offset: usize,
+    /// Fusion weights for this query instead of the project's (the eval sweep uses it).
+    #[serde(skip)]
+    pub weights: Option<FusionWeights>,
 }
 
 impl Default for SearchOpts {
@@ -42,6 +45,7 @@ impl Default for SearchOpts {
             paths: Vec::new(),
             min_score: None,
             offset: 0,
+            weights: None,
         }
     }
 }
@@ -54,9 +58,80 @@ pub struct ContextPack {
     pub tokens: usize,
 }
 
-pub const WEIGHT_LEXICAL: f32 = 1.0;
-pub const WEIGHT_DENSE: f32 = 1.0;
-pub const WEIGHT_SYMBOL: f32 = 1.5;
+/// Weights of the hybrid fusion (`[fusion]` in `.dendrite/rag.toml`, `docs/specs/retrieval.md`
+/// § Fusion). Unset fields take the defaults of the embedder's family.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FusionWeights {
+    pub lexical: f32,
+    pub dense: f32,
+    pub symbol: f32,
+    /// How much code in the communities whose summaries match best is raised (0 = off).
+    pub community: f32,
+}
+
+impl Default for FusionWeights {
+    fn default() -> Self {
+        Self {
+            lexical: 1.0,
+            dense: 1.0,
+            symbol: 1.5,
+            community: 0.0,
+        }
+    }
+}
+
+impl FusionWeights {
+    /// Defaults for an embedder, from the weight sweeps in eval/RESULTS.md (DRAG-26).
+    /// Families without a sweep keep the general defaults.
+    pub fn for_model(model_id: Option<&str>) -> Self {
+        let model = model_id.unwrap_or_default();
+        if model.starts_with("model2vec:") {
+            // Static embeddings are weak on their own: lean on BM25.
+            Self {
+                lexical: 1.0,
+                dense: 0.5,
+                symbol: 1.0,
+                community: 0.0,
+            }
+        } else if model.contains("jina-embeddings-v2-base-code") {
+            Self {
+                lexical: 1.5,
+                dense: 1.0,
+                symbol: 2.0,
+                community: 0.0,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+/// Fusion weights a project sets; each unset field keeps the embedder's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FusionConfig {
+    pub lexical: Option<f32>,
+    pub dense: Option<f32>,
+    pub symbol: Option<f32>,
+    pub community: Option<f32>,
+}
+
+impl FusionConfig {
+    pub fn resolve(&self, base: FusionWeights) -> FusionWeights {
+        FusionWeights {
+            lexical: self.lexical.unwrap_or(base.lexical),
+            dense: self.dense.unwrap_or(base.dense),
+            symbol: self.symbol.unwrap_or(base.symbol),
+            community: self.community.unwrap_or(base.community),
+        }
+    }
+}
+
+/// `(chunk_id, score)`, best first.
+type Ranking = Vec<(String, f32)>;
+
+/// Communities whose summaries rank highest that get the boost.
+const BOOSTED_COMMUNITIES: usize = 2;
 /// Candidates each ranking contributes before fusion.
 const CANDIDATES: usize = 50;
 /// Fused hits sent to the reranker.
@@ -65,6 +140,8 @@ const RERANK_TOP: usize = 30;
 const EXPAND_TOP: usize = 8;
 const NEIGHBOURS_PER_HIT: usize = 4;
 const HOP_DECAY: f32 = 0.5;
+/// A neighbour in another community than its hit decays once more.
+const CROSS_COMMUNITY_DECAY: f32 = 0.5;
 /// How much file PageRank can raise a span's score (×1 to ×1.5).
 const PAGERANK_BOOST: f32 = 0.5;
 
@@ -97,27 +174,33 @@ impl Engine {
             CANDIDATES.max(page * 3)
         };
         let n = CANDIDATES.max(wanted);
+        // Summaries never compete with code inside a ranking: they form their own list,
+        // expanded to their communities' code (hybrid only).
+        let split = |ranked: Ranking| -> (Ranking, Ranking) {
+            ranked
+                .into_iter()
+                .partition(|(id, _)| !crate::graph::summary::is_summary(id))
+        };
+        let w = opts.weights.unwrap_or_else(|| self.fusion_weights());
         let fused = match opts.mode {
-            Mode::Lexical => self.lexical.search(query, n)?,
-            Mode::Dense => self.dense_ranking(query, n)?,
+            Mode::Lexical => split(self.lexical.search(query, n)?).0,
+            Mode::Dense => split(self.dense_ranking(query, n)?).0,
             Mode::Hybrid => {
-                let lexical = self.lexical.search(query, n)?;
+                let (lexical, lexical_summaries) = split(self.lexical.search(query, n)?);
                 // Dense retrieval is best effort in hybrid mode: an unreachable embedder
                 // degrades to lexical + symbols rather than failing the query.
-                let dense = match self.dense_ranking(query, n) {
-                    Ok(d) => d,
-                    Err(Error::Embed(_)) => Vec::new(),
+                let (dense, dense_summaries) = match self.dense_ranking(query, n) {
+                    Ok(d) => split(d),
+                    Err(Error::Embed(_)) => Default::default(),
                     Err(e) => return Err(e),
                 };
                 let symbol = self.symbol_index()?.rank_query(query, n);
-                rrf(
-                    &[
-                        (WEIGHT_LEXICAL, &lexical),
-                        (WEIGHT_DENSE, &dense),
-                        (WEIGHT_SYMBOL, &symbol),
-                    ],
+                let summaries = rrf(&[(1.0, &lexical_summaries), (1.0, &dense_summaries)], RRF_K);
+                let fused = rrf(
+                    &[(w.lexical, &lexical), (w.dense, &dense), (w.symbol, &symbol)],
                     RRF_K,
-                )
+                );
+                self.boost_communities(fused, &summaries, w.community)?
             }
         };
         let mut hits = self.hits(&fused[..fused.len().min(n)])?;
@@ -134,6 +217,35 @@ impl Engine {
             hits.retain(|h| h.score >= min);
         }
         Ok(hits.into_iter().skip(opts.offset).take(opts.top_k).collect())
+    }
+
+    /// The project's fusion weights: `[fusion]` over the embedder's defaults.
+    pub fn fusion_weights(&self) -> FusionWeights {
+        let model = self.embedder.as_ref().map(|e| e.model_id());
+        self.cfg.fusion.resolve(FusionWeights::for_model(model))
+    }
+
+    /// Raises code in the communities whose summaries match the query best: the summary
+    /// says which part of the codebase a broad question is about, and the code the other
+    /// rankings already found there moves up.
+    fn boost_communities(&self, mut fused: Ranking, summaries: &Ranking, boost: f32) -> Result<Ranking> {
+        let matched: Vec<u32> = summaries
+            .iter()
+            .take(BOOSTED_COMMUNITIES)
+            .filter_map(|(id, _)| crate::graph::summary::community_of(id))
+            .collect();
+        if matched.is_empty() || boost == 0.0 {
+            return Ok(fused);
+        }
+        for (id, score) in &mut fused {
+            if let Some(c) = self.ledger.community_of_chunk(id)?
+                && matched.contains(&c)
+            {
+                *score *= 1.0 + boost;
+            }
+        }
+        fused.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(fused)
     }
 
     /// Reorders the top hits with the cross-encoder when one is configured; on failure the
@@ -166,11 +278,14 @@ impl Engine {
         )?;
         let symbols = self.symbol_index()?;
 
-        // 1. Expand the best hits one hop through the symbol graph.
+        // 1. Expand the best hits one hop through the symbol graph, preferring neighbours
+        //    in the hit's own community.
         let mut scores: HashMap<String, f32> = hits.iter().map(|h| (h.chunk_id.clone(), h.score)).collect();
         for h in hits.iter().take(EXPAND_TOP) {
+            let home = self.ledger.community_of_chunk(&h.chunk_id)?;
             for n in symbols.neighbours(&h.chunk_id, NEIGHBOURS_PER_HIT) {
-                let s = h.score * HOP_DECAY;
+                let same = home.is_none() || self.ledger.community_of_chunk(&n)? == home;
+                let s = h.score * HOP_DECAY * if same { 1.0 } else { CROSS_COMMUNITY_DECAY };
                 let e = scores.entry(n).or_insert(0.0);
                 *e = e.max(s);
             }
@@ -355,5 +470,58 @@ mod tests {
             ..SearchOpts::default()
         };
         assert!(matches!(e.search("LocateBinary", &dense), Err(Error::Embed(_))));
+    }
+
+    #[test]
+    fn community_summaries_rank_and_expand_to_code() {
+        use crate::graph::summary::is_summary;
+        let dir = calls_project();
+        let mut e = engine(dir.path());
+        let summaries = |e: &Engine| {
+            let mut n = 0;
+            e.ledger
+                .for_each_chunk(&mut |c| n += is_summary(&c.id) as usize)
+                .unwrap();
+            n
+        };
+        let n = summaries(&e);
+        assert!(n > 0, "a community of two or more files has a summary chunk");
+        // The summary lists its files: a query naming them finds the community's code.
+        let hits = e
+            .search("community files sidecar.go client.go", &SearchOpts::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits.iter().all(|h| !is_summary(&h.chunk_id)),
+            "summaries never surface"
+        );
+        // Re-indexing after a change replaces summaries instead of adding more.
+        fs::write(
+            dir.path().join("pkg/sidecar/client.go"),
+            "package sidecar\n\nfunc Start(name string) error {\n\treturn run(LocateBinary(name))\n}\n",
+        )
+        .unwrap();
+        e.index(false).unwrap();
+        assert_eq!(summaries(&e), n);
+        assert_eq!(e.lexical.search("community", 50).unwrap().len(), n);
+    }
+
+    #[test]
+    fn fusion_defaults_follow_the_embedder_and_settings_override_them() {
+        assert_eq!(FusionWeights::for_model(None), FusionWeights::default());
+        assert_eq!(
+            FusionWeights::for_model(Some("model2vec:minishlab/potion-code-16M-v2")).dense,
+            0.5
+        );
+        assert_eq!(
+            FusionWeights::for_model(Some("candle:jinaai/jina-embeddings-v2-base-code")).lexical,
+            1.5
+        );
+        let cfg = FusionConfig {
+            dense: Some(2.0),
+            ..FusionConfig::default()
+        };
+        let w = cfg.resolve(FusionWeights::for_model(Some("model2vec:x")));
+        assert_eq!((w.lexical, w.dense), (1.0, 2.0));
     }
 }

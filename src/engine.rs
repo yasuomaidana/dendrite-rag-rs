@@ -45,6 +45,7 @@ pub struct Config {
     pub vector_index: VectorIndexChoice,
     /// Size of dynamic candidate list for HNSW search.
     pub hnsw_ef_search: usize,
+    pub fusion: crate::retrieve::FusionConfig,
 }
 
 impl Default for Config {
@@ -59,6 +60,7 @@ impl Default for Config {
             graph_resolution: 1.0,
             vector_index: VectorIndexChoice::Auto,
             hnsw_ef_search: 128,
+            fusion: Default::default(),
         }
     }
 }
@@ -298,7 +300,9 @@ impl Engine {
         // Lexical index first: replaying a half-finished run is idempotent, because files
         // are removed by path before their chunks are added again.
         let mut lw = self.lexical.writer()?;
-        if full {
+        // An empty file table (first run, or a ledger cleared by a schema change) must not
+        // keep the lexical documents of an earlier run: they would be duplicated.
+        if full || old.is_empty() {
             lw.clear()?;
         }
         for p in &removed {
@@ -573,11 +577,48 @@ impl Engine {
     }
 
     /// Recomputes the communities of the code graph and stores them; returns their count.
+    /// Each community of two or more files gets a summary chunk, replacing the last run's:
+    /// lexical index first, then the ledger, like an index run; vectors follow in
+    /// `sync_vectors`.
     fn update_communities(&self) -> Result<usize> {
+        use crate::graph::summary;
         let graph = self.code_graph()?;
         let previous = self.ledger.community_files()?;
-        let communities = crate::graph::communities::detect(&graph, &previous, self.cfg.graph_resolution);
+        let old_summaries: Vec<String> = self
+            .ledger
+            .communities()?
+            .into_iter()
+            .filter_map(|c| c.summary_chunk)
+            .collect();
+        let mut communities = crate::graph::communities::detect(&graph, &previous, self.cfg.graph_resolution);
+        let summaries: Vec<Chunk> = communities
+            .iter_mut()
+            .filter_map(|c| {
+                let chunk = summary::summary_chunk(c)?;
+                c.summary_chunk = Some(chunk.id.clone());
+                Some(chunk)
+            })
+            .collect();
+
+        let mut lw = self.lexical.writer()?;
+        for id in &old_summaries {
+            if let Some(cid) = summary::community_of(id) {
+                lw.remove_file(&format!("{}{cid}", summary::SUMMARY_PREFIX));
+            }
+        }
+        for c in &summaries {
+            lw.remove_file(&c.path);
+            lw.add(c)?;
+        }
+        lw.commit()?;
+
         let mut batch = self.ledger.batch()?;
+        for id in &old_summaries {
+            batch.remove_chunk(id)?;
+        }
+        for c in &summaries {
+            batch.put_chunk(c)?;
+        }
         batch.put_communities(&communities, &self.ledger.files()?)?;
         batch.commit()?;
         Ok(communities.len())
@@ -1053,5 +1094,24 @@ mod tests {
         let again = e.index(false).unwrap();
         assert_eq!(again.communities, r.communities);
         assert_eq!(again.graph_ms, 0);
+    }
+
+    #[test]
+    fn a_cleared_ledger_rebuilds_the_lexical_index() {
+        let dir = project();
+        let mut e = open(dir.path());
+        e.index(false).unwrap();
+        let docs = e.lexical.len();
+        drop(e);
+        {
+            // An older schema version: the next open clears files and chunks.
+            let ledger = crate::ledger::Ledger::open(&dir.path().join(".dendrite/rag/ledger.redb")).unwrap();
+            let mut b = ledger.batch().unwrap();
+            b.set_meta("schema", "1").unwrap();
+            b.commit().unwrap();
+        }
+        let mut e = open(dir.path());
+        e.index(false).unwrap();
+        assert_eq!(e.lexical.len(), docs, "lexical documents must not be duplicated");
     }
 }
