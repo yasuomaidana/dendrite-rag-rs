@@ -14,6 +14,19 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Cold local index at 49k chunks (DRAG-42, 2026-10-22)
+
+`cargo run --release --example graph_stats -- ~/go/pkg/mod/github.com <index-dir>` (5,887 files, 49,302 chunks, no embedder: what an edge-mode checkout rebuilds locally while its embeddings come from the shared tier).
+
+| run | wall time | of which graph + communities | peak RSS |
+|---|---|---|---|
+| cold (empty index) | 14.1 s | 3.4 s (74,373 symbols, 1,631 communities) | 463 MB |
+| no-op re-run | 2.8 s | 2.6 s graph rebuild in memory | — |
+
+Findings:
+- A cold local rebuild of a 50k-chunk corpus takes 14 s, under the 30 s set in DRAG-42, against about 17 minutes to embed the same corpus on candle Metal (scaled from the Dendrite run). Edge mode therefore keeps sharing embeddings only; pulling index segments would pay off from roughly ten times this size and is not built.
+- Peak memory is 463 MB, over the 200 MB budget: the code graph build holds every chunk with its text (DRAG-44).
+
 ## Vector index at scale (DRAG-41, 2026-10-22)
 
 `BENCH_FLAT_ONLY=1 cargo run --release --features hnsw --example vector_bench -- 768 50000 100000 200000 400000` (768-d clustered unit vectors, 200 queries, Apple Silicon; recall@10 of the 40-candidate shortlist rescored with exact vectors).

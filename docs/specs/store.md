@@ -89,7 +89,7 @@ A content-addressed store for analysis artefacts (files, functions, CFG blocks, 
 - **`pull`** (RPC and CLI) fetches every embedding the current chunks need and fills the vector index, to prepare for working offline. Chunking and the lexical index are rebuilt locally (about 1.6 s for the Dendrite repository), which is why edge mode shares embeddings, the expensive part (about 17 minutes for the same repository on candle Metal), rather than index segments.
 - `status` reports `sync_pending`, the commits still in the journal.
 
-The spec's Merkle-subtree pull was not built: measured, re-chunking is three orders of magnitude cheaper than embedding, and read-through gives the saving with no extra protocol. Fetching the slice of a synapse (several repositories) is a loop over `pull` per repository, for Dendrite to drive.
+The spec's Merkle-subtree pull was not built: measured, re-chunking is three orders of magnitude cheaper than embedding, and read-through gives the saving with no extra protocol. At 49k chunks a cold local rebuild takes 14 s (DRAG-42, eval/RESULTS.md); segment pull is worth building only for corpora about ten times larger. Fetching the slice of a synapse (several repositories) is a loop over `pull` per repository, for Dendrite to drive.
 
 ## Push and compaction (DRAG-35)
 
