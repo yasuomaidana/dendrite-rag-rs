@@ -3,6 +3,7 @@
 //!     cargo run --release --example eval -- <root> eval/golden-dendrite.json [index-dir]
 //!
 //! Embeddings follow the usual environment (`DENDRITE_RAG_EMBED_BACKEND`, `..._MODEL`).
+//! `EVAL_FULL=1` re-indexes from scratch (the embedding cache is kept).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -112,7 +113,7 @@ fn main() -> anyhow::Result<()> {
     eprintln!("rss start: {:.0} MB", max_rss_mb());
     let mut engine = Engine::open(root.as_ref(), cfg)?;
     eprintln!("rss after open: {:.0} MB", max_rss_mb());
-    let report = engine.index(false)?;
+    let report = engine.index(std::env::var_os("EVAL_FULL").is_some())?;
     eprintln!("rss after index: {:.0} MB", max_rss_mb());
     engine.symbol_index()?;
     eprintln!("rss after symbol index: {:.0} MB", max_rss_mb());

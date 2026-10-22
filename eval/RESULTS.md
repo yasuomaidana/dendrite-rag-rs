@@ -14,6 +14,30 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Community summaries (DRAG-31, 2026-10-22)
+
+Same three golden sets and embedder as DRAG-25 (dendrite-rag-rs had grown to 75 files / 382 chunks, so its rows are not comparable with DRAG-25). Indexes rebuilt with `EVAL_FULL=1`.
+
+| corpus | variant | hybrid MRR@10 | broad MRR@10 |
+|---|---|---|---|
+| Dendrite | baseline (DRAG-25) | 0.810 | 0.747 |
+| | summaries in the lexical/dense rankings, expanded to top-symbol chunks | 0.762 | 0.688 |
+| | separate summary ranking, expanded, weight 0.5 | 0.779 | 0.664 |
+| | community boost ×1.25 on found code | 0.774 | 0.747 |
+| | **off (shipped default)** | **0.797** | **0.747** |
+| embedag | baseline (DRAG-25) | 0.852 | 0.724 |
+| | separate summary ranking, weight 0.5 | 0.812 | 0.724 |
+| | community boost ×1.25 | 0.820 | 0.724 |
+| | **off (shipped default)** | **0.852** | **0.724** |
+| dendrite-rag-rs | separate summary ranking, weight 0.5 | 0.835 | 0.692 |
+| | community boost ×1.25 | 0.868 | 0.754 |
+| | boost only for queries without identifiers | 0.848 | 0.692 |
+
+Findings:
+- Replacing a summary with its community's top-symbol chunks misleads: those chunks are rarely the file a broad question expects.
+- Raising code the other rankings already found inside the matched community helps the smallest corpus (+0.06 broad) and hurts the two larger ones on narrow queries, so it ships off and becomes a per-corpus fusion setting (DRAG-26).
+- The DRAG-28 schema migration left stale Tantivy documents behind (duplicated hits; lexical MRR 0.569 instead of 0.614 on Dendrite). Fixed: an index run with an empty file table rebuilds the lexical index.
+
 ## Three corpora (DRAG-25, 2026-10-21)
 
 Golden sets: `golden-dendrite.json` (37 queries, 8 broad; three queries that named `pkg/rag/indexer.go`, removed by DEN-1044, were retargeted or dropped), `golden-embedag.json` (25 queries, 8 broad) and `golden-dendrite-rag.json` (25 queries, 8 broad). Embedder: `auto` → candle on Metal, `jinaai/jina-embeddings-v2-base-code`.

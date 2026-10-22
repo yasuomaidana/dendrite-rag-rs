@@ -73,3 +73,11 @@ Served as JSON-RPC methods ([protocol.md](protocol.md)) and as `dendrite-rag gra
 | `graph.god_nodes` | Symbols with at least `min_in_degree` users (default 21: FEAT-045's "more than 20"), with the number of files they are used from, their community and a summary |
 | `graph.path` | The shortest path between two symbols over call and type edges, or between two files (a symbol stands for its defining files) over every edge kind; `kinds` restricts the edges. A forward path is preferred; otherwise edges may be followed backwards, marked `reversed` |
 | `graph.explain` | For a symbol: its definitions, users, uses, community and god-node flag. For a file: what it defines, imports and is imported by, external imports, the files it depends on and those that use it |
+
+## Summary chunks
+
+Every community of two or more files gets a summary chunk (`src/graph/summary.rs`): its label, files, most-used symbols and a one-paragraph description, all deterministic (an optional LLM summary is DRAG-36). Its id and path start with `@community/`, which no project file can; the id carries the content hash, so a changed summary is a new chunk and its old vector is dropped. Summaries are written with the communities: lexical index first, then the ledger (replacing the last run's), and embedded with the other chunks.
+
+In search they never appear and never compete with code: hybrid search splits them out of the lexical and dense rankings and fuses them into a separate summary ranking. Code that the other rankings found inside the two best-matching communities can be raised by `COMMUNITY_BOOST`; it is 0 (off) by default, because on the golden sets it did not help (eval/RESULTS.md, DRAG-31), and DRAG-26 makes it tunable per corpus.
+
+In context packs, a neighbour pulled in through the symbol graph keeps `HOP_DECAY` when it is in the same community as its hit and decays once more (×0.5) when it is not.

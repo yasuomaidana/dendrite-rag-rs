@@ -21,6 +21,10 @@ pub struct Community {
     pub files: Vec<String>,
     /// The most-used symbols defined in the community, most users first.
     pub top_symbols: Vec<TopSymbol>,
+    /// Id of the community's summary chunk (`docs/specs/graph.md` § Summary chunks); none
+    /// for a single file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_chunk: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +33,9 @@ pub struct TopSymbol {
     pub path: String,
     pub line: usize,
     pub in_degree: usize,
+    /// The chunk holding the definition.
+    #[serde(default)]
+    pub chunk: String,
 }
 
 /// Partitions the graph's files. `previous` maps files to the ids of the last run; each new
@@ -85,6 +92,7 @@ fn describe(g: &CodeGraph, id: u32, files: &[u32]) -> Community {
                 path: site.path.clone(),
                 line: site.line,
                 in_degree: g.in_degree(s),
+                chunk: site.chunk.clone(),
             }
         })
         .collect();
@@ -102,6 +110,7 @@ fn describe(g: &CodeGraph, id: u32, files: &[u32]) -> Community {
         label,
         files: paths,
         top_symbols,
+        summary_chunk: None,
     }
 }
 
