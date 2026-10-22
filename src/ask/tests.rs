@@ -132,6 +132,18 @@ fn hybrid_refines_the_local_draft() {
 }
 
 #[test]
+fn paths_restrict_retrieval() {
+    let (_d, e) = engine();
+    let g = ScriptedGateway::new(&[("local", Ok(LOCAL))]);
+    let req = AskRequest {
+        paths: vec!["README.md".into()],
+        ..request(AskMode::Local, false)
+    };
+    let a = e.ask(&req, &g).unwrap();
+    assert!(!a.hits.is_empty() && a.hits.iter().all(|h| h.path == "README.md"));
+}
+
+#[test]
 fn paid_mode_skips_the_local_model() {
     let (_d, e) = engine();
     let g = ScriptedGateway::new(&[("paid", Ok(PAID))]);

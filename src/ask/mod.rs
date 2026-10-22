@@ -19,6 +19,8 @@ pub const CONTEXT_TOKENS: usize = 2500;
 /// The gateway's local model when neither the request nor `[ask]` names one.
 pub const DEFAULT_LOCAL_MODEL: &str = "local-coder";
 pub const DEFAULT_PAID_MODEL: &str = "gemini-2.5-pro";
+/// Hits used when retrieval is restricted to paths and no `top_k` is given.
+const PATH_HITS: usize = 4;
 
 /// How to answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -40,6 +42,8 @@ pub struct AskRequest {
     pub mode: AskMode,
     /// Answer from the top hits instead of a context pack.
     pub top_k: usize,
+    /// Restrict retrieval to these paths (globs): the top hits among them, 4 by default.
+    pub paths: Vec<String>,
     pub local_model: Option<String>,
     pub paid_model: Option<String>,
     /// The person already agreed to paid escalation (`dendrite ask -y`).
@@ -104,9 +108,10 @@ fn usable(c: std::result::Result<Completion, String>) -> std::result::Result<Com
 impl Engine {
     /// Answers `req.question` from this project through `gateway`.
     pub fn ask(&self, req: &AskRequest, gateway: &dyn Gateway) -> Result<AskAnswer> {
-        let hits = if req.top_k > 0 {
+        let hits = if req.top_k > 0 || !req.paths.is_empty() {
             let opts = SearchOpts {
-                top_k: req.top_k,
+                top_k: if req.top_k > 0 { req.top_k } else { PATH_HITS },
+                paths: req.paths.clone(),
                 ..SearchOpts::default()
             };
             self.search(&req.question, &opts)?

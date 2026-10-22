@@ -40,6 +40,13 @@
       "allow_paid": {
         "type": "boolean",
         "default": false
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Restrict retrieval to these paths (globs): the top hits among them, 4 unless top_k is set"
       }
     }
   },
