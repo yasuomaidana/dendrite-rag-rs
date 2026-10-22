@@ -11,6 +11,7 @@ pub mod history;
 pub mod lang;
 pub mod ledger;
 pub mod lexical;
+pub mod llm;
 pub mod lookup;
 pub mod rerank;
 pub mod retrieve;

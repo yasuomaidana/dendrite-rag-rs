@@ -26,6 +26,15 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 
 [index]
 # max_file_bytes = 1048576
+
+[graph]
+# resolution = 1.0
+
+[graph.llm]
+# enabled = false
+# model = "local-qwen3-8b-q4_k_m"   # any model the LiteLLM gateway serves; required when enabled
+# summaries = false
+# concepts = false
 ```
 
 | Variable | Overrides |
@@ -34,6 +43,8 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 | `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` | the matching `embed.*` key |
 | `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL` | `rerank.backend`, `rerank.model`, `rerank.url`. A backend different from the file's drops the file's model and URL |
 | `DENDRITE_RAG_MAX_FILE_BYTES` | `index.max_file_bytes` |
+| `DENDRITE_RAG_GRAPH_RESOLUTION` | `graph.resolution` |
+| `DENDRITE_RAG_GRAPH_LLM_ENABLED`, `_MODEL`, `_SUMMARIES`, `_CONCEPTS` | `graph.llm.enabled`, `graph.llm.model`, `graph.llm.summaries`, `graph.llm.concepts` |
 
 Unknown keys, unknown backends and malformed values are errors, never silently replaced by a default.
 

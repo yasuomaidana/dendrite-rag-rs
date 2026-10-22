@@ -68,6 +68,27 @@ pub fn summary_chunk(c: &Community) -> Option<Chunk> {
     })
 }
 
+/// Appends an LLM-generated community description to a summary chunk.
+/// Updates the content, byte/line bounds, content hash and chunk id.
+pub fn append_llm_description(chunk: &mut Chunk, description: &str) {
+    let desc = description.trim();
+    if desc.is_empty() {
+        return;
+    }
+    if !chunk.content.ends_with('\n') {
+        chunk.content.push('\n');
+    }
+    chunk.content.push_str(desc);
+    if !chunk.content.ends_with('\n') {
+        chunk.content.push('\n');
+    }
+    chunk.end_byte = chunk.content.len();
+    chunk.end_line = chunk.content.lines().count().max(1);
+    chunk.content_hash = blake3::hash(chunk.content.as_bytes()).to_hex()[..32].to_string();
+    let cid = community_of(&chunk.id).unwrap_or(0);
+    chunk.id = format!("{SUMMARY_PREFIX}{cid}/{}", &chunk.content_hash[..16]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +121,17 @@ mod tests {
         assert_eq!(community_of(&c.id), Some(7));
         assert!(c.content.contains("pkg/sync · Sync") && c.content.contains("pkg/sync/heal.go"));
         assert!(!is_summary("pkg/sync/sync.go"));
+    }
+
+    #[test]
+    fn appends_llm_description_and_updates_id() {
+        let mut c = summary_chunk(&community(&["pkg/sync/sync.go", "pkg/sync/heal.go"])).unwrap();
+        let orig_id = c.id.clone();
+        let orig_hash = c.content_hash.clone();
+        append_llm_description(&mut c, "This community coordinates synchronization and healing.");
+        assert_ne!(c.id, orig_id);
+        assert_ne!(c.content_hash, orig_hash);
+        assert!(c.content.contains("This community coordinates synchronization"));
+        assert_eq!(community_of(&c.id), Some(7));
     }
 }

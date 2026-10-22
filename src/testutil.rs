@@ -104,6 +104,10 @@ pub struct HttpStub {
 
 impl HttpStub {
     pub fn serve(response: &'static str) -> Self {
+        Self::serve_status(200, "OK", response)
+    }
+
+    pub fn serve_status(status: u16, status_text: &'static str, response: &'static str) -> Self {
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -151,7 +155,7 @@ impl HttpStub {
                 });
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+                    "HTTP/1.1 {status} {status_text}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
                     response.len()
                 );
             }
@@ -164,5 +168,9 @@ impl HttpStub {
         let mut r = self.requests.lock().unwrap();
         assert!(!r.is_empty(), "no request reached the stub");
         r.remove(0)
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.requests.lock().unwrap().len()
     }
 }

@@ -17,12 +17,19 @@
 //!
 //! [graph]
 //! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
+//!
+//! [graph.llm]
+//! enabled = false
+//! model = "gpt-4o-mini"
+//! summaries = false
+//! concepts = false
 //! ```
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
+//! `_MODEL`, `_SUMMARIES`, `_CONCEPTS` (all `DENDRITE_RAG_GRAPH_LLM_*`), and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
 use std::path::{Path, PathBuf};
@@ -50,6 +57,17 @@ pub struct Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct GraphSettings {
     pub resolution: Option<f64>,
+    pub llm: GraphLlmSettings,
+}
+
+/// Optional LLM layer for graph community summaries and concepts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GraphLlmSettings {
+    pub enabled: bool,
+    pub model: Option<String>,
+    pub summaries: bool,
+    pub concepts: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -169,10 +187,40 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_GRAPH_RESOLUTION={r:?}"))?,
             );
         }
+        let parse_bool = |v: &str, name: &str| -> anyhow::Result<bool> {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Ok(true),
+                "false" | "0" | "no" | "off" => Ok(false),
+                _ => bail!("{name}={v:?}: expected true or false"),
+            }
+        };
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_ENABLED") {
+            self.graph.llm.enabled = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_ENABLED")?;
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_MODEL") {
+            self.graph.llm.model = Some(v);
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_SUMMARIES") {
+            self.graph.llm.summaries = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_SUMMARIES")?;
+        }
+        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_CONCEPTS") {
+            self.graph.llm.concepts = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_CONCEPTS")?;
+        }
+        self.validate()?;
+        Ok(())
+    }
+
+    /// Validates the settings consistency.
+    pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(r) = self.graph.resolution
             && !(r > 0.0 && r.is_finite())
         {
             bail!("graph.resolution must be a positive number, got {r}");
+        }
+        if self.graph.llm.enabled && self.graph.llm.model.as_deref().unwrap_or("").trim().is_empty() {
+            bail!(
+                "graph.llm is enabled but no model is configured (set graph.llm.model or DENDRITE_RAG_GRAPH_LLM_MODEL)"
+            );
         }
         Ok(())
     }
@@ -182,6 +230,7 @@ impl Settings {
         let mut cfg = Config {
             embed: self.embed.clone(),
             rerank: self.rerank.clone(),
+            graph_llm: self.graph.llm.clone(),
             ..Config::default()
         };
         if let Some(n) = self.index.max_file_bytes {
@@ -351,5 +400,48 @@ model = "BAAI/bge-reranker-base"
             s.apply_env(env(&[("DENDRITE_RAG_GRAPH_RESOLUTION", "0")]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn graph_llm_settings_and_env_overrides() {
+        let toml_text = r#"
+[graph.llm]
+enabled = true
+model = "deepseek-chat"
+summaries = true
+concepts = false
+"#;
+        let mut s = Settings::parse(toml_text).unwrap();
+        assert!(s.graph.llm.enabled);
+        assert_eq!(s.graph.llm.model.as_deref(), Some("deepseek-chat"));
+        assert!(s.graph.llm.summaries);
+        assert!(!s.graph.llm.concepts);
+        assert!(s.validate().is_ok());
+
+        // Environment overrides
+        s.apply_env(env(&[
+            ("DENDRITE_RAG_GRAPH_LLM_ENABLED", "false"),
+            ("DENDRITE_RAG_GRAPH_LLM_MODEL", "gpt-4o-mini"),
+            ("DENDRITE_RAG_GRAPH_LLM_SUMMARIES", "0"),
+            ("DENDRITE_RAG_GRAPH_LLM_CONCEPTS", "true"),
+        ]))
+        .unwrap();
+        assert!(!s.graph.llm.enabled);
+        assert_eq!(s.graph.llm.model.as_deref(), Some("gpt-4o-mini"));
+        assert!(!s.graph.llm.summaries);
+        assert!(s.graph.llm.concepts);
+
+        // Enabled without model fails validation
+        let mut s_no_model = Settings::parse("[graph.llm]\nenabled = true\n").unwrap();
+        assert!(s_no_model.validate().is_err());
+        assert!(
+            s_no_model
+                .apply_env(env(&[("DENDRITE_RAG_GRAPH_LLM_ENABLED", "true")]))
+                .is_err()
+        );
+
+        // Unknown keys rejected
+        assert!(Settings::parse("[graph.llm]\nunknown_key = true\n").is_err());
+        assert!(Settings::parse("[graph]\nunknown_key = true\n").is_err());
     }
 }

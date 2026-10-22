@@ -14,12 +14,27 @@ use serde::{Deserialize, Serialize};
 use crate::chunk::{Chunk, ChunkOptions, analyze_file};
 use crate::embed::{EmbedConfig, Embedder};
 use crate::graph::CodeGraph;
+use crate::lang::Lang;
 use crate::ledger::FileEntry;
 use crate::rerank::{RerankConfig, Reranker};
 use crate::store::{LedgerStore, LexicalStore, Store};
 use crate::symbols::SymbolIndex;
 use crate::vector::VectorIndex;
 use crate::walk::{SourceFile, WalkOptions, read_text, walk};
+
+/// Characters of a document sent for concept extraction.
+const CONCEPT_TEXT_CHARS: usize = 12_000;
+
+/// Documents concepts are extracted from: Markdown and plain prose, not the configuration
+/// and data files that are also indexed as text.
+fn is_prose(f: &SourceFile) -> bool {
+    let ext = std::path::Path::new(&f.path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    f.lang == Lang::Markdown || (f.lang == Lang::Text && matches!(ext.as_str(), "txt" | "rst"))
+}
 
 /// Query embeddings kept by default (`[index] query_cache`).
 pub const DEFAULT_QUERY_CACHE: usize = 256;
@@ -40,6 +55,8 @@ pub struct Config {
     pub query_cache: usize,
     /// Leiden resolution for communities: higher gives more, smaller communities.
     pub graph_resolution: f64,
+    /// Optional LLM layer for summaries and concepts.
+    pub graph_llm: crate::settings::GraphLlmSettings,
 }
 
 impl Default for Config {
@@ -52,6 +69,7 @@ impl Default for Config {
             rerank: RerankConfig::default(),
             query_cache: DEFAULT_QUERY_CACHE,
             graph_resolution: 1.0,
+            graph_llm: crate::settings::GraphLlmSettings::default(),
         }
     }
 }
@@ -101,6 +119,9 @@ pub struct IndexReport {
     /// continues where this one stopped.
     #[serde(default)]
     pub embed_pending: usize,
+    /// Set when LLM enrichment (summaries or concepts) failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_error: Option<String>,
     /// Communities after this run (computed again only when files changed).
     #[serde(default)]
     pub communities: usize,
@@ -165,6 +186,7 @@ pub struct Engine {
     pub(crate) graph: RwLock<Option<Arc<CodeGraph>>>,
     /// Query embeddings by `(model, query)`; `None` when `cfg.query_cache` is 0.
     pub(crate) query_cache: Option<Mutex<QueryCache>>,
+    pub(crate) llm: Option<crate::llm::Client>,
 }
 
 impl Engine {
@@ -186,6 +208,14 @@ impl Engine {
         if store.ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
             store.vectors.clear();
         }
+        let llm = if cfg.graph_llm.enabled {
+            let model = cfg.graph_llm.model.clone().ok_or_else(|| {
+                Error::Other(anyhow::anyhow!("graph.llm is enabled but no model is configured"))
+            })?;
+            Some(crate::llm::Client::from_env(model))
+        } else {
+            None
+        };
         let query_cache = NonZeroUsize::new(cfg.query_cache).map(|n| Mutex::new(LruCache::new(n)));
         Ok(Self {
             root,
@@ -199,7 +229,14 @@ impl Engine {
             symbols: RwLock::new(None),
             graph: RwLock::new(None),
             query_cache,
+            llm,
         })
+    }
+
+    /// Sets an explicit LLM client (e.g. pointing to a local test stub).
+    pub fn with_llm(mut self, client: crate::llm::Client) -> Self {
+        self.llm = Some(client);
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -319,6 +356,7 @@ impl Engine {
             }
             if !new_paths.contains(p.as_str()) {
                 batch.remove_file(p)?;
+                batch.remove_concepts(p)?;
             }
         }
         for (f, h, chunks, imports) in &fresh {
@@ -366,10 +404,11 @@ impl Engine {
         let mut communities = self.ledger.communities()?.len();
         if changed || (communities == 0 && !scanned.is_empty()) {
             let t = Instant::now();
-            communities = self.update_communities()?;
+            communities = self.update_communities(&mut report)?;
             report.graph_ms = t.elapsed().as_millis() as u64;
         }
         report.communities = communities;
+        self.enrich_concepts(&scanned, &added, &mut report)?;
         self.sync_vectors(changed, deadline, &mut report)?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
@@ -571,7 +610,7 @@ impl Engine {
     /// Each community of two or more files gets a summary chunk, replacing the last run's:
     /// lexical index first, then the ledger, like an index run; vectors follow in
     /// `sync_vectors`.
-    fn update_communities(&self) -> Result<usize> {
+    fn update_communities(&self, report: &mut IndexReport) -> Result<usize> {
         use crate::graph::summary;
         let graph = self.code_graph()?;
         let previous = self.ledger.community_files()?;
@@ -582,14 +621,57 @@ impl Engine {
             .filter_map(|c| c.summary_chunk)
             .collect();
         let mut communities = crate::graph::communities::detect(&graph, &previous, self.cfg.graph_resolution);
-        let summaries: Vec<Chunk> = communities
-            .iter_mut()
-            .filter_map(|c| {
-                let chunk = summary::summary_chunk(c)?;
-                c.summary_chunk = Some(chunk.id.clone());
-                Some(chunk)
-            })
-            .collect();
+
+        let mut summaries: Vec<Chunk> = Vec::new();
+        let mut new_cache: Vec<(String, String, String)> = Vec::new();
+
+        let use_llm_summaries =
+            self.cfg.graph_llm.enabled && self.cfg.graph_llm.summaries && self.llm.is_some();
+
+        for c in &mut communities {
+            let Some(mut chunk) = summary::summary_chunk(c) else {
+                continue;
+            };
+
+            if use_llm_summaries {
+                let llm = self.llm.as_ref().unwrap();
+                let model = llm.model();
+                let mut top_symbol_lines = Vec::new();
+                for sym in &c.top_symbols {
+                    if let Ok(Some(sc)) = self.ledger.chunk(&sym.chunk)
+                        && let Some(first_line) = sc.content.lines().find(|l| !l.trim().is_empty())
+                    {
+                        top_symbol_lines.push(format!("{}: {}", sym.name, first_line.trim()));
+                    }
+                }
+                let prompt = crate::llm::build_community_summary_prompt(&chunk.content, &top_symbol_lines);
+                let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
+
+                // After one failure the gateway is not asked again in this run: a down
+                // gateway must not cost one timeout per community.
+                let desc_res = match self.ledger.llm_cache(model, &prompt_hash)? {
+                    Some(cached) => Ok(cached),
+                    None if report.llm_error.is_some() => Err(()),
+                    None => match llm.complete(&prompt) {
+                        Ok(desc) => {
+                            new_cache.push((model.to_string(), prompt_hash, desc.clone()));
+                            Ok(desc)
+                        }
+                        Err(e) => {
+                            report.llm_error = Some(e.to_string());
+                            Err(())
+                        }
+                    },
+                };
+
+                if let Ok(desc) = desc_res {
+                    summary::append_llm_description(&mut chunk, &desc);
+                }
+            }
+
+            c.summary_chunk = Some(chunk.id.clone());
+            summaries.push(chunk);
+        }
 
         let mut lw = self.lexical.writer()?;
         for id in &old_summaries {
@@ -604,6 +686,9 @@ impl Engine {
         lw.commit()?;
 
         let mut batch = self.ledger.batch()?;
+        for (model, prompt_hash, desc) in new_cache {
+            batch.put_llm_cache(&model, &prompt_hash, &desc)?;
+        }
         for id in &old_summaries {
             batch.remove_chunk(id)?;
         }
@@ -613,6 +698,68 @@ impl Engine {
         batch.put_communities(&communities, &self.ledger.files()?)?;
         batch.commit()?;
         Ok(communities.len())
+    }
+
+    /// Extracts up to 8 concepts per Markdown/text file when `concepts` is enabled.
+    fn enrich_concepts(
+        &self,
+        scanned: &[(SourceFile, String)],
+        added: &BTreeSet<String>,
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        if !self.cfg.graph_llm.enabled || !self.cfg.graph_llm.concepts {
+            return Ok(());
+        }
+        let Some(llm) = &self.llm else {
+            return Ok(());
+        };
+        let model = llm.model();
+
+        let mut batch = self.ledger.batch()?;
+        for (f, _) in scanned {
+            if !is_prose(f) {
+                continue;
+            }
+            let is_new_or_modified = added.contains(&f.path);
+            let has_concepts = self.ledger.concepts(&f.path)?.is_some();
+            if !is_new_or_modified && has_concepts {
+                continue;
+            }
+            let Some(text) = read_text(&f.abs) else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+
+            let text: String = text.chars().take(CONCEPT_TEXT_CHARS).collect();
+            let prompt = crate::llm::build_concepts_prompt(&text);
+            let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
+
+            let raw_res = match self.ledger.llm_cache(model, &prompt_hash)? {
+                Some(cached) => Ok(cached),
+                None if report.llm_error.is_some() => Err(()),
+                None => match llm.complete_json(&prompt) {
+                    Ok(resp) => {
+                        batch.put_llm_cache(model, &prompt_hash, &resp)?;
+                        Ok(resp)
+                    }
+                    Err(e) => {
+                        report.llm_error = Some(e.to_string());
+                        Err(())
+                    }
+                },
+            };
+
+            if let Ok(resp) = raw_res
+                && let Some(concepts) = crate::llm::parse_concepts(&resp)
+            {
+                let json = serde_json::to_string(&concepts).map_err(crate::ledger::LedgerError::from)?;
+                batch.put_concepts(&f.path, &json)?;
+            }
+        }
+        batch.commit()?;
+        Ok(())
     }
 
     /// Deletes the whole index directory.
@@ -1104,5 +1251,199 @@ mod tests {
         let mut e = open(dir.path());
         e.index(false).unwrap();
         assert_eq!(e.lexical.len(), docs, "lexical documents must not be duplicated");
+    }
+
+    #[test]
+    fn llm_request_shape_and_enrichment() {
+        use crate::graph::query::Explanation;
+        let dir = project();
+        fs::write(
+            dir.path().join("pkg/sidecar/client.go"),
+            "package sidecar\n\nfunc Start(name string) string { return LocateBinary(name) }\n",
+        )
+        .unwrap();
+        let resp = r#"{"choices":[{"message":{"content":"[{\"name\": \"Testing\", \"description\": \"Test suite concept\"}]"}}]}"#;
+        let stub = crate::testutil::HttpStub::serve(resp);
+        let cfg = Config {
+            graph_llm: crate::settings::GraphLlmSettings {
+                enabled: true,
+                model: Some("test-model".into()),
+                summaries: true,
+                concepts: true,
+            },
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
+            .unwrap()
+            .with_llm(crate::llm::Client::new(
+                Some(stub.url.clone()),
+                Some("secret-key".into()),
+                "test-model".into(),
+            ));
+        let r = e.index(false).unwrap();
+        assert_eq!(r.llm_error, None);
+
+        // Check captured requests
+        assert!(stub.request_count() >= 1);
+        let req = stub.request();
+        assert!(
+            req.head
+                .to_ascii_lowercase()
+                .contains("authorization: bearer secret-key")
+        );
+        assert_eq!(req.body["model"], "test-model");
+        assert_eq!(req.body["temperature"], 0.0);
+
+        // Verify concepts were extracted and exposed on graph_explain
+        let expl = e.graph_explain("README.md").unwrap();
+        assert!(!expl.is_empty());
+        let Explanation::File { concepts, .. } = &expl[0] else {
+            panic!("expected File explanation");
+        };
+        assert_eq!(concepts.len(), 1);
+        assert_eq!(concepts[0].name, "Testing");
+        assert_eq!(concepts[0].description, "Test suite concept");
+
+        // Verify summary chunk has the appended text
+        let mut found_summary = false;
+        e.ledger
+            .for_each_chunk(&mut |c| {
+                if c.path.starts_with("@community/") {
+                    found_summary = true;
+                    assert!(c.content.contains("Testing"));
+                }
+            })
+            .unwrap();
+        assert!(found_summary);
+    }
+
+    #[test]
+    fn llm_caching_makes_no_requests_on_second_run() {
+        let dir = project();
+        let resp = r#"{"choices":[{"message":{"content":"[{\"name\": \"Testing\", \"description\": \"Test suite concept\"}]"}}]}"#;
+        let stub = crate::testutil::HttpStub::serve(resp);
+        let cfg = Config {
+            graph_llm: crate::settings::GraphLlmSettings {
+                enabled: true,
+                model: Some("test-model".into()),
+                summaries: true,
+                concepts: true,
+            },
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
+            .unwrap()
+            .with_llm(crate::llm::Client::new(
+                Some(stub.url.clone()),
+                None,
+                "test-model".into(),
+            ));
+        e.index(false).unwrap();
+        let initial_count = stub.request_count();
+        assert!(initial_count > 0);
+
+        // Second index run: unchanged files and communities
+        let r2 = e.index(false).unwrap();
+        assert_eq!(r2.llm_error, None);
+        assert_eq!(
+            stub.request_count(),
+            initial_count,
+            "second index run must make no requests"
+        );
+
+        // Full rebuild: llm_cache persists in redb, so no requests
+        let r3 = e.index(true).unwrap();
+        assert_eq!(r3.llm_error, None);
+        assert_eq!(
+            stub.request_count(),
+            initial_count,
+            "full index rebuild must reuse llm_cache and make no requests"
+        );
+    }
+
+    #[test]
+    fn llm_failure_keeps_deterministic_summary() {
+        let dir = project();
+        // A second file calling into the first makes a community of two, with a summary.
+        fs::write(
+            dir.path().join("pkg/sidecar/client.go"),
+            "package sidecar\n\nfunc Start(name string) string { return LocateBinary(name) }\n",
+        )
+        .unwrap();
+        let stub = crate::testutil::HttpStub::serve_status(
+            500,
+            "Internal Server Error",
+            r#"{"error": "overloaded"}"#,
+        );
+        let cfg = Config {
+            graph_llm: crate::settings::GraphLlmSettings {
+                enabled: true,
+                model: Some("test-model".into()),
+                summaries: true,
+                concepts: true,
+            },
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
+            .unwrap()
+            .with_llm(crate::llm::Client::new(
+                Some(stub.url.clone()),
+                None,
+                "test-model".into(),
+            ));
+        let r = e.index(false).unwrap();
+        assert!(r.llm_error.is_some(), "must record llm_error");
+
+        // The deterministic summary chunk is preserved
+        let mut found_summary = false;
+        e.ledger
+            .for_each_chunk(&mut |c| {
+                if c.path.starts_with("@community/") {
+                    found_summary = true;
+                    assert!(c.content.contains("Files:"));
+                }
+            })
+            .unwrap();
+        assert!(found_summary);
+    }
+
+    #[test]
+    fn llm_disabled_makes_no_requests() {
+        let dir = project();
+        let stub = crate::testutil::HttpStub::serve(r#"{"choices":[]}"#);
+        let cfg = Config {
+            graph_llm: crate::settings::GraphLlmSettings {
+                enabled: false,
+                model: Some("test-model".into()),
+                summaries: true,
+                concepts: true,
+            },
+            ..Config::default()
+        };
+        let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
+            .unwrap()
+            .with_llm(crate::llm::Client::new(
+                Some(stub.url.clone()),
+                None,
+                "test-model".into(),
+            ));
+        let r = e.index(false).unwrap();
+        assert_eq!(r.llm_error, None);
+        assert_eq!(stub.request_count(), 0);
+    }
+
+    #[test]
+    fn llm_config_validation() {
+        let dir = project();
+        let cfg = Config {
+            graph_llm: crate::settings::GraphLlmSettings {
+                enabled: true,
+                model: None,
+                summaries: true,
+                concepts: true,
+            },
+            ..Config::default()
+        };
+        assert!(Engine::open(dir.path(), cfg).is_err());
     }
 }

@@ -9,6 +9,7 @@ use serde::Serialize;
 use super::communities::{Community, TopSymbol};
 use super::{CodeGraph, EdgeKind, Site};
 use crate::engine::{Engine, Result};
+pub use crate::llm::Concept;
 
 /// FEAT-045 calls a symbol with more than 20 users a god node.
 pub const GOD_NODE_IN_DEGREE: usize = 21;
@@ -74,6 +75,9 @@ pub enum Explanation {
     File {
         path: String,
         community: Option<CommunityRef>,
+        /// Concepts extracted from Markdown or text files.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        concepts: Vec<crate::llm::Concept>,
         /// Symbols defined here, most users first.
         defines: Vec<TopSymbol>,
         imports: Vec<String>,
@@ -197,12 +201,22 @@ impl Engine {
             .collect())
     }
 
+    /// Loads stored concepts for a file path (empty if none or unindexed).
+    pub fn concepts_for_file(&self, path: &str) -> Result<Vec<crate::llm::Concept>> {
+        let Some(json) = self.ledger.concepts(path)? else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_str(&json).unwrap_or_default())
+    }
+
     /// Explains a symbol (every definition of that name, up to five) or a file.
     pub fn graph_explain(&self, target: &str) -> Result<Vec<Explanation>> {
         let g = self.code_graph()?;
         let comms = Communities::load(self)?;
         if let Some(f) = g.file_id(target) {
-            return Ok(vec![explain_file(&g, f, &comms)]);
+            let path = g.file_name(f);
+            let concepts = self.concepts_for_file(path)?;
+            return Ok(vec![explain_file(&g, f, &comms, concepts)]);
         }
         let mut nodes: Vec<u32> = g
             .symbols_named(target)
@@ -476,7 +490,12 @@ fn explain_symbol(g: &CodeGraph, s: u32, comms: &Communities) -> Explanation {
     }
 }
 
-fn explain_file(g: &CodeGraph, f: u32, comms: &Communities) -> Explanation {
+fn explain_file(
+    g: &CodeGraph,
+    f: u32,
+    comms: &Communities,
+    concepts: Vec<crate::llm::Concept>,
+) -> Explanation {
     let path = g.file_name(f).to_string();
     let mut defines: Vec<u32> = (0..g.symbol_count() as u32)
         .filter(|&s| g.symbol_file(s) == f && !g.sites(s).is_empty())
@@ -537,6 +556,7 @@ fn explain_file(g: &CodeGraph, f: u32, comms: &Communities) -> Explanation {
         external_imports: g.external_imports(f).to_vec(),
         path,
         community,
+        concepts,
         defines,
         imports,
         imported_by,

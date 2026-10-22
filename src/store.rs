@@ -26,6 +26,8 @@ pub trait LedgerStore: Send + Sync {
     fn community_of_chunk(&self, chunk: &str) -> crate::ledger::Result<Option<u32>>;
     fn community(&self, id: u32) -> crate::ledger::Result<Option<Community>>;
     fn communities(&self) -> crate::ledger::Result<Vec<Community>>;
+    fn llm_cache(&self, model: &str, prompt_hash: &str) -> crate::ledger::Result<Option<String>>;
+    fn concepts(&self, path: &str) -> crate::ledger::Result<Option<String>>;
     fn batch(&self) -> crate::ledger::Result<Box<dyn LedgerWrite + '_>>;
 }
 
@@ -36,6 +38,9 @@ pub trait LedgerWrite {
     fn put_chunk(&mut self, chunk: &Chunk) -> crate::ledger::Result<()>;
     fn remove_chunk(&mut self, id: &str) -> crate::ledger::Result<()>;
     fn put_embedding(&mut self, key: &str, vector: &[f32]) -> crate::ledger::Result<()>;
+    fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> crate::ledger::Result<()>;
+    fn put_concepts(&mut self, path: &str, json: &str) -> crate::ledger::Result<()>;
+    fn remove_concepts(&mut self, path: &str) -> crate::ledger::Result<()>;
     fn set_meta(&mut self, key: &str, value: &str) -> crate::ledger::Result<()>;
     fn put_communities(
         &mut self,

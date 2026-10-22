@@ -176,6 +176,12 @@
         },
         "summary": {
           "type": "string"
+        },
+        "concepts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/concept"
+          }
         }
       }
     },
@@ -246,6 +252,21 @@
         },
         "in_degree": {
           "type": "integer"
+        }
+      }
+    },
+    "concept": {
+      "type": "object",
+      "required": [
+        "name",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
         }
       }
     }

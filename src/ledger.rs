@@ -18,9 +18,16 @@ const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
 const COMMUNITY_FILES: TableDefinition<&str, u32> = TableDefinition::new("community_files");
 const COMMUNITY_CHUNKS: TableDefinition<&str, u32> = TableDefinition::new("community_chunks");
 const COMMUNITIES: TableDefinition<u32, &[u8]> = TableDefinition::new("communities");
+const LLM_CACHE: TableDefinition<&str, &str> = TableDefinition::new("llm_cache");
+const CONCEPTS: TableDefinition<&str, &str> = TableDefinition::new("concepts");
 
 /// redb page cache size.
 const CACHE_BYTES: usize = 8 << 20;
+
+/// Composite key for the LLM cache table (`model ‖ prompt_hash`).
+pub fn llm_cache_key(model: &str, prompt_hash: &str) -> String {
+    format!("{model}\u{0}{prompt_hash}")
+}
 
 /// Ledger schema version, stored under `meta.schema`. Version 2 added call references
 /// and file imports; an older ledger is cleared on open (embeddings are kept) so the next
@@ -74,6 +81,8 @@ impl Ledger {
         txn.open_table(COMMUNITY_FILES)?;
         txn.open_table(COMMUNITY_CHUNKS)?;
         txn.open_table(COMMUNITIES)?;
+        txn.open_table(LLM_CACHE)?;
+        txn.open_table(CONCEPTS)?;
         let mut meta = txn.open_table(META)?;
         let stored = meta.get("schema")?.map(|v| v.value().to_string());
         if stored.is_some_and(|v| v != SCHEMA_VERSION) {
@@ -81,6 +90,7 @@ impl Ledger {
             drop(meta);
             txn.open_table(FILES)?.retain(|_, _| false)?;
             txn.open_table(CHUNKS)?.retain(|_, _| false)?;
+            txn.open_table(CONCEPTS)?.retain(|_, _| false)?;
             meta = txn.open_table(META)?;
         }
         meta.insert("schema", SCHEMA_VERSION)?;
@@ -202,6 +212,21 @@ impl Ledger {
         Ok(txn.open_table(EMBEDDINGS)?.len()?)
     }
 
+    /// A cached LLM completion for `(model, prompt_hash)`.
+    pub fn llm_cache(&self, model: &str, prompt_hash: &str) -> Result<Option<String>> {
+        let key = llm_cache_key(model, prompt_hash);
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(LLM_CACHE)?;
+        Ok(table.get(key.as_str())?.map(|v| v.value().to_string()))
+    }
+
+    /// Extracted concepts for a file path (JSON list).
+    pub fn concepts(&self, path: &str) -> Result<Option<String>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CONCEPTS)?;
+        Ok(table.get(path)?.map(|v| v.value().to_string()))
+    }
+
     /// Starts a write batch; nothing is visible until [`LedgerBatch::commit`].
     pub fn batch(&self) -> Result<LedgerBatch> {
         Ok(LedgerBatch {
@@ -247,6 +272,22 @@ impl LedgerBatch {
         Ok(())
     }
 
+    pub fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> Result<()> {
+        let key = llm_cache_key(model, prompt_hash);
+        self.txn.open_table(LLM_CACHE)?.insert(key.as_str(), value)?;
+        Ok(())
+    }
+
+    pub fn put_concepts(&mut self, path: &str, json: &str) -> Result<()> {
+        self.txn.open_table(CONCEPTS)?.insert(path, json)?;
+        Ok(())
+    }
+
+    pub fn remove_concepts(&mut self, path: &str) -> Result<()> {
+        self.txn.open_table(CONCEPTS)?.remove(path)?;
+        Ok(())
+    }
+
     pub fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
         self.txn.open_table(META)?.insert(key, value)?;
         Ok(())
@@ -276,10 +317,11 @@ impl LedgerBatch {
         Ok(())
     }
 
-    /// Removes every file and chunk (embeddings are kept: they are keyed by content).
+    /// Removes every file and chunk (embeddings and LLM cache are kept: they are keyed by content).
     pub fn clear_index(&mut self) -> Result<()> {
         self.txn.open_table(FILES)?.retain(|_, _| false)?;
         self.txn.open_table(CHUNKS)?.retain(|_, _| false)?;
+        self.txn.open_table(CONCEPTS)?.retain(|_, _| false)?;
         Ok(())
     }
 
@@ -348,6 +390,14 @@ impl LedgerStore for Ledger {
         self.communities()
     }
 
+    fn llm_cache(&self, model: &str, prompt_hash: &str) -> Result<Option<String>> {
+        self.llm_cache(model, prompt_hash)
+    }
+
+    fn concepts(&self, path: &str) -> Result<Option<String>> {
+        self.concepts(path)
+    }
+
     fn batch(&self) -> Result<Box<dyn LedgerWrite + '_>> {
         Ok(Box::new(self.batch()?))
     }
@@ -372,6 +422,18 @@ impl LedgerWrite for LedgerBatch {
 
     fn put_embedding(&mut self, key: &str, vector: &[f32]) -> Result<()> {
         self.put_embedding(key, vector)
+    }
+
+    fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> Result<()> {
+        self.put_llm_cache(model, prompt_hash, value)
+    }
+
+    fn put_concepts(&mut self, path: &str, json: &str) -> Result<()> {
+        self.put_concepts(path, json)
+    }
+
+    fn remove_concepts(&mut self, path: &str) -> Result<()> {
+        self.remove_concepts(path)
     }
 
     fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
@@ -482,5 +544,39 @@ mod tests {
         assert_eq!(ledger.meta("merkle_root").unwrap(), None);
         assert_eq!(ledger.embedding_count().unwrap(), 1);
         assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn round_trips_llm_cache_and_concepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.redb");
+        {
+            let ledger = Ledger::open(&path).unwrap();
+            let mut b = ledger.batch().unwrap();
+            b.put_llm_cache("gpt-4o", "hash123", "Community description")
+                .unwrap();
+            b.put_concepts("docs/spec.md", r#"[{"name":"RAG","description":"Retrieval"}]"#)
+                .unwrap();
+            b.commit().unwrap();
+        }
+        let ledger = Ledger::open(&path).unwrap();
+        assert_eq!(
+            ledger.llm_cache("gpt-4o", "hash123").unwrap().as_deref(),
+            Some("Community description")
+        );
+        assert_eq!(
+            ledger.concepts("docs/spec.md").unwrap().as_deref(),
+            Some(r#"[{"name":"RAG","description":"Retrieval"}]"#)
+        );
+
+        // clear_index clears concepts but preserves llm_cache
+        let mut b = ledger.batch().unwrap();
+        b.clear_index().unwrap();
+        b.commit().unwrap();
+        assert_eq!(ledger.concepts("docs/spec.md").unwrap(), None);
+        assert_eq!(
+            ledger.llm_cache("gpt-4o", "hash123").unwrap().as_deref(),
+            Some("Community description")
+        );
     }
 }
