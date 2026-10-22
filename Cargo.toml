@@ -60,6 +60,8 @@ tempfile = "3"
 
 [features]
 default = []
+# Approximate nearest-neighbour index for large corpora.
+hnsw = []
 # In-process static embeddings (model2vec), for fully offline indexing.
 model2vec = ["dep:model2vec-rs"]
 # In-process safetensors encoders (BERT, NomicBERT, JinaBERT) on candle.

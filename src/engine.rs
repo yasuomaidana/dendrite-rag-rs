@@ -16,6 +16,7 @@ use crate::embed::{EmbedConfig, Embedder};
 use crate::graph::CodeGraph;
 use crate::ledger::FileEntry;
 use crate::rerank::{RerankConfig, Reranker};
+use crate::settings::VectorIndexChoice;
 use crate::store::{LedgerStore, LexicalStore, Store};
 use crate::symbols::SymbolIndex;
 use crate::vector::VectorIndex;
@@ -40,6 +41,10 @@ pub struct Config {
     pub query_cache: usize,
     /// Leiden resolution for communities: higher gives more, smaller communities.
     pub graph_resolution: f64,
+    /// Vector index backend: auto, flat or hnsw.
+    pub vector_index: VectorIndexChoice,
+    /// Size of dynamic candidate list for HNSW search.
+    pub hnsw_ef_search: usize,
 }
 
 impl Default for Config {
@@ -52,6 +57,8 @@ impl Default for Config {
             rerank: RerankConfig::default(),
             query_cache: DEFAULT_QUERY_CACHE,
             graph_resolution: 1.0,
+            vector_index: VectorIndexChoice::Auto,
+            hnsw_ef_search: 128,
         }
     }
 }
@@ -181,7 +188,7 @@ impl Engine {
             .index_dir
             .clone()
             .unwrap_or_else(|| root.join(".dendrite").join("rag"));
-        let mut store = Store::open_local(&dir)?;
+        let mut store = Store::open_local_with(&dir, cfg.vector_index, cfg.hnsw_ef_search)?;
         // Vectors from another model are useless: rebuild them (from the cache when possible).
         if store.ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
             store.vectors.clear();

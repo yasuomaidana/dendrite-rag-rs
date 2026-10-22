@@ -7,6 +7,7 @@ use crate::chunk::Chunk;
 use crate::graph::communities::Community;
 use crate::ledger::{FileEntry, Ledger};
 use crate::lexical::LexicalIndex;
+use crate::settings::VectorIndexChoice;
 use crate::vector::{FlatIndex, VectorIndex};
 
 pub type Result<T> = crate::engine::Result<T>;
@@ -73,11 +74,19 @@ pub struct Store {
 
 /// The local vector index file inside the index directory.
 pub(crate) const VECTORS_FILE: &str = "vectors.bin";
+/// The HNSW graph index file inside the index directory.
+#[cfg(feature = "hnsw")]
+pub(crate) const VECTORS_HNSW_FILE: &str = "vectors.hnsw";
 
 impl Store {
     /// Opens the default local storage backend in `dir`: redb ledger, Tantivy lexical index,
     /// and `vectors.bin` flat index (self-healing from cache if corrupt).
     pub fn open_local(dir: &Path) -> Result<Self> {
+        Self::open_local_with(dir, VectorIndexChoice::Auto, 64)
+    }
+
+    /// Opens the local storage backend in `dir` with the chosen vector index backend.
+    pub fn open_local_with(dir: &Path, choice: VectorIndexChoice, ef_search: usize) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let ignore = dir.join(".gitignore");
         if !ignore.exists() {
@@ -86,7 +95,7 @@ impl Store {
         let ledger = Ledger::open(&dir.join("ledger.redb"))?;
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
         let vectors_path = dir.join(VECTORS_FILE);
-        let vectors = match FlatIndex::load(&vectors_path) {
+        let flat = match FlatIndex::load(&vectors_path) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!(
@@ -96,10 +105,45 @@ impl Store {
                 FlatIndex::new().with_path(&vectors_path)
             }
         };
+
+        let vectors: Box<dyn VectorIndex> = match choice {
+            VectorIndexChoice::Flat => Box::new(flat),
+            VectorIndexChoice::Hnsw => {
+                #[cfg(feature = "hnsw")]
+                {
+                    let hnsw_path = dir.join(VECTORS_HNSW_FILE);
+                    let hnsw = crate::vector::HnswIndex::load(&hnsw_path, flat, ef_search)?;
+                    Box::new(hnsw)
+                }
+                #[cfg(not(feature = "hnsw"))]
+                {
+                    let _ = ef_search;
+                    return Err(crate::engine::Error::Other(anyhow::anyhow!(
+                        "vector index 'hnsw' requires cargo feature 'hnsw'"
+                    )));
+                }
+            }
+            VectorIndexChoice::Auto => {
+                #[cfg(feature = "hnsw")]
+                if flat.len() > 100_000 {
+                    let hnsw_path = dir.join(VECTORS_HNSW_FILE);
+                    let hnsw = crate::vector::HnswIndex::load(&hnsw_path, flat, ef_search)?;
+                    Box::new(hnsw)
+                } else {
+                    Box::new(flat)
+                }
+                #[cfg(not(feature = "hnsw"))]
+                {
+                    let _ = ef_search;
+                    Box::new(flat)
+                }
+            }
+        };
+
         Ok(Self {
             ledger: Box::new(ledger),
             lexical: Box::new(lexical),
-            vectors: Box::new(vectors),
+            vectors,
         })
     }
 }
@@ -114,6 +158,21 @@ mod tests {
         let store = Store::open_local(dir.path()).unwrap();
         assert_eq!(store.ledger.chunk_count().unwrap(), 0);
         assert_eq!(store.lexical.len(), 0);
+        assert_eq!(store.vectors.len(), 0);
+    }
+
+    #[cfg(not(feature = "hnsw"))]
+    #[test]
+    fn open_local_rejects_hnsw_without_feature() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64).is_err());
+    }
+
+    #[cfg(feature = "hnsw")]
+    #[test]
+    fn open_local_opens_hnsw_when_feature_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64).unwrap();
         assert_eq!(store.vectors.len(), 0);
     }
 }

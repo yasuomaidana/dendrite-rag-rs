@@ -42,10 +42,11 @@ The cache makes the first embedding a one-time cost per content hash.
 
 Query vectors are cached too: an LRU of 256 entries (`[index] query_cache`, `DENDRITE_RAG_QUERY_CACHE`; 0 disables it) keyed by `(model, query text)`, so a repeated query skips the embedder, which is almost all of dense query latency.
 
-**Why not HNSW (yet).**
-- At code-repository scale (≤ ~100k chunks) an exact scan meets the latency target with perfect recall. Vectors are flat int8 today, HNSW planned (DRAG-37).
-- HNSW needs its own `f32` copy of every vector plus the graph, which breaks the 200 MB budget at 50k chunks.
-- It stays an option behind the `VectorIndex` trait for corpora where a scan exceeds the latency target.
+**Approximate index: HNSW (`feature = "hnsw"`, DRAG-37).**
+- `HnswIndex` (M = 16, 32 on layer 0, ef_construction = 200) sits behind the `VectorIndex` trait and wraps the `FlatIndex`: distances are computed over the same int8 components and scales, so no second `f32` copy is kept; the graph (neighbour lists, about 150–250 bytes per vector, estimated) is the only addition.
+- `[index] vector_index = "auto" | "flat" | "hnsw"` (`DENDRITE_RAG_VECTOR_INDEX`); `auto` switches to HNSW above 100,000 vectors when the feature is compiled, else stays flat. `[index] hnsw_ef_search` (`DENDRITE_RAG_HNSW_EF_SEARCH`, default 128) trades recall for speed.
+- The graph persists to `vectors.hnsw` ([store.md](store.md)); a missing or corrupt file is rebuilt from `vectors.bin`. Deleted vectors are tombstones until they exceed 20% of the nodes, then the graph is rebuilt.
+- Measured (`recall_report`, 20,000 unit vectors of 64 dimensions, 200 queries, Apple Silicon, release build): recall@10 of the engine's 40-candidate shortlist rescored with exact vectors is 0.824 / **0.954** / 0.990 at ef_search 64 / **128** / 200 on uniform random vectors, and 0.908 / **0.974** / 0.991 on clustered ones, which resemble real embeddings more. At this size the parallel flat scan is faster (62 µs per query against 145–210 µs at ef_search 128); the flat scan grows linearly, so the break-even is estimated near 100,000 vectors, which is why `auto` switches there. That threshold is an estimate, not yet measured on a corpus of that size.
 
 ## Symbol-name ranking
 

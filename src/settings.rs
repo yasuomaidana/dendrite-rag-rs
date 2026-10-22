@@ -52,11 +52,47 @@ pub struct GraphSettings {
     pub resolution: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorIndexChoice {
+    #[default]
+    Auto,
+    Flat,
+    Hnsw,
+}
+
+impl VectorIndexChoice {
+    pub const ALL: [VectorIndexChoice; 3] = [
+        VectorIndexChoice::Auto,
+        VectorIndexChoice::Flat,
+        VectorIndexChoice::Hnsw,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Flat => "flat",
+            Self::Hnsw => "hnsw",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "flat" => Some(Self::Flat),
+            "hnsw" => Some(Self::Hnsw),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexSettings {
     pub max_file_bytes: Option<u64>,
     pub query_cache: Option<usize>,
+    pub vector_index: Option<VectorIndexChoice>,
+    pub hnsw_ef_search: Option<usize>,
 }
 
 impl Settings {
@@ -82,7 +118,11 @@ impl Settings {
     }
 
     pub fn parse(text: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(text)?)
+        let s: Self = toml::from_str(text)?;
+        if s.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
+        Ok(s)
     }
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
@@ -174,6 +214,25 @@ impl Settings {
         {
             bail!("graph.resolution must be a positive number, got {r}");
         }
+        if let Some(v) = var("DENDRITE_RAG_VECTOR_INDEX") {
+            let Some(choice) = VectorIndexChoice::parse(&v) else {
+                let names: Vec<_> = VectorIndexChoice::ALL.iter().map(|c| c.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_VECTOR_INDEX={v:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            self.index.vector_index = Some(choice);
+        }
+        if let Some(n) = var("DENDRITE_RAG_HNSW_EF_SEARCH") {
+            self.index.hnsw_ef_search = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_HNSW_EF_SEARCH={n:?}"))?,
+            );
+        }
+        if self.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
         Ok(())
     }
 
@@ -192,6 +251,12 @@ impl Settings {
         }
         if let Some(r) = self.graph.resolution {
             cfg.graph_resolution = r;
+        }
+        if let Some(vi) = self.index.vector_index {
+            cfg.vector_index = vi;
+        }
+        if let Some(ef) = self.index.hnsw_ef_search {
+            cfg.hnsw_ef_search = ef;
         }
         cfg
     }
@@ -351,5 +416,57 @@ model = "BAAI/bge-reranker-base"
             s.apply_env(env(&[("DENDRITE_RAG_GRAPH_RESOLUTION", "0")]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn parses_vector_index_and_ef_search_and_applies_env() {
+        let toml_text = r#"
+[index]
+vector_index = "flat"
+hnsw_ef_search = 128
+"#;
+        let mut s = Settings::parse(toml_text).unwrap();
+        assert_eq!(s.index.vector_index, Some(VectorIndexChoice::Flat));
+        assert_eq!(s.index.hnsw_ef_search, Some(128));
+        let cfg = s.config();
+        assert_eq!(cfg.vector_index, VectorIndexChoice::Flat);
+        assert_eq!(cfg.hnsw_ef_search, 128);
+
+        s.apply_env(env(&[
+            ("DENDRITE_RAG_VECTOR_INDEX", "auto"),
+            ("DENDRITE_RAG_HNSW_EF_SEARCH", "256"),
+        ]))
+        .unwrap();
+        assert_eq!(s.index.vector_index, Some(VectorIndexChoice::Auto));
+        assert_eq!(s.index.hnsw_ef_search, Some(256));
+        assert_eq!(s.config().vector_index, VectorIndexChoice::Auto);
+        assert_eq!(s.config().hnsw_ef_search, 256);
+
+        // Unknown vector index
+        let mut s2 = Settings::default();
+        assert!(
+            s2.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "invalid")]))
+                .is_err()
+        );
+
+        #[cfg(not(feature = "hnsw"))]
+        {
+            let mut s3 = Settings::default();
+            assert!(
+                s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
+                    .is_err()
+            );
+            assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_err());
+        }
+
+        #[cfg(feature = "hnsw")]
+        {
+            let mut s3 = Settings::default();
+            assert!(
+                s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
+                    .is_ok()
+            );
+            assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_ok());
+        }
     }
 }
