@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/ask.json",
+  "title": "ask",
+  "description": "Answers a question from the project: context pack (or top hits), local model through the LiteLLM gateway, optional hybrid refinement or paid model. Never pays without allow_paid or mode paid: a failed local model returns escalation_needed.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "question"
+    ],
+    "properties": {
+      "root": {
+        "type": "string"
+      },
+      "question": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "local",
+          "hybrid",
+          "paid"
+        ],
+        "default": "local"
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Answer from the top hits instead of a 2,500-token context pack"
+      },
+      "local_model": {
+        "type": "string"
+      },
+      "paid_model": {
+        "type": "string"
+      },
+      "allow_paid": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "answer",
+      "source_tier",
+      "model",
+      "escalation_needed",
+      "escalated",
+      "prompt_tokens",
+      "output_tokens",
+      "hits"
+    ],
+    "properties": {
+      "answer": {
+        "type": "string"
+      },
+      "source_tier": {
+        "type": "string",
+        "enum": [
+          "local-rag",
+          "hybrid",
+          "paid-cloud",
+          ""
+        ]
+      },
+      "model": {
+        "type": "string"
+      },
+      "local_draft": {
+        "type": "string"
+      },
+      "escalation_needed": {
+        "type": "boolean"
+      },
+      "local_error": {
+        "type": "string"
+      },
+      "escalated": {
+        "type": "boolean"
+      },
+      "prompt_tokens": {
+        "type": "integer"
+      },
+      "output_tokens": {
+        "type": "integer"
+      },
+      "hits": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer"
+        },
+        "end_line": {
+          "type": "integer"
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

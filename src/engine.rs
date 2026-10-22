@@ -64,6 +64,7 @@ pub struct Config {
     pub hnsw_ef_search: usize,
     pub fusion: crate::retrieve::FusionConfig,
     pub storage: crate::store::StorageConfig,
+    pub ask: crate::settings::AskSettings,
 }
 
 impl Default for Config {
@@ -81,6 +82,7 @@ impl Default for Config {
             hnsw_ef_search: 128,
             fusion: Default::default(),
             storage: Default::default(),
+            ask: Default::default(),
         }
     }
 }

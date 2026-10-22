@@ -129,6 +129,13 @@ struct PushParams {
 }
 
 #[derive(Deserialize)]
+struct AskParams {
+    root: String,
+    #[serde(flatten)]
+    request: crate::ask::AskRequest,
+}
+
+#[derive(Deserialize)]
 struct RankParams {
     root: String,
     query: String,
@@ -341,6 +348,15 @@ impl Handler for Server {
                     .search_history(&p.query, p.top_k)
                     .map_err(history_error)?;
                 Ok(json!({ "hits": hits }))
+            }
+            "ask" => {
+                let p: AskParams = rpc::params(params)?;
+                let gateway = crate::llm::Client::new(None, None, String::new());
+                to_value(
+                    self.indexed(&p.root)?
+                        .ask(&p.request, &gateway)
+                        .map_err(engine_error)?,
+                )
             }
             "rank" => {
                 let p: RankParams = rpc::params(params)?;

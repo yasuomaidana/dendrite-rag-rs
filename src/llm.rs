@@ -47,6 +47,24 @@ struct ResponseFormat {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Usage,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Usage {
+    #[serde(default)]
+    prompt_tokens: usize,
+    #[serde(default)]
+    completion_tokens: usize,
+}
+
+/// An answer with the tokens it cost.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Completion {
+    pub text: String,
+    pub prompt_tokens: usize,
+    pub output_tokens: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,13 +156,43 @@ impl Client {
     }
 
     fn chat(&self, prompt: &str, json_mode: bool) -> Result<String> {
+        Ok(self.send(&self.model, None, prompt, 0.0, json_mode)?.text)
+    }
+
+    /// One chat completion with `model`, an optional system prompt and a temperature.
+    pub fn chat_with(
+        &self,
+        model: &str,
+        system: Option<&str>,
+        prompt: &str,
+        temperature: f32,
+    ) -> Result<Completion> {
+        self.send(model, system, prompt, temperature, false)
+    }
+
+    fn send(
+        &self,
+        model: &str,
+        system: Option<&str>,
+        prompt: &str,
+        temperature: f32,
+        json_mode: bool,
+    ) -> Result<Completion> {
+        let mut messages = Vec::with_capacity(2);
+        if let Some(system) = system {
+            messages.push(ChatMessage {
+                role: "system",
+                content: system,
+            });
+        }
+        messages.push(ChatMessage {
+            role: "user",
+            content: prompt,
+        });
         let req_body = ChatRequest {
-            model: &self.model,
-            messages: vec![ChatMessage {
-                role: "user",
-                content: prompt,
-            }],
-            temperature: 0.0,
+            model,
+            messages,
+            temperature,
             response_format: if json_mode {
                 Some(ResponseFormat { kind: "json_object" })
             } else {
@@ -173,16 +221,22 @@ impl Client {
             .read_json()
             .map_err(|e| LlmError::Response(format!("{}: {e}", self.url)))?;
 
+        let usage = body.usage;
         let choice = body
             .choices
             .into_iter()
             .next()
             .ok_or_else(|| LlmError::Response(format!("{}: response had no choices", self.url)))?;
 
-        choice
+        let text = choice
             .message
             .content
-            .ok_or_else(|| LlmError::Response(format!("{}: response choice had no content", self.url)))
+            .ok_or_else(|| LlmError::Response(format!("{}: response choice had no content", self.url)))?;
+        Ok(Completion {
+            text,
+            prompt_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+        })
     }
 }
 

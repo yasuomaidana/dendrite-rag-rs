@@ -65,9 +65,18 @@ pub struct Settings {
     pub graph: GraphSettings,
     pub fusion: crate::retrieve::FusionConfig,
     pub storage: StorageSettings,
+    pub ask: AskSettings,
     /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
     #[serde(skip)]
     pub pg_url: Option<String>,
+}
+
+/// `[ask]`: the gateway models `ask` uses (`docs/specs/ask.md`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AskSettings {
+    pub local_model: Option<String>,
+    pub paid_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -275,6 +284,8 @@ impl Settings {
             self.storage.mode = Some(mode);
         }
         set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
+        set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
+        set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
         set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
         if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
             self.graph.resolution = Some(
@@ -363,6 +374,7 @@ impl Settings {
             cfg.hnsw_ef_search = ef;
         }
         cfg.fusion = self.fusion;
+        cfg.ask = self.ask.clone();
         cfg.storage = crate::store::StorageConfig {
             mode: self.storage.mode.unwrap_or_default(),
             repo: self.storage.repo.clone(),
