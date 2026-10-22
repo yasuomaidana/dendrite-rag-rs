@@ -21,6 +21,10 @@
 //! symbol = 1.5
 //! community = 0.0               # boost for code in the best-matching communities
 //!
+//! [storage]
+//! mode = "local"                # local (default) | remote (shared PostgreSQL) | edge
+//! # repo = "github.com/acme/app" # name in the shared tier; default: the origin URL
+//!
 //! [graph]
 //! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
 //! ```
@@ -28,7 +32,8 @@
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`,
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
+//! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
 //! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
@@ -52,6 +57,17 @@ pub struct Settings {
     pub index: IndexSettings,
     pub graph: GraphSettings,
     pub fusion: crate::retrieve::FusionConfig,
+    pub storage: StorageSettings,
+    /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
+    #[serde(skip)]
+    pub pg_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageSettings {
+    pub mode: Option<crate::store::StorageMode>,
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -234,6 +250,14 @@ impl Settings {
                 bail!("fusion.{name} must be a non-negative number, got {w}");
             }
         }
+        if let Some(m) = var("DENDRITE_RAG_STORAGE_MODE") {
+            let Some(mode) = crate::store::StorageMode::parse(&m) else {
+                bail!("DENDRITE_RAG_STORAGE_MODE={m:?}: expected local, remote or edge");
+            };
+            self.storage.mode = Some(mode);
+        }
+        set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
+        set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
         if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
             self.graph.resolution = Some(
                 r.parse()
@@ -290,6 +314,11 @@ impl Settings {
             cfg.hnsw_ef_search = ef;
         }
         cfg.fusion = self.fusion;
+        cfg.storage = crate::store::StorageConfig {
+            mode: self.storage.mode.unwrap_or_default(),
+            repo: self.storage.repo.clone(),
+            pg_url: self.pg_url.clone(),
+        };
         cfg
     }
 }

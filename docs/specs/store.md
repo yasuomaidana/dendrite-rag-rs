@@ -66,3 +66,17 @@ A content-addressed store for analysis artefacts (files, functions, CFG blocks, 
 - Chunk checkpoint states: `STORED` (complete), `ANALYZING_PARTIAL` (partially committed; queryable), `QUEUED_NIGHT_LOCAL` (deferred to a local run), `PAUSED_QUOTA_FLOOR` (paused at a quota reserve).
 - Operations: commit a chunk atomically, list checkpoints, query committed segments (including partially analysed projects), inspect store status, and purge a project's records and unlink its blobs.
 - A global CAS (`~/.dendrite/cache/cas/<blake3-root>.idx`) shares identical third-party library versions across projects, so each version is parsed and embedded once.
+
+## PostgreSQL (shared tier, DRAG-33)
+
+`[storage] mode = "remote"` (or `DENDRITE_RAG_STORAGE_MODE=remote`) keeps the whole index in PostgreSQL 16 with pgvector, built with the `postgres` feature. The URL comes only from `DENDRITE_RAG_PG_URL` (Dendrite writes it to `$DENDRITE_HOME/rag.env`, DEN-1047), never from the settings file. A repository is named by `[storage] repo`, else its `origin` URL, else its path.
+
+- **One database for a team.** Every table is keyed by repository, except `rag_embeddings`, keyed by `(model, content_hash)` only: an embedding computed on one machine serves every repository and every machine. A second repository with the same content embeds nothing.
+- **Tables:** `rag_repos`, `rag_files`, `rag_chunks`, `rag_meta`, `rag_embeddings`, `rag_vectors` (pgvector), `rag_community_files`, `rag_community_chunks`, `rag_communities`, and for BM25 `rag_docs` (field lengths) and `rag_postings` (`term, field, tf`). The schema is created on open (`rag_schema` holds its version; a newer one is refused).
+- **Writes** are buffered and applied in one transaction per commit, as upserts and keyed deletes, so an interrupted run replays safely, like the local store.
+- **BM25 in SQL** (`src/store/pg.rs`): postings come from `code_terms`, the same tokenizer as Tantivy, and the query applies Okapi BM25 (k1 1.2, b 0.75) with the same field boosts. Lexical MRR@10 on the golden sets: 0.631 against Tantivy's 0.614 (Dendrite) and 0.864 against 0.844 (embedag); Tantivy quantizes field lengths, the SQL does not. A commit adding more than 500 documents runs `ANALYZE`, which the query plan depends on.
+- **Vectors** are stored in `rag_vectors` and mirrored in memory at open for the scan (repository-sized); changes reach Postgres on `persist`.
+- **Measured** (Dendrite, 833 files, 5,286 chunks, local Docker, lexical only): first index 15 s, communities 0.35 s, search with 8 concurrent readers p50 36 ms / p95 104 ms over a pool of 4 connections (a single query takes about 6 ms in the database). Local storage stays the default for latency (p50 0.4 ms).
+- `purge` removes only the local index directory; repository rows stay in the shared tier.
+
+`edge` mode (local cache, write journal) and `push` with compaction follow in DRAG-34 and DRAG-35.

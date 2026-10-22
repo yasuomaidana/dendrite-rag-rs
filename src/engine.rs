@@ -46,6 +46,7 @@ pub struct Config {
     /// Size of dynamic candidate list for HNSW search.
     pub hnsw_ef_search: usize,
     pub fusion: crate::retrieve::FusionConfig,
+    pub storage: crate::store::StorageConfig,
 }
 
 impl Default for Config {
@@ -61,6 +62,7 @@ impl Default for Config {
             vector_index: VectorIndexChoice::Auto,
             hnsw_ef_search: 128,
             fusion: Default::default(),
+            storage: Default::default(),
         }
     }
 }
@@ -190,7 +192,7 @@ impl Engine {
             .index_dir
             .clone()
             .unwrap_or_else(|| root.join(".dendrite").join("rag"));
-        let mut store = Store::open_local_with(&dir, cfg.vector_index, cfg.hnsw_ef_search)?;
+        let mut store = Store::open(&dir, &root, &cfg)?;
         // Vectors from another model are useless: rebuild them (from the cache when possible).
         if store.ledger.meta("embed_model")?.as_deref() != embedder.as_ref().map(|e| e.model_id()) {
             store.vectors.clear();

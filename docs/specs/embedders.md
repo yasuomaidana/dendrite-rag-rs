@@ -34,6 +34,8 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 | `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` | the matching `embed.*` key |
 | `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL` | `rerank.backend`, `rerank.model`, `rerank.url`. A backend different from the file's drops the file's model and URL |
 | `DENDRITE_RAG_MAX_FILE_BYTES` | `index.max_file_bytes` |
+| `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO` | `storage.mode` (`local`, `remote`, `edge`), `storage.repo` |
+| `DENDRITE_RAG_PG_URL` | the shared tier's URL; environment only ([store.md](store.md) § PostgreSQL) |
 
 Unknown keys, unknown backends and malformed values are errors, never silently replaced by a default.
 

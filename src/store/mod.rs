@@ -1,7 +1,12 @@
 //! Storage backend abstraction (`docs/specs/store.md` § Storage backends).
 
+#[cfg(feature = "postgres")]
+pub mod pg;
+
 use std::collections::BTreeMap;
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 
 use crate::chunk::Chunk;
 use crate::graph::communities::Community;
@@ -78,7 +83,83 @@ pub(crate) const VECTORS_FILE: &str = "vectors.bin";
 #[cfg(feature = "hnsw")]
 pub(crate) const VECTORS_HNSW_FILE: &str = "vectors.hnsw";
 
+/// Where a project's index lives (`[storage]` in `.dendrite/rag.toml`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageMode {
+    /// redb, Tantivy and `vectors.bin` in the project's index directory.
+    #[default]
+    Local,
+    /// The shared PostgreSQL tier (feature `postgres`).
+    Remote,
+    /// A local cache over the shared tier, with a write journal (DRAG-34).
+    Edge,
+}
+
+impl StorageMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(s.trim().to_ascii_lowercase())).ok()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StorageConfig {
+    pub mode: StorageMode,
+    /// The repository's name in the shared tier; defaults to its `origin` URL.
+    pub repo: Option<String>,
+    /// From `DENDRITE_RAG_PG_URL` only: credentials never go in the settings file.
+    pub pg_url: Option<String>,
+}
+
+/// The repository name used in the shared tier: the configured one, else the `origin`
+/// remote URL, else the project's absolute path.
+pub fn repo_name(root: &Path, configured: Option<&str>) -> String {
+    if let Some(r) = configured.filter(|r| !r.is_empty()) {
+        return r.to_string();
+    }
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| root.display().to_string())
+}
+
 impl Store {
+    /// Opens the store `cfg.storage` selects for the project at `root`.
+    pub fn open(dir: &Path, root: &Path, cfg: &crate::engine::Config) -> Result<Self> {
+        let config_err = |msg: String| crate::engine::Error::Other(anyhow::anyhow!(msg));
+        match cfg.storage.mode {
+            StorageMode::Local => Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search),
+            StorageMode::Remote => {
+                let Some(url) = cfg.storage.pg_url.as_deref() else {
+                    return Err(config_err(
+                        "storage mode remote needs DENDRITE_RAG_PG_URL".to_string(),
+                    ));
+                };
+                #[cfg(feature = "postgres")]
+                {
+                    pg::open(url, &repo_name(root, cfg.storage.repo.as_deref()))
+                }
+                #[cfg(not(feature = "postgres"))]
+                {
+                    let _ = (url, root);
+                    Err(config_err(
+                        "this dendrite-rag was built without the `postgres` feature".to_string(),
+                    ))
+                }
+            }
+            StorageMode::Edge => Err(config_err(
+                "storage mode edge is not available yet (DRAG-34)".to_string(),
+            )),
+        }
+    }
+
     /// Opens the default local storage backend in `dir`: redb ledger, Tantivy lexical index,
     /// and `vectors.bin` flat index (self-healing from cache if corrupt).
     pub fn open_local(dir: &Path) -> Result<Self> {
