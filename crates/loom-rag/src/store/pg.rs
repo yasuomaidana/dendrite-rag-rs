@@ -37,7 +37,12 @@ pub(crate) use vectors::{VectorOp, apply_vector};
 pub const SCHEMA_VERSION: i32 = 1;
 
 const MIGRATION: &str = r#"
-CREATE EXTENSION IF NOT EXISTS vector;
+DO $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('loom-rag:vector-extension'));
+    CREATE EXTENSION IF NOT EXISTS vector;
+END
+$$;
 CREATE TABLE IF NOT EXISTS rag_schema (version int NOT NULL);
 CREATE TABLE IF NOT EXISTS rag_repos (id serial PRIMARY KEY, name text UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS rag_files (
