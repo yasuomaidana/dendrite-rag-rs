@@ -254,6 +254,7 @@ impl Handler for Server {
                     paths: p.paths,
                     min_score: p.min_score,
                     offset: p.offset,
+                    weights: None,
                 };
                 let hits = self
                     .indexed(&p.root)?

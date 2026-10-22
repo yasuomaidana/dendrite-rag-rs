@@ -32,6 +32,9 @@ pub struct SearchOpts {
     pub min_score: Option<f32>,
     /// Skip this many hits (pagination).
     pub offset: usize,
+    /// Fusion weights for this query instead of the project's (the eval sweep uses it).
+    #[serde(skip)]
+    pub weights: Option<FusionWeights>,
 }
 
 impl Default for SearchOpts {
@@ -42,6 +45,7 @@ impl Default for SearchOpts {
             paths: Vec::new(),
             min_score: None,
             offset: 0,
+            weights: None,
         }
     }
 }
@@ -54,15 +58,78 @@ pub struct ContextPack {
     pub tokens: usize,
 }
 
-pub const WEIGHT_LEXICAL: f32 = 1.0;
-pub const WEIGHT_DENSE: f32 = 1.0;
-pub const WEIGHT_SYMBOL: f32 = 1.5;
+/// Weights of the hybrid fusion (`[fusion]` in `.dendrite/rag.toml`, `docs/specs/retrieval.md`
+/// § Fusion). Unset fields take the defaults of the embedder's family.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FusionWeights {
+    pub lexical: f32,
+    pub dense: f32,
+    pub symbol: f32,
+    /// How much code in the communities whose summaries match best is raised (0 = off).
+    pub community: f32,
+}
+
+impl Default for FusionWeights {
+    fn default() -> Self {
+        Self {
+            lexical: 1.0,
+            dense: 1.0,
+            symbol: 1.5,
+            community: 0.0,
+        }
+    }
+}
+
+impl FusionWeights {
+    /// Defaults for an embedder, from the weight sweeps in eval/RESULTS.md (DRAG-26).
+    /// Families without a sweep keep the general defaults.
+    pub fn for_model(model_id: Option<&str>) -> Self {
+        let model = model_id.unwrap_or_default();
+        if model.starts_with("model2vec:") {
+            // Static embeddings are weak on their own: lean on BM25.
+            Self {
+                lexical: 1.0,
+                dense: 0.5,
+                symbol: 1.0,
+                community: 0.0,
+            }
+        } else if model.contains("jina-embeddings-v2-base-code") {
+            Self {
+                lexical: 1.5,
+                dense: 1.0,
+                symbol: 2.0,
+                community: 0.0,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+/// Fusion weights a project sets; each unset field keeps the embedder's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FusionConfig {
+    pub lexical: Option<f32>,
+    pub dense: Option<f32>,
+    pub symbol: Option<f32>,
+    pub community: Option<f32>,
+}
+
+impl FusionConfig {
+    pub fn resolve(&self, base: FusionWeights) -> FusionWeights {
+        FusionWeights {
+            lexical: self.lexical.unwrap_or(base.lexical),
+            dense: self.dense.unwrap_or(base.dense),
+            symbol: self.symbol.unwrap_or(base.symbol),
+            community: self.community.unwrap_or(base.community),
+        }
+    }
+}
+
 /// `(chunk_id, score)`, best first.
 type Ranking = Vec<(String, f32)>;
 
-/// How much code in a matched community is raised; off by default because it did not
-/// improve the golden sets (eval/RESULTS.md, DRAG-31). DRAG-26 makes it tunable.
-pub const COMMUNITY_BOOST: f32 = 0.0;
 /// Communities whose summaries rank highest that get the boost.
 const BOOSTED_COMMUNITIES: usize = 2;
 /// Candidates each ranking contributes before fusion.
@@ -114,6 +181,7 @@ impl Engine {
                 .into_iter()
                 .partition(|(id, _)| !crate::graph::summary::is_summary(id))
         };
+        let w = opts.weights.unwrap_or_else(|| self.fusion_weights());
         let fused = match opts.mode {
             Mode::Lexical => split(self.lexical.search(query, n)?).0,
             Mode::Dense => split(self.dense_ranking(query, n)?).0,
@@ -129,14 +197,10 @@ impl Engine {
                 let symbol = self.symbol_index()?.rank_query(query, n);
                 let summaries = rrf(&[(1.0, &lexical_summaries), (1.0, &dense_summaries)], RRF_K);
                 let fused = rrf(
-                    &[
-                        (WEIGHT_LEXICAL, &lexical),
-                        (WEIGHT_DENSE, &dense),
-                        (WEIGHT_SYMBOL, &symbol),
-                    ],
+                    &[(w.lexical, &lexical), (w.dense, &dense), (w.symbol, &symbol)],
                     RRF_K,
                 );
-                self.boost_communities(fused, &summaries)?
+                self.boost_communities(fused, &summaries, w.community)?
             }
         };
         let mut hits = self.hits(&fused[..fused.len().min(n)])?;
@@ -155,23 +219,29 @@ impl Engine {
         Ok(hits.into_iter().skip(opts.offset).take(opts.top_k).collect())
     }
 
+    /// The project's fusion weights: `[fusion]` over the embedder's defaults.
+    pub fn fusion_weights(&self) -> FusionWeights {
+        let model = self.embedder.as_ref().map(|e| e.model_id());
+        self.cfg.fusion.resolve(FusionWeights::for_model(model))
+    }
+
     /// Raises code in the communities whose summaries match the query best: the summary
     /// says which part of the codebase a broad question is about, and the code the other
     /// rankings already found there moves up.
-    fn boost_communities(&self, mut fused: Ranking, summaries: &Ranking) -> Result<Ranking> {
+    fn boost_communities(&self, mut fused: Ranking, summaries: &Ranking, boost: f32) -> Result<Ranking> {
         let matched: Vec<u32> = summaries
             .iter()
             .take(BOOSTED_COMMUNITIES)
             .filter_map(|(id, _)| crate::graph::summary::community_of(id))
             .collect();
-        if matched.is_empty() || COMMUNITY_BOOST == 0.0 {
+        if matched.is_empty() || boost == 0.0 {
             return Ok(fused);
         }
         for (id, score) in &mut fused {
             if let Some(c) = self.ledger.community_of_chunk(id)?
                 && matched.contains(&c)
             {
-                *score *= 1.0 + COMMUNITY_BOOST;
+                *score *= 1.0 + boost;
             }
         }
         fused.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -434,5 +504,24 @@ mod tests {
         e.index(false).unwrap();
         assert_eq!(summaries(&e), n);
         assert_eq!(e.lexical.search("community", 50).unwrap().len(), n);
+    }
+
+    #[test]
+    fn fusion_defaults_follow_the_embedder_and_settings_override_them() {
+        assert_eq!(FusionWeights::for_model(None), FusionWeights::default());
+        assert_eq!(
+            FusionWeights::for_model(Some("model2vec:minishlab/potion-code-16M-v2")).dense,
+            0.5
+        );
+        assert_eq!(
+            FusionWeights::for_model(Some("candle:jinaai/jina-embeddings-v2-base-code")).lexical,
+            1.5
+        );
+        let cfg = FusionConfig {
+            dense: Some(2.0),
+            ..FusionConfig::default()
+        };
+        let w = cfg.resolve(FusionWeights::for_model(Some("model2vec:x")));
+        assert_eq!((w.lexical, w.dense), (1.0, 2.0));
     }
 }

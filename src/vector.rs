@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
+#[cfg(feature = "hnsw")]
+pub mod hnsw;
+#[cfg(feature = "hnsw")]
+pub use hnsw::HnswIndex;
+
 /// A nearest-neighbour index keyed by chunk id.
 pub trait VectorIndex: Send + Sync {
     /// Inserts or replaces `id`. `tag` is an opaque label kept with the row (the engine
@@ -78,6 +83,28 @@ impl FlatIndex {
     /// The tag stored with `id`.
     pub fn tag(&self, id: &str) -> Option<&str> {
         self.pos.get(id).map(|&row| self.tags[row].as_str())
+    }
+
+    pub fn row_of(&self, id: &str) -> Option<usize> {
+        self.pos.get(id).copied()
+    }
+
+    pub fn vector_at(&self, row: usize) -> (&[i8], f32) {
+        let start = row * self.dim;
+        (&self.data[start..start + self.dim], self.scales[row])
+    }
+
+    pub fn vector_f32(&self, row: usize) -> Vec<f32> {
+        let (data, scale) = self.vector_at(row);
+        data.iter().map(|&x| x as f32 * scale).collect()
+    }
+
+    pub fn id_at(&self, row: usize) -> &str {
+        &self.ids[row]
+    }
+
+    pub fn tag_at(&self, row: usize) -> &str {
+        &self.tags[row]
     }
 
     pub fn clear(&mut self) {
@@ -266,7 +293,7 @@ impl FlatIndex {
 }
 
 /// Quantizes a vector to `i8` with a symmetric per-vector scale.
-fn quantize(v: &[f32]) -> (Vec<i8>, f32) {
+pub(crate) fn quantize(v: &[f32]) -> (Vec<i8>, f32) {
     let max = v.iter().fold(0f32, |m, x| m.max(x.abs()));
     if max == 0.0 {
         return (vec![0; v.len()], 0.0);
@@ -281,7 +308,7 @@ fn quantize(v: &[f32]) -> (Vec<i8>, f32) {
 }
 
 #[inline]
-fn dot_i8(a: &[i8], b: &[i8]) -> i32 {
+pub(crate) fn dot_i8(a: &[i8], b: &[i8]) -> i32 {
     a.iter().zip(b).map(|(&x, &y)| x as i32 * y as i32).sum()
 }
 

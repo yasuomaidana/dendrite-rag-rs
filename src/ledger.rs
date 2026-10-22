@@ -48,6 +48,9 @@ pub enum LedgerError {
     Commit(#[from] redb::CommitError),
     #[error("corrupt ledger record: {0}")]
     Decode(#[from] serde_json::Error),
+    /// A storage backend other than redb failed (`crate::store`).
+    #[error("ledger backend: {0}")]
+    Backend(String),
 }
 
 pub type Result<T> = std::result::Result<T, LedgerError>;

@@ -15,6 +15,16 @@
 //! max_file_bytes = 1048576
 //! query_cache = 256
 //!
+//! [fusion]                      # hybrid weights; unset keys keep the embedder's defaults
+//! lexical = 1.0
+//! dense = 1.0
+//! symbol = 1.5
+//! community = 0.0               # boost for code in the best-matching communities
+//!
+//! [storage]
+//! mode = "local"                # local (default) | remote (shared PostgreSQL) | edge
+//! # repo = "github.com/acme/app" # name in the shared tier; default: the origin URL
+//!
 //! [graph]
 //! resolution = 1.0              # Leiden resolution: higher gives more, smaller communities
 //!
@@ -28,7 +38,9 @@
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
-//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
+//! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
+//! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
+//! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
 //! `_MODEL`, `_SUMMARIES`, `_CONCEPTS` (all `DENDRITE_RAG_GRAPH_LLM_*`), and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
@@ -51,6 +63,18 @@ pub struct Settings {
     pub rerank: RerankConfig,
     pub index: IndexSettings,
     pub graph: GraphSettings,
+    pub fusion: crate::retrieve::FusionConfig,
+    pub storage: StorageSettings,
+    /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
+    #[serde(skip)]
+    pub pg_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageSettings {
+    pub mode: Option<crate::store::StorageMode>,
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -70,11 +94,47 @@ pub struct GraphLlmSettings {
     pub concepts: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorIndexChoice {
+    #[default]
+    Auto,
+    Flat,
+    Hnsw,
+}
+
+impl VectorIndexChoice {
+    pub const ALL: [VectorIndexChoice; 3] = [
+        VectorIndexChoice::Auto,
+        VectorIndexChoice::Flat,
+        VectorIndexChoice::Hnsw,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Flat => "flat",
+            Self::Hnsw => "hnsw",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "flat" => Some(Self::Flat),
+            "hnsw" => Some(Self::Hnsw),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexSettings {
     pub max_file_bytes: Option<u64>,
     pub query_cache: Option<usize>,
+    pub vector_index: Option<VectorIndexChoice>,
+    pub hnsw_ef_search: Option<usize>,
 }
 
 impl Settings {
@@ -100,7 +160,11 @@ impl Settings {
     }
 
     pub fn parse(text: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(text)?)
+        let s: Self = toml::from_str(text)?;
+        if s.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
+        Ok(s)
     }
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
@@ -181,6 +245,37 @@ impl Settings {
                     .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
             );
         }
+        for (key, field) in [
+            ("DENDRITE_RAG_FUSION_LEXICAL", &mut self.fusion.lexical),
+            ("DENDRITE_RAG_FUSION_DENSE", &mut self.fusion.dense),
+            ("DENDRITE_RAG_FUSION_SYMBOL", &mut self.fusion.symbol),
+            ("DENDRITE_RAG_FUSION_COMMUNITY", &mut self.fusion.community),
+        ] {
+            if let Some(v) = var(key) {
+                *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
+            }
+        }
+        let f = &self.fusion;
+        for (name, w) in [
+            ("lexical", f.lexical),
+            ("dense", f.dense),
+            ("symbol", f.symbol),
+            ("community", f.community),
+        ] {
+            if let Some(w) = w
+                && !(w >= 0.0 && w.is_finite())
+            {
+                bail!("fusion.{name} must be a non-negative number, got {w}");
+            }
+        }
+        if let Some(m) = var("DENDRITE_RAG_STORAGE_MODE") {
+            let Some(mode) = crate::store::StorageMode::parse(&m) else {
+                bail!("DENDRITE_RAG_STORAGE_MODE={m:?}: expected local, remote or edge");
+            };
+            self.storage.mode = Some(mode);
+        }
+        set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
+        set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
         if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
             self.graph.resolution = Some(
                 r.parse()
@@ -206,6 +301,22 @@ impl Settings {
         if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_CONCEPTS") {
             self.graph.llm.concepts = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_CONCEPTS")?;
         }
+        if let Some(v) = var("DENDRITE_RAG_VECTOR_INDEX") {
+            let Some(choice) = VectorIndexChoice::parse(&v) else {
+                let names: Vec<_> = VectorIndexChoice::ALL.iter().map(|c| c.as_str()).collect();
+                bail!(
+                    "DENDRITE_RAG_VECTOR_INDEX={v:?}: expected one of {}",
+                    names.join(", ")
+                );
+            };
+            self.index.vector_index = Some(choice);
+        }
+        if let Some(n) = var("DENDRITE_RAG_HNSW_EF_SEARCH") {
+            self.index.hnsw_ef_search = Some(
+                n.parse()
+                    .with_context(|| format!("DENDRITE_RAG_HNSW_EF_SEARCH={n:?}"))?,
+            );
+        }
         self.validate()?;
         Ok(())
     }
@@ -216,6 +327,9 @@ impl Settings {
             && !(r > 0.0 && r.is_finite())
         {
             bail!("graph.resolution must be a positive number, got {r}");
+        }
+        if self.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
+            bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
         }
         if self.graph.llm.enabled && self.graph.llm.model.as_deref().unwrap_or("").trim().is_empty() {
             bail!(
@@ -242,6 +356,18 @@ impl Settings {
         if let Some(r) = self.graph.resolution {
             cfg.graph_resolution = r;
         }
+        if let Some(vi) = self.index.vector_index {
+            cfg.vector_index = vi;
+        }
+        if let Some(ef) = self.index.hnsw_ef_search {
+            cfg.hnsw_ef_search = ef;
+        }
+        cfg.fusion = self.fusion;
+        cfg.storage = crate::store::StorageConfig {
+            mode: self.storage.mode.unwrap_or_default(),
+            repo: self.storage.repo.clone(),
+            pg_url: self.pg_url.clone(),
+        };
         cfg
     }
 }
@@ -443,5 +569,74 @@ concepts = false
         // Unknown keys rejected
         assert!(Settings::parse("[graph.llm]\nunknown_key = true\n").is_err());
         assert!(Settings::parse("[graph]\nunknown_key = true\n").is_err());
+    }
+
+    #[test]
+    fn parses_vector_index_and_ef_search_and_applies_env() {
+        let toml_text = r#"
+[index]
+vector_index = "flat"
+hnsw_ef_search = 128
+"#;
+        let mut s = Settings::parse(toml_text).unwrap();
+        assert_eq!(s.index.vector_index, Some(VectorIndexChoice::Flat));
+        assert_eq!(s.index.hnsw_ef_search, Some(128));
+        let cfg = s.config();
+        assert_eq!(cfg.vector_index, VectorIndexChoice::Flat);
+        assert_eq!(cfg.hnsw_ef_search, 128);
+
+        s.apply_env(env(&[
+            ("DENDRITE_RAG_VECTOR_INDEX", "auto"),
+            ("DENDRITE_RAG_HNSW_EF_SEARCH", "256"),
+        ]))
+        .unwrap();
+        assert_eq!(s.index.vector_index, Some(VectorIndexChoice::Auto));
+        assert_eq!(s.index.hnsw_ef_search, Some(256));
+        assert_eq!(s.config().vector_index, VectorIndexChoice::Auto);
+        assert_eq!(s.config().hnsw_ef_search, 256);
+
+        // Unknown vector index
+        let mut s2 = Settings::default();
+        assert!(
+            s2.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "invalid")]))
+                .is_err()
+        );
+
+        #[cfg(not(feature = "hnsw"))]
+        {
+            let mut s3 = Settings::default();
+            assert!(
+                s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
+                    .is_err()
+            );
+            assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_err());
+        }
+
+        #[cfg(feature = "hnsw")]
+        {
+            let mut s3 = Settings::default();
+            assert!(
+                s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
+                    .is_ok()
+            );
+            assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_ok());
+        }
+    }
+
+    #[test]
+    fn fusion_weights_from_file_and_env() {
+        let mut s = Settings::parse("[fusion]\ndense = 2.0\n").unwrap();
+        s.apply_env(env(&[("DENDRITE_RAG_FUSION_COMMUNITY", "0.25")]))
+            .unwrap();
+        let w = s
+            .config()
+            .fusion
+            .resolve(crate::retrieve::FusionWeights::default());
+        assert_eq!((w.lexical, w.dense, w.symbol, w.community), (1.0, 2.0, 1.5, 0.25));
+        assert!(
+            s.apply_env(env(&[("DENDRITE_RAG_FUSION_LEXICAL", "-1")]))
+                .is_err()
+        );
+        assert!(Settings::parse("[fusion]\nbogus = 1\n").is_err());
     }
 }
