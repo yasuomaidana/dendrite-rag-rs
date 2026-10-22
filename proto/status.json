@@ -62,6 +62,18 @@
       "sync_pending": {
         "type": "integer",
         "description": "Commits waiting for the shared tier (edge mode only)"
+      },
+      "embed_coverage": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Vectors / chunks; absent without an embedder"
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     }
   }

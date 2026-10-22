@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-`dendrite-rag-rs` is the dedicated Rust repository for Dendrite's hybrid retrieval-augmented generation (RAG) engine, BLAKE3 content-addressable segmented store (CAS), and distributed memory synchronization engine (Pillar 7 & Pillar 9). It provides deterministic sparse (Okapi BM25) and dense (vector embedding) indexing, Reciprocal Rank Fusion (RRF) ranking, structured topic memory parsing with zero-extrapolation fidelity guards, and multi-tier memory synchronization (`local-only`, `edge` WAL, and `push` compaction). It ships the Cargo package `dendrite-rag` (library `dendrite_rag`, binary `dendrite-rag`) and is the extraction target for Dendrite's retrieval, segmented storage, and memory subsystems under umbrella ticket `DEN-974` (`DRAG-1`).
+`dendrite-rag-rs` is the dedicated Rust repository for Dendrite's hybrid retrieval-augmented generation (RAG) engine, BLAKE3 content-addressable segmented store (CAS), and distributed memory synchronization engine (Pillar 7 & Pillar 9). It provides deterministic sparse (Okapi BM25) and dense (vector embedding) indexing, Reciprocal Rank Fusion (RRF) ranking, structured topic memory parsing with zero-extrapolation fidelity guards, and multi-tier memory synchronization (`local-only`, `edge` WAL, and `push` compaction). It is a Cargo workspace: `loom-rag` (the engine library `loom_rag`, free of Dendrite references), `dendrite-rag` (the sidecar binary and library `dendrite_rag`: JSON-RPC, `.dendrite/rag.toml` settings, Dendrite's `ask`) and `loom-eval` (evaluation). It is the extraction target for Dendrite's retrieval, segmented storage, and memory subsystems under umbrella ticket `DEN-974` (`DRAG-1`).
 
 ---
 
@@ -46,8 +46,9 @@
 - **Sidecar Binary (`dendrite-rag`, Planned under `DEN-970` / `DEN-974`)**:
   - Speaks **JSON-RPC 2.0 over stdio** with request/response schemas defined in `proto/*.json` and versioned via SemVer.
   - Exposes health handshake, incremental project indexing, hybrid BM25 + vector chunk retrieval, CAS segment commit/query/inspect/purge operations, memory sync mode execution (`local-only`, `edge`, `push`), and topic memory fidelity verification.
-- **Rust Crate API (`dendrite-rag` / `dendrite_rag_rs`)**:
-  - Library crate `dendrite_rag` exposing retrieval, CAS, and memory sync primitives for direct Rust integration and unit/property testing.
+- **Rust Crate API**:
+  - `loom_rag`: the retrieval engine (indexing, corpora, search, context packs, stores) for direct Rust integration; no Dendrite names, settings files or environment variables.
+  - `dendrite_rag`: the sidecar's settings resolution, server and `ask`, on top of `loom_rag`.
 
 ### Who Consumes It
 - **`dendrite-control` (`Dendrite` Go repo)**:
@@ -137,8 +138,8 @@ The technical specification lives in this repository: [ARCHITECTURE.md](ARCHITEC
 1. **Crate and Binary Naming** — *resolved (DRAG-9)*: package `dendrite-rag`, library `dendrite_rag`, binary `dendrite-rag`; the repository keeps the `-rs` suffix.
 2. **BLAKE3 & AST Chunking Boundary Between `dendrite-core-rs` and `dendrite-rag-rs`**:
    - *Resolved (DRAG-10)*: retrieval chunking (cAST over tree-sitter) lives in dendrite-rag-rs, which links the tree-sitter grammars itself and hashes chunks with `blake3`. `dendrite-core-rs` keeps signature folding, complexity metrics and token counting; dendrite-rag-rs can move to a shared parser once core-rs publishes one.
-3. **Retrieval vs. LLM Synthesis Split in `pkg/rag/ask.go`**:
-   - `pkg/rag/ask.go` currently couples BM25 retrieval (`Indexer.Retrieve`) with local Ollama / paid LiteLLM chat completion calls and interactive terminal confirmation. During extraction, pure indexing and hybrid retrieval belong in `dendrite-rag-rs`, while LLM provider routing, token governance, and interactive CLI prompts remain in `dendrite-control`.
+3. **Retrieval vs. LLM Synthesis Split in `pkg/rag/ask.go`** — *resolved (2026-10-22)*:
+   - Retrieval, prompts, the local / hybrid / paid tiers and the answer cache run in the sidecar's `ask` method (`crates/dendrite-rag/src/ask`), which calls models through the LiteLLM gateway (whose budgets `pkg/gateway` governs). `pkg/rag/ask.go` starts the sidecar, passes the gateway key, and asks the person before paid escalation (`escalation_needed`); `dendrite ask` searches code unless `-d` adds the documentation. The engine library `loom-rag` knows nothing of prompts or models beyond the optional graph LLM layer.
 4. **Split Ownership in `DEN-037` (`pkg/agentsearch`)**:
    - `pkg/agentsearch` mixes general-purpose hybrid search primitives (`BM25Index`, `TEIEmbeddingClient`, `OllamaEmbeddingClient`, `ReciprocalRankFusion`) with control-plane agent manifest routing (`Scorer` using `agent.SessionLedger` and `cmd/dendrite/agent.go`). Only the hybrid BM25 + vector + RRF retrieval engine belongs in `dendrite-rag-rs`.
 5. **Split Ownership in `DEN-059` & `DEN-060` (`pkg/store/*` vs CLI/UI)**:

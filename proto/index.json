@@ -21,6 +21,10 @@
         "type": "integer",
         "minimum": 0,
         "description": "Stop the embedding phase after this many milliseconds; the lexical index always completes"
+      },
+      "focus": {
+        "type": "string",
+        "description": "Under a budget, embed the chunks this question matches first"
       }
     }
   },
@@ -80,6 +84,21 @@
       "graph_ms": {
         "type": "integer",
         "description": "Time spent on the code graph and communities"
+      },
+      "open_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Opening the engine (stores, embedder and reranker models); reported by the first run after the engine opened, 0 afterwards"
+      },
+      "walk_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Walking the project and hashing changed files"
+      },
+      "embed_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Embedding chunks and updating the vector index"
       }
     }
   }

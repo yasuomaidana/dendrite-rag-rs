@@ -7,11 +7,13 @@ Fields:
 | Field | Tokenizer | Boost |
 |---|---|---|
 | `text` (header + content) | code tokenizer | 1.0 |
-| `symbols` | code tokenizer | 3.0 |
+| `symbols` | code tokenizer | 2.5 |
 | `path` | code tokenizer | 1.5 |
 | `chunk_id` | raw, stored | — |
 
 **Code tokenizer.** Each token is split on non-alphanumerics, then on case and digit boundaries (`parseHTTPResponse2` → `parse`, `http`, `response`, `2`). Everything is lowercased. The whole identifier (`parsehttpresponse2`) is also emitted, so exact identifier queries score higher than scattered sub-word matches. BM25 parameters are Tantivy's defaults (k1 = 1.2, b = 0.75).
+
+The `symbols` boost also decides how code competes with documentation, which defines no symbols, when both share a ranking. It was 3.0 until the corpus evaluation (eval/RESULTS.md, 2026-10-22). Higher values let natural-language words that happen to name a function (`test`, `check`) outrank the text that answers; lower ones let documentation crowd out code. A sweep over 1.5, 2, 2.5 and 3 on the five golden sets picked 2.5, the best mean MRR for both corpora in one ranking (0.743 for `search`, 0.742 for `auto` context packs).
 
 ## Dense index
 
@@ -78,17 +80,61 @@ Backends (`[rerank] backend`):
 - `candle`: in-process cross-encoder on candle (feature `candle`, default model `BAAI/bge-reranker-base`). Checkpoints with `model_type` `xlm-roberta` (the BGE rerankers) run through candle's XLM-RoBERTa sequence classifier, and `bert` ones (MiniLM-style cross-encoders) through BERT with its pooler and linear head. Runs on the GPU (Metal, CUDA) or CPU. Its logits match the reference implementation (transformers) within 0.05 on `BAAI/bge-reranker-base` (`live_candle_bge_reranker_scores`).
 - `none`: reranking disabled.
 
+## Corpora
+
+Every chunk belongs to one corpus, derived from its path and language (`crates/loom-rag/src/corpus.rs`), so no store keeps an extra column:
+- **docs**: Markdown, `.txt` and `.rst` files.
+- **code**: everything else, including the code and configuration files indexed as plain text (`.kt`, `.sh`, `.sql`, `.toml`, …) and community summary chunks.
+
+Each corpus has its own pipeline over the shared stores:
+- **code** (`retrieve/code.rs`): lexical, dense and symbol-name rankings fused as in § Fusion, the community boost, and context packs expanded through the symbol graph (§ Context packing).
+- **docs** (`retrieve/docs.rs`): lexical and dense rankings fused with the project's `lexical` and `dense` weights. Prose defines no symbols, so there is no symbol ranking or expansion. A context pack is the best sections, each keeping its heading path as `scope`.
+
+`search`, `context` and `ask` take `corpus`: `all` (the default: both corpora in one ranking, the code pipeline over every chunk), `code` or `docs`. Dendrite's `dendrite ask` searches code unless `-d` is given.
+
+The corpus is the caller's choice because no rule found on the golden sets routes a question to the right corpus by itself (`loom-eval probe`, `retrieve/route.rs`). Neither the best dense similarity of each corpus, nor its BM25 score, nor the rank-weighted share of documentation among the best candidates of both separates code questions from documentation questions: every threshold that keeps documentation questions out of a code-only search also keeps most code questions in `all`. Weighting the two pipelines against each other (measured at symbol boost 1.5) ranked the other corpus's answer too low (MRR 0.71 against 0.76 for `all` on code questions, 0.64 against 0.76 on documentation questions), and narrowing `all` to one corpus only when the other was absent from the top ten matched `all` within 0.02. A fixed corpus costs the other kind of question everything (MRR 0 for documentation questions under `code`), while `code` is worth 0.05 to 0.12 MRR over `all` on code questions:
+
+| Golden set | `code` | `docs` | `all` |
+|---|---|---|---|
+| Dendrite, code questions | 0.821 | 0.027 | 0.768 |
+| Dendrite, documentation questions | 0 | 0.825 | 0.741 |
+| Dendrite, mixed (both files within 2,500 tokens) | 0 | 0 | 0.67 |
+| embedag | 0.940 | 0 | 0.833 |
+| dendrite-rag-rs | 0.883 | 0 | 0.768 |
+
+A filtered ranking fetches 4× its candidates and keeps the first ones in the corpus. Results report `timings` (milliseconds for the lexical, dense, symbol, rerank and expansion stages, and the total).
+
+## Duplicate text
+
+A hit whose text (trimmed) a better hit already holds is dropped, and its path is added to the better hit's `duplicates`: vendored or copied files are read once.
+
 ## Context packing
 
-`context(query, token_budget)`:
+`context(query, token_budget, corpus, detail)`:
 
-1. Take the fused hits.
-2. **Expand**: for each top hit, add chunks linked in the symbol graph (definitions of the symbols it references, callers of the symbols it defines), each scored with the parent's score × 0.5 per hop (max 1 hop).
-3. **Rank by importance**: a personalized PageRank over the file-level reference graph, seeded with the hits' files, breaks ties in favour of central code (the repository-map technique).
-4. **Remove overlap**: drop chunks fully contained in a higher-ranked chunk's line span, and merge adjacent spans in the same file.
-5. **Pack** greedily by score until the token budget is reached. Tokens are estimated at ~4 characters per token with a 1.15 safety factor; callers that need exact counts pass a smaller budget.
+1. Take the 20 best fused hits of the corpus (§ Corpora).
+2. **Expand** (code pipeline): for each of the 8 best hits, add up to 4 chunks linked in the symbol graph (definitions of the symbols it references, callers of the symbols it defines), each scored with the parent's score × 0.5, × 0.5 again when it is in another community.
+3. **Remove overlap**: drop chunks fully contained in a higher-ranked chunk's line span.
+4. **Pack** greedily by score until the token budget is reached; a span that does not fit is skipped and smaller ones after it still go in. Tokens are estimated at ~4 characters per token with a 1.15 safety factor, plus 8 for the citation; callers that need exact counts pass a smaller budget.
+5. **Merge** spans that touch within a file, so the prompt reads continuous text (outlines are never merged).
 
-The result lists the spans in score order, each with `path`, `start_line`, `end_line`, `scope`, `score` and `content`, plus the total estimated tokens.
+Spans keep their fused order. The personalized PageRank re-weighting over the file graph (the repository-map technique) that used to follow step 2 moved central files above the answer: dropping it raised MRR on code questions from 0.65 to 0.83 and recall within 2,500 tokens from 0.92 to 1.00 (eval/RESULTS.md).
+
+`detail` sets how much of each span the pack carries:
+
+| `detail` | Spans |
+|---|---|
+| `auto` (default) | the text of retrieved hits; spans pulled in only through the symbol graph as outlines |
+| `full` | the text of every span |
+| `map` | outlines only, for callers that read the map first and fetch bodies with `chunks.get` |
+
+An outline is a span's first two meaningful lines (its doc comment or heading, and its declaration or first sentence; package, import and front-matter lines skipped), each cut to 160 characters, marked `outline: true`. On the Dendrite sets a `map` pack names the answer's file within a median 49 tokens, against 599 for `auto` and about 15,600 for a grep-driven agent reading whole files.
+
+The result lists the spans in score order, each with `chunk_id`, `path`, `start_line`, `end_line`, `scope`, `score`, `content`, `duplicates?` and `outline?`, plus the total estimated tokens and `timings`.
+
+## Embedding backlog
+
+An index run under an embedding budget (`embed_budget_ms`) stops embedding when the budget runs out; later runs continue. With `focus` (the question about to be asked), the chunks the question matches lexically (up to 64) are embedded first, so dense retrieval covers them on the first call. `status` reports `embed_coverage` (vectors ÷ chunks) and a warning under 0.9.
 
 ## Performance targets
 

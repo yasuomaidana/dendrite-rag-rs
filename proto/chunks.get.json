@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/chunks.get.json",
+  "title": "chunks.get",
+  "description": "The full text of chunks by id (the bodies behind outlines), in the order asked; unknown ids are skipped.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "ids"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "hits"
+    ],
+    "properties": {
+      "hits": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other files holding the same text, dropped from the results"
+        },
+        "outline": {
+          "type": "boolean",
+          "description": "content is the span's outline (doc comment or heading and declaration); fetch the text with chunks.get"
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,85 @@
 # Eval and benchmark results (Apple Silicon)
 
+Run with `cargo run --release -p loom-eval -- quality <root> <golden file>…` (quality, tokens and latency of every method and baseline), `loom-eval probe` (corpus scores per query) and `loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--llm]` (one question asked in fresh sidecar processes, timed per stage). The older sections below used `examples/eval.rs` (now `crates/dendrite-rag/examples/eval.rs`); queries marked `"broad": true` are also scored as a subset there.
+
+## Code and documentation, tokens and baselines (loom-rag, 2026-10-22)
+
+Embedder `auto` → Ollama `nomic-embed-text`, every index fully embedded. Golden sets: `golden-dendrite.json` (37 code questions), `golden-dendrite-docs.json` (27 questions answered by `docs/`, new), `golden-dendrite-mixed.json` (12 questions needing a doc and the code it describes, new), `golden-embedag.json` (25), `golden-dendrite-rag.json` (25, paths of the workspace layout), and CoIR CosQA (500 test queries over 20,604 Python functions, one file each). Columns: MRR@10 over files; *recall@B* is the share of queries whose expected file is among the units a reader takes in order while they fit B tokens (whole files for the file baselines); *tokens to answer* is the median read up to the first expected file; *both@2.5k* is the share of mixed questions with an expected doc and an expected code file within 2,500 tokens. A unit counts the files whose identical text it folded (`duplicates`).
+
+Baselines over the same files: **grep-agent** ranks files by the distinct query words they contain and reads them whole (what a grep-driven coding agent reads); **bm25-file** is BM25 over whole files; **naive-chunks** is BM25 over fixed 40-line windows.
+
+| set | method | MRR@10 | nDCG@10 | recall@1k | recall@2.5k | tokens to answer | both@2.5k |
+|---|---|---|---|---|---|---|---|
+| Dendrite, code | search, code | 0.821 | 0.810 | 0.81 | 0.97 | 484 | 0.00 |
+|  | context, all | 0.781 | 0.792 | 0.78 | 0.97 | 599 | 1.00 |
+|  | context map, all | 0.781 | 0.792 | 1.00 | 1.00 | 38 | 1.00 |
+|  | before: context, all (symbol boost 3, PageRank) | 0.616 | 0.663 | 0.65 | 0.89 | 1,001 | 1.00 |
+|  | grep-agent | 0.476 | 0.535 | 0.14 | 0.35 | 15,613 | 0.00 |
+|  | bm25-file | 0.527 | 0.584 | 0.16 | 0.38 | 4,885 | 0.00 |
+|  | naive-chunks | 0.602 | 0.647 | 0.59 | 0.81 | 731 | 1.00 |
+| Dendrite, docs | search, docs | 0.825 | 0.848 | 0.89 | 0.96 | 251 | — |
+|  | context, all | 0.741 | 0.737 | 0.78 | 0.85 | 251 | — |
+|  | context map, all | 0.741 | 0.737 | 0.89 | 0.89 | 48 | — |
+|  | before: context, all | 0.619 | 0.621 | 0.67 | 0.85 | 301 | — |
+|  | search, code | 0.000 | 0.000 | 0.00 | 0.00 | — | — |
+|  | grep-agent | 0.388 | 0.468 | 0.15 | 0.44 | 21,959 | — |
+|  | bm25-file | 0.682 | 0.717 | 0.15 | 0.37 | 3,523 | — |
+|  | naive-chunks | 0.734 | 0.757 | 0.74 | 0.85 | 531 | — |
+| Dendrite, mixed | search, all | 0.604 | 0.629 | 0.75 | 0.83 | 969 | 0.67 |
+|  | context, all | 0.604 | 0.604 | 0.83 | 0.83 | 808 | 0.50 |
+|  | context map, all | 0.604 | 0.619 | 1.00 | 1.00 | 81 | 0.67 |
+|  | before: context, all | 0.544 | 0.520 | 0.58 | 0.75 | 2,135 | 0.33 |
+|  | grep-agent | 0.431 | 0.417 | 0.25 | 0.50 | 30,581 | 0.08 |
+|  | bm25-file | 0.688 | 0.735 | 0.25 | 0.50 | 3,124 | 0.17 |
+|  | naive-chunks | 0.682 | 0.714 | 0.67 | 0.92 | 550 | 0.58 |
+| embedag | search, code | 0.940 | 0.926 | 1.00 | 1.00 | 406 | — |
+|  | context, all | 0.833 | 0.816 | 0.84 | 0.96 | 619 | — |
+|  | context map, all | 0.833 | 0.841 | 1.00 | 1.00 | 46 | — |
+|  | before: context, all | 0.767 | 0.743 | 0.68 | 0.92 | 1,145 | — |
+|  | grep-agent | 0.666 | 0.713 | 0.12 | 0.32 | 5,340 | — |
+|  | bm25-file | 0.639 | 0.682 | 0.16 | 0.28 | 4,146 | — |
+|  | naive-chunks | 0.681 | 0.714 | 0.68 | 0.84 | 625 | — |
+| dendrite-rag-rs | search, code | 0.883 | 0.840 | 0.88 | 0.96 | 533 | — |
+|  | context, all | 0.768 | 0.748 | 0.84 | 0.92 | 589 | — |
+|  | context map, all | 0.768 | 0.754 | 1.00 | 1.00 | 57 | — |
+|  | before: context, all | 0.784 | 0.764 | 0.80 | 0.88 | 1,008 | — |
+|  | grep-agent | 0.474 | 0.542 | 0.04 | 0.12 | 5,007 | — |
+|  | bm25-file | 0.410 | 0.509 | 0.04 | 0.16 | 5,174 | — |
+|  | naive-chunks | 0.586 | 0.625 | 0.68 | 0.72 | 1,581 | — |
+| CoIR CosQA | search, dense | 0.425 | 0.491 | 0.70 | 0.73 | 193 | — |
+|  | search, hybrid | 0.360 | 0.426 | 0.64 | 0.70 | 246 | — |
+|  | search, lexical | 0.243 | 0.283 | 0.41 | 0.44 | 224 | — |
+|  | grep-agent | 0.154 | 0.179 | 0.25 | 0.31 | 1,557 | — |
+|  | bm25-file | 0.261 | 0.291 | 0.40 | 0.50 | 390 | — |
+|  | naive-chunks | 0.259 | 0.290 | 0.39 | 0.49 | 406 | — |
+
+Findings:
+- **Against the baselines.** On code questions (Dendrite, embedag, dendrite-rag-rs) every engine method beats every baseline on MRR, by 0.22 to 0.41 over grep-agent and 0.15 to 0.47 over BM25 on whole files; on documentation questions the docs pipeline leads (0.825 against 0.734 for 40-line windows). On mixed questions BM25 over whole files and over windows rank the first expected file higher (0.688 and 0.682 against 0.604) because a whole file holds the doc and the code it is about at once, but they read 3,124 and 550 tokens to get there and keep both files within 2,500 tokens for 0.17 and 0.58 of the questions, against 0.67 for an `all` search or outline map. The token difference is large everywhere: a grep-driven agent reads a median 1,557 to 30,581 tokens of whole files before the answer's file, a context pack 251 to 808, an outline map 38 to 81, and within 1,000 tokens the map names the answer's file for every code and mixed question (recall 1.00, against 0.04 to 0.25 for grep-agent). On CoIR CosQA (natural-language questions over Python functions) dense retrieval is best (nDCG@10 0.491) and beats every baseline; lexical search is level with BM25 over files (0.283 against 0.291) and hybrid lands between (0.426): BM25 and symbol names pull short natural-language questions toward functions that share a word, so the fusion weights should depend on the question (follow-up).
+- **Code and documentation are different, and the question decides.** The code pipeline beats `all` on code questions by 0.05 to 0.12 MRR on all three repositories; the docs pipeline beats `all` on documentation questions by 0.08; `all` is the only corpus that answers mixed questions (both files within 2,500 tokens for 0.67 of them). No automatic rule found the corpus from the question (`loom-eval probe`): neither each corpus's best cosine similarity, nor its best BM25 score, nor the rank-weighted share of documentation among the best `all` candidates separates code questions from documentation questions without sending documentation questions to code alone, where they score 0. Two `auto` modes were built and measured: weighting the pipelines against each other (at symbol boost 1.5: MRR 0.71 against 0.76 for `all` on code questions, 0.64 against 0.76 on documentation) and narrowing `all` to one corpus when the other was absent from its top ten (within 0.02 of `all`); neither shipped. `dendrite ask` therefore searches code unless `-d` adds the documentation, and the RPC default stays `all`.
+- **Context packs were worse than plain search; three fixes, each measured.** (1) The personalized PageRank re-weighting of spans moved central files above the answer: dropping it alone raised code-question MRR of code packs from 0.651 to 0.834 and recall within 2,500 tokens from 0.92 to 1.00 (Dendrite, symbol boost 1.5). (2) The symbol-name boost of 3 let natural-language words that name functions outrank answering text: a sweep over 1.5 / 2 / 2.5 / 3 picked 2.5, the best mean over the five sets for `all` (search 0.743, context 0.742; 1.5 is best for documentation questions alone, 0.762, but costs the Rust repositories 0.05 to 0.08). (3) Identical text (vendored or copied files, 9 skill files duplicated across `.agents/` and `.gemini/` in Dendrite, many CosQA functions) is returned once, with the copies' paths in `duplicates`. Together, `all` context packs gained 0.06 to 0.17 MRR on four of five sets and read 17 to 62 % fewer tokens to the answer; dendrite-rag-rs lost 0.016 (0.784 to 0.768), where `code` scores 0.883. On CosQA, where many functions are identical, context packs rose from 0.051 to the 0.243 of search.
+- **Outlines.** `detail: map` returns each span's doc comment or heading and declaration (`outline: true`), median 38 to 81 tokens to the answer's file against 251 to 808 for full text: the token-cheapest first step for an agent, which then fetches bodies with `chunks.get` / `dendrite_rag_show`. `detail: auto` (the default) outlines spans pulled in only through the symbol graph; on these budgets the direct hits fill the pack first, so it measures the same as `full`.
+- Doc-to-code links (a documentation section naming a symbol or path in inline code pulls that code in) were built and measured: no change on the mixed set, whose documentation names commands rather than identifiers; not shipped.
+
+### The same question twice, timed per stage
+
+`loom-eval repeat <copy of Dendrite> "how does the token gateway work?" --llm`: each run starts a fresh `dendrite-rag`, indexes with the interactive 3 s embedding budget, packs the context and answers with the gateway's `local-coder`.
+
+| index | binary | run | sidecar start | index (embedding) | context | local model | total |
+|---|---|---|---|---|---|---|---|
+| 0 of 5,286 chunks embedded (the real Dendrite index) | develop | 1 | 11 ms | 3,262 ms (3,013) | 81 ms | 38,328 ms | 41.7 s |
+| | | 2 | 14 ms | 3,420 ms (3,189) | 64 ms | 33,619 ms | 37.1 s |
+| | loom-rag, focus | 1 | 12 ms | 3,314 ms (3,062) | 57 ms | 39,520 ms | 42.9 s |
+| | | 2 | 14 ms | 3,440 ms (3,292) | 65 ms | 24,644 ms | 28.2 s |
+| fully embedded | loom-rag | 1 | 5 ms | 80 ms (1) | 242 ms | 30,775 ms | 31.1 s |
+| | | 2 | 12 ms | 360 ms (1) | 104 ms | 27,347 ms | 27.8 s |
+| fully embedded, answer cache | loom-rag | 1 | 441 ms | 130 ms (1) | 321 ms | 41,482 ms | 42.4 s |
+| | | 2 | 13 ms | 300 ms (1) | 85 ms | 0 ms (cached) | **0.4 s** |
+
+Findings:
+- Retrieval was used and is not the slow part: packing the context takes 57 to 321 ms. The local model takes 25 to 41 s per answer. With an embedding backlog every call also spends its whole 3 s budget embedding about 48 chunks (the real Dendrite index had 0 of 5,286 vectors), and dense retrieval sees almost nothing; `status` now reports `embed_coverage` and a warning, and `dendrite ask` prints the coverage with the command that finishes the backlog (6.8 minutes for Dendrite on Ollama). With `focus`, the chunks the question matches lexically are embedded first.
+- The same question about unchanged code is answered from the ledger's answer cache (keyed by model and exact prompt): 0.4 s instead of 42 s. `fresh: true` (`dendrite ask --update-index`) asks the model again.
+- No answer cache existed before, so asking twice cost the model twice.
+
 Run with `cargo run --release [--features model2vec] --example eval -- <root> <golden file> <index-dir>`. Queries marked `"broad": true` ("how does sync work?") are also scored as a separate subset, the target of per-community summary chunks (DRAG-31).
 
 ## Quality: Dendrite repository (828 files, 5,281 chunks, 30 golden queries)
