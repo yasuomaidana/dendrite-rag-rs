@@ -1,6 +1,6 @@
 # Memory synchronization modes (DRAG-2)
 
-Implemented: `remote` ([store.md](store.md) § PostgreSQL, DRAG-33) and `edge` ([store.md](store.md) § Edge mode, DRAG-34, with read-through embeddings instead of a slice download). `push` follows (DRAG-35).
+Implemented: `remote` ([store.md](store.md) § PostgreSQL, DRAG-33), `edge` ([store.md](store.md) § Edge mode, DRAG-34, with read-through embeddings instead of a slice download) and `push` with compaction ([store.md](store.md) § Push and compaction, DRAG-35).
 
 Two storage tiers:
 

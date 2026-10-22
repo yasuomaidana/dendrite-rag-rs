@@ -91,4 +91,12 @@ A content-addressed store for analysis artefacts (files, functions, CFG blocks, 
 
 The spec's Merkle-subtree pull was not built: measured, re-chunking is three orders of magnitude cheaper than embedding, and read-through gives the saving with no extra protocol. Fetching the slice of a synapse (several repositories) is a loop over `pull` per repository, for Dendrite to drive.
 
-`push` with compaction follows in DRAG-35.
+## Push and compaction (DRAG-35)
+
+`dendrite-rag push <root> [--dry-run]` (RPC `push`, feature `postgres`) works from any storage mode and needs `DENDRITE_RAG_PG_URL`:
+
+1. **Upload.** The repository's current state in the shared tier is replaced by the local index: files, chunks, lexical postings, vectors, communities and metadata. Embeddings the tier already holds are not sent again (`embeddings_uploaded` counts the new ones).
+2. **Record.** HEAD and up to 5,000 ancestors go to `rag_commits` (with their parents), the clone's local and `origin/*` branches become the tracked heads in `rag_branch_heads` (a branch deleted everywhere stops being tracked), and `rag_snapshots` records which chunks (`path`, content hash) the HEAD commit holds.
+3. **Compact.** Snapshots and commits that no tracked head reaches (a recursive walk over the parents) are deleted; embeddings used only by snapshots that are near-duplicates (pgvector cosine distance < 0.005, that is cosine > 0.995) of the current version of the same path are deleted; embeddings no current chunk of any repository and no snapshot uses are deleted (content-hash keys already deduplicate identical content); lexical, vector and community rows whose chunk is gone are deleted.
+
+All of it runs in one transaction: a failure leaves the tier as it was, and `--dry-run` runs the same statements and rolls them back, so its report is exactly what the real push does. The trade-off is one long transaction instead of batches; at team scale that was measured acceptable: a push of the Dendrite repository (833 files, 5,286 chunks, lexical only) takes 18 s, 13 s of it the upload. Snapshots are not used by retrieval yet; they bound what compaction keeps and are the basis for history-aware search.

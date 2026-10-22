@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS rag_postings (
     repo int NOT NULL, term text NOT NULL, field smallint NOT NULL, chunk text NOT NULL,
     tf int NOT NULL, PRIMARY KEY (repo, term, field, chunk));
 CREATE INDEX IF NOT EXISTS rag_postings_chunk ON rag_postings (repo, chunk);
+CREATE INDEX IF NOT EXISTS rag_chunks_hash ON rag_chunks ((chunk->>'content_hash'));
+CREATE TABLE IF NOT EXISTS rag_commits (
+    repo int NOT NULL, sha text NOT NULL, parents text[] NOT NULL, PRIMARY KEY (repo, sha));
+CREATE TABLE IF NOT EXISTS rag_branch_heads (
+    repo int NOT NULL, branch text NOT NULL, sha text NOT NULL, updated_at timestamptz NOT NULL,
+    PRIMARY KEY (repo, branch));
+CREATE TABLE IF NOT EXISTS rag_snapshots (
+    repo int NOT NULL, sha text NOT NULL, chunk text NOT NULL, path text NOT NULL, hash text NOT NULL,
+    PRIMARY KEY (repo, sha, chunk));
+CREATE INDEX IF NOT EXISTS rag_snapshots_hash ON rag_snapshots (hash);
 CREATE TABLE IF NOT EXISTS rag_llm_cache (
     model text NOT NULL, prompt_hash text NOT NULL, value text NOT NULL,
     PRIMARY KEY (model, prompt_hash));
@@ -108,7 +118,7 @@ const ANALYZE_AFTER: usize = 500;
 pub(crate) struct Pg {
     clients: Vec<Mutex<Client>>,
     next: AtomicUsize,
-    repo: i32,
+    pub(crate) repo: i32,
 }
 
 impl Pg {
@@ -199,7 +209,7 @@ impl Pg {
 
     /// A free connection if there is one, else the next in turn: concurrent readers do not
     /// queue behind each other.
-    fn client(&self) -> MutexGuard<'_, Client> {
+    pub(crate) fn client(&self) -> MutexGuard<'_, Client> {
         let start = self.next.fetch_add(1, Ordering::Relaxed);
         for i in 0..self.clients.len() {
             if let Ok(c) = self.clients[(start + i) % self.clients.len()].try_lock() {
@@ -589,7 +599,7 @@ impl LedgerWrite for PgLedgerWrite<'_> {
     }
 }
 
-fn apply_ledger(tx: &mut Transaction<'_>, repo: i32, op: LedgerOp) -> Result<(), postgres::Error> {
+pub(crate) fn apply_ledger(tx: &mut Transaction<'_>, repo: i32, op: LedgerOp) -> Result<(), postgres::Error> {
     match op {
         LedgerOp::PutFile(path, entry) => tx.execute(
             "INSERT INTO rag_files (repo, path, entry) VALUES ($1, $2, $3)
@@ -763,7 +773,11 @@ impl LexicalWrite for PgLexicalWrite<'_> {
     }
 }
 
-fn apply_lexical(tx: &mut Transaction<'_>, repo: i32, op: LexicalOp) -> Result<(), postgres::Error> {
+pub(crate) fn apply_lexical(
+    tx: &mut Transaction<'_>,
+    repo: i32,
+    op: LexicalOp,
+) -> Result<(), postgres::Error> {
     match op {
         LexicalOp::Add(chunk) => {
             let d = Doc::of(&chunk);
@@ -887,7 +901,7 @@ impl VectorIndex for PgVectors {
     }
 }
 
-fn apply_vector(tx: &mut Transaction<'_>, repo: i32, op: VectorOp) -> Result<(), postgres::Error> {
+pub(crate) fn apply_vector(tx: &mut Transaction<'_>, repo: i32, op: VectorOp) -> Result<(), postgres::Error> {
     match op {
         VectorOp::Upsert(id, tag, vec) => tx.execute(
             "INSERT INTO rag_vectors (repo, id, tag, vec) VALUES ($1, $2, $3, $4)

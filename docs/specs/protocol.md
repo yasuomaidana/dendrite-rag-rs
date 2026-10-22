@@ -4,7 +4,7 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.2.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull` and `status.sync_pending`)
+Protocol version: **1.2.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`)
 
 | Method | Params | Result |
 |---|---|---|
@@ -22,6 +22,7 @@ Protocol version: **1.2.0** (1.1 added the `graph.*` methods and the `communitie
 | `history.index` | `{root, max_commits?: 2000}` | `{commits, documents, head, rebuilt}` |
 | `history.search` | `{root, query, top_k?: 10}` | `{hits: [{sha, time, author, subject, path, diff, score}]}`; updates the history index first ([history.md](history.md)) |
 | `sync` | `{root}` | `{pending}`: sends commits journaled while the shared tier was unreachable (edge mode) |
+| `push` | `{root, dry_run?: false}` | `{dry_run, commit, branch, files, chunks, embeddings_uploaded, vectors, compaction}`: uploads to the shared tier and compacts it (feature `postgres`; [store.md](store.md) § Push and compaction) |
 | `pull` | `{root}` | `{chunks, cached, vectors}`: fetches missing embeddings (from the shared tier in edge mode) for offline use |
 | `status` | `{root}` | `{files, chunks, vectors, embed_model, merkle_root, index_dir, last_indexed}` |
 | `purge` | `{root}` | `{removed: true}` |

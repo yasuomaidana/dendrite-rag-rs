@@ -88,6 +88,14 @@ enum Command {
     },
     /// Send commits journaled while the shared tier was unreachable (edge mode).
     Sync { root: PathBuf },
+    /// Upload the index to the shared tier, record the commit, compact the tier.
+    #[cfg(feature = "postgres")]
+    Push {
+        root: PathBuf,
+        /// Report what would change, change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Fetch every missing embedding (from the shared tier in edge mode) for offline use.
     Pull { root: PathBuf },
     /// Index statistics.
@@ -321,6 +329,8 @@ fn main() -> anyhow::Result<()> {
             let pending = open(&root)?.sync()?;
             print_value(&serde_json::json!({ "pending": pending }), cli.json)?
         }
+        #[cfg(feature = "postgres")]
+        Command::Push { root, dry_run } => print_value(&open(&root)?.push(dry_run)?, cli.json)?,
         Command::Pull { root } => print_value(&open(&root)?.pull()?, cli.json)?,
         Command::Status { root } => print_value(&open(&root)?.status()?, cli.json)?,
         Command::Embedders => {

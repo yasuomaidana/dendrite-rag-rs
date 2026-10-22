@@ -120,6 +120,14 @@ struct PathParams {
     max_hops: usize,
 }
 
+#[cfg(feature = "postgres")]
+#[derive(Deserialize)]
+struct PushParams {
+    root: String,
+    #[serde(default)]
+    dry_run: bool,
+}
+
 #[derive(Deserialize)]
 struct ExplainParams {
     root: String,
@@ -274,6 +282,11 @@ impl Handler for Server {
                 let p: RootParams = rpc::params(params)?;
                 let pending = self.engine(&p.root)?.sync().map_err(engine_error)?;
                 Ok(json!({ "pending": pending }))
+            }
+            #[cfg(feature = "postgres")]
+            "push" => {
+                let p: PushParams = rpc::params(params)?;
+                to_value(self.indexed(&p.root)?.push(p.dry_run).map_err(engine_error)?)
             }
             "pull" => {
                 let p: RootParams = rpc::params(params)?;

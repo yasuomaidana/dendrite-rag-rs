@@ -4,6 +4,8 @@
 pub mod edge;
 #[cfg(feature = "postgres")]
 pub mod pg;
+#[cfg(feature = "postgres")]
+pub mod push;
 
 use std::collections::BTreeMap;
 use std::path::Path;
