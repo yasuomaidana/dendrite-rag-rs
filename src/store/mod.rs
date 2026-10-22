@@ -242,20 +242,12 @@ impl Store {
                     )));
                 }
             }
+            // The flat scan: in the DRAG-41 benchmark (768-d, eval/RESULTS.md) it beat HNSW
+            // on latency, recall and build time at every size HNSW could be built, and
+            // meets the latency target up to about 200k vectors.
             VectorIndexChoice::Auto => {
-                #[cfg(feature = "hnsw")]
-                if flat.len() > 100_000 {
-                    let hnsw_path = dir.join(VECTORS_HNSW_FILE);
-                    let hnsw = crate::vector::HnswIndex::load(&hnsw_path, flat, ef_search)?;
-                    Box::new(hnsw)
-                } else {
-                    Box::new(flat)
-                }
-                #[cfg(not(feature = "hnsw"))]
-                {
-                    let _ = ef_search;
-                    Box::new(flat)
-                }
+                let _ = ef_search;
+                Box::new(flat)
             }
         };
 

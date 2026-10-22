@@ -78,3 +78,7 @@ candle-cuda = ["candle", "candle-core/cuda", "candle-nn/cuda", "candle-transform
 candle-accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 # In-process GGUF embedders (Qwen3-Embedding and other decoder models) on OxiLLaMa; needs Rust 1.89.
 oxillama = ["dep:oxillama-runtime", "dep:hf-hub"]
+
+[[example]]
+name = "vector_bench"
+required-features = ["hnsw"]

@@ -14,6 +14,23 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Vector index at scale (DRAG-41, 2026-10-22)
+
+`BENCH_FLAT_ONLY=1 cargo run --release --features hnsw --example vector_bench -- 768 50000 100000 200000 400000` (768-d clustered unit vectors, 200 queries, Apple Silicon; recall@10 of the 40-candidate shortlist rescored with exact vectors).
+
+| vectors | index | build | p50, 1 reader | p50, 8 readers | recall@10 |
+|---|---|---|---|---|---|
+| 20,000 | flat | 25 ms | 1.0 ms | 0.65 ms | 1.000 |
+| 20,000 | HNSW ef 64 / 128 / 200 | 275 s | 1.4 / 1.8 / 4.7 ms | 0.7 / 1.5 / 3.3 ms | 0.736 / 0.893 / 0.953 |
+| 50,000 | flat | 56 ms | 0.9 ms | 3.0 ms | 1.000 |
+| 100,000 | flat | 104 ms | 2.4 ms | 10.6 ms | 1.000 |
+| 200,000 | flat | 345 ms | 9.0 ms | 23.5 ms | 1.000 |
+| 400,000 | flat | 567 ms | 10.8 ms | 55.0 ms | 1.000 |
+
+Findings:
+- The HNSW implementation loses to the flat scan on build time, latency and recall at 20k vectors of 768 dimensions; building it at 100k+ would take hours, so `auto` now always picks flat. Storing each node's vector inline (no id lookup per distance) cut the build to 118 s but changed nothing else, so it was not kept.
+- The flat scan meets the 30 ms target with 8 readers up to about 200k vectors (memory-bandwidth bound beyond). Larger corpora need a better approximate index (DRAG-43).
+
 ## Fusion weight sweep (DRAG-26, 2026-10-22)
 
 `EVAL_SWEEP=all`: hybrid MRR@10 for lexical ∈ {0.5, 1, 1.5}, dense ∈ {0.5, 1, 1.5, 2}, symbol ∈ {0.5, 1, 1.5, 2}, community ∈ {0, 0.25} on the three golden sets; chosen by the mean over the corpora, with the worst corpus as a check, so no single repository decides.
