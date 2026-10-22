@@ -21,10 +21,6 @@ impl Embedder for Shared {
     }
 }
 
-fn url() -> Option<String> {
-    std::env::var("LOOM_TEST_PG_URL").ok().filter(|u| !u.is_empty())
-}
-
 fn unique(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,7 +61,10 @@ fn ids(e: &Engine, q: &str, mode: Mode) -> Vec<String> {
 
 #[test]
 fn remote_matches_local_and_shares_embeddings() {
-    let Some(url) = url() else { return };
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let url = pg.url.clone();
     let dir = project();
     let local_embedder = Arc::new(HashEmbedder::new());
     let mut local = open(dir.path(), StorageConfig::default(), &local_embedder);
@@ -108,7 +107,10 @@ fn remote_matches_local_and_shares_embeddings() {
 
 #[test]
 fn remote_incremental_changes_and_graph() {
-    let Some(url) = url() else { return };
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let url = pg.url.clone();
     let dir = project();
     let embedder = Arc::new(HashEmbedder::new());
     let mut pg = open(dir.path(), remote(&url, &unique("incr")), &embedder);

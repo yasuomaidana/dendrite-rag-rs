@@ -20,10 +20,6 @@ impl Embedder for Shared {
     }
 }
 
-fn url() -> Option<String> {
-    std::env::var("LOOM_TEST_PG_URL").ok().filter(|u| !u.is_empty())
-}
-
 fn unique(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -54,7 +50,10 @@ fn open(
 
 #[test]
 fn journals_while_down_and_replays_once_up() {
-    let Some(url) = url() else { return };
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let url = pg.url.clone();
     let dir = project();
     let repo = unique("edge");
     let embedder = Arc::new(HashEmbedder::new());
@@ -103,7 +102,10 @@ fn journals_while_down_and_replays_once_up() {
 
 #[test]
 fn reads_embeddings_through_from_the_shared_tier() {
-    let Some(url) = url() else { return };
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let url = pg.url.clone();
     let dir = project();
     // Someone else's machine indexed the same content into the shared tier.
     let first = Arc::new(HashEmbedder::new());

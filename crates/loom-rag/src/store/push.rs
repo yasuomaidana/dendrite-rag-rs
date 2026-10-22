@@ -317,8 +317,9 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
     Ok(r)
 }
 
-/// Run against a scratch database: `LOOM_TEST_PG_URL=postgresql://… cargo test
-/// --features postgres`. Without the variable they pass without doing anything.
+/// Run against PostgreSQL 16 + pgvector with `cargo test --features postgres`: a container
+/// started per test with testcontainers (needs Docker), or `LOOM_TEST_PG_URL` when set.
+/// Without either they pass without doing anything.
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -326,10 +327,6 @@ mod tests {
     use crate::engine::{Config, Engine};
     use crate::store::{StorageConfig, StorageMode};
     use crate::testutil::{HashEmbedder, project};
-
-    fn url() -> Option<String> {
-        std::env::var("LOOM_TEST_PG_URL").ok().filter(|u| !u.is_empty())
-    }
 
     fn git(root: &Path, args: &[&str]) {
         let ok = std::process::Command::new("git")
@@ -371,7 +368,10 @@ mod tests {
 
     #[test]
     fn push_uploads_records_and_compacts() {
-        let Some(url) = url() else { return };
+        let Some(pg) = crate::testutil::test_pg() else {
+            return;
+        };
+        let url = pg.url.clone();
         let dir = project();
         let root = dir.path();
         std::fs::write(root.join(".gitignore"), ".loom/\n").unwrap();

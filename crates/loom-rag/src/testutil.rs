@@ -174,3 +174,64 @@ impl HttpStub {
         self.requests.lock().unwrap().len()
     }
 }
+
+/// A PostgreSQL 16 + pgvector database for the shared-tier tests: `LOOM_TEST_PG_URL` when
+/// set (CI's service container), otherwise a container started for this test with
+/// testcontainers and removed when the value drops.
+#[cfg(all(test, feature = "postgres"))]
+pub struct TestPg {
+    pub url: String,
+    _container: Option<testcontainers::Container<testcontainers::GenericImage>>,
+}
+
+/// Starts (or names) the test database; `None` when neither the variable nor Docker is
+/// available, and the test then passes without doing anything.
+#[cfg(all(test, feature = "postgres"))]
+pub fn test_pg() -> Option<TestPg> {
+    use testcontainers::core::{IntoContainerPort, WaitFor};
+    use testcontainers::runners::SyncRunner;
+    use testcontainers::{GenericImage, ImageExt};
+
+    if let Some(url) = std::env::var("LOOM_TEST_PG_URL").ok().filter(|u| !u.is_empty()) {
+        return Some(TestPg {
+            url,
+            _container: None,
+        });
+    }
+    let started = GenericImage::new("pgvector/pgvector", "pg16")
+        .with_exposed_port(5432.tcp())
+        .with_wait_for(WaitFor::message_on_stderr(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_USER", "rag")
+        .with_env_var("POSTGRES_PASSWORD", "rag")
+        .with_env_var("POSTGRES_DB", "ragtest")
+        .start();
+    let container = match started {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("skipping: no LOOM_TEST_PG_URL and no Docker for a pgvector container ({e})");
+            return None;
+        }
+    };
+    let port = container.get_host_port_ipv4(5432.tcp()).ok()?;
+    let url = format!("postgresql://rag:rag@127.0.0.1:{port}/ragtest");
+    // The first boot restarts the server after initdb: wait until it answers queries.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Ok(mut c) = postgres::Client::connect(&url, postgres::NoTls)
+            && c.simple_query("SELECT 1").is_ok()
+        {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            eprintln!("skipping: the pgvector container did not accept connections");
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Some(TestPg {
+        url,
+        _container: Some(container),
+    })
+}

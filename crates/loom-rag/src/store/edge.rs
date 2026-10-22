@@ -381,7 +381,8 @@ impl LedgerWrite for EdgeLedgerWrite<'_> {
     }
 }
 
-/// Run against a scratch database: `LOOM_TEST_PG_URL=postgresql://… cargo test
-/// --features postgres`. Without the variable they pass without doing anything.
+/// Run against PostgreSQL 16 + pgvector with `cargo test --features postgres`: a container
+/// started per test with testcontainers (needs Docker), or `LOOM_TEST_PG_URL` when set.
+/// Without either they pass without doing anything.
 #[cfg(test)]
 mod tests;
