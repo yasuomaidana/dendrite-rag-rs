@@ -98,3 +98,7 @@ The result lists the spans in score order, each with `path`, `start_line`, `end_
 | p95 search latency, 8 concurrent readers | < 30 ms (embedding the query excluded) |
 | Quantized recall@10 vs exact | ≥ 0.95 |
 | Hybrid recall@10 on the golden set | ≥ lexical-only |
+
+## Ranking supplied documents
+
+`rank` (DRAG-39) ranks documents the caller sends, without a project index: Okapi BM25 (k1 1.2, b 0.75) over the code tokenizer's terms of those texts, cosine similarity with the project's embedder, and the project's fusion weights in RRF (k = 60). Document embeddings go to the same cache as chunk embeddings, keyed by model and content hash, so a fixed catalogue is embedded once; only the query is embedded per call. Without a reachable embedder the ranking is lexical. Dendrite ranks its agent catalogue this way (`dendrite bouton search` / `route`), keeping its own cost, locality and history rules on top.

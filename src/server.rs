@@ -129,6 +129,15 @@ struct PushParams {
 }
 
 #[derive(Deserialize)]
+struct RankParams {
+    root: String,
+    query: String,
+    documents: Vec<crate::rank::Document>,
+    #[serde(default)]
+    top_k: usize,
+}
+
+#[derive(Deserialize)]
 struct ExplainParams {
     root: String,
     target: String,
@@ -333,6 +342,14 @@ impl Handler for Server {
                     .map_err(history_error)?;
                 Ok(json!({ "hits": hits }))
             }
+            "rank" => {
+                let p: RankParams = rpc::params(params)?;
+                let ranked = self
+                    .engine(&p.root)?
+                    .rank(&p.documents, &p.query, p.top_k)
+                    .map_err(engine_error)?;
+                Ok(json!({ "ranked": ranked }))
+            }
             "graph.communities" => {
                 let p: CommunitiesParams = rpc::params(params)?;
                 let communities = self
@@ -435,6 +452,13 @@ mod tests {
             json!({"root": root, "name": "IndexProject"}),
         );
         assert_eq!(r["result"]["hits"][0]["path"], "pkg/rag/indexer.go");
+        let r = call(
+            &mut s,
+            "rank",
+            json!({"root": root, "query": "sandbox browser", "documents": [
+                {"id": "a", "text": "git commits"}, {"id": "b", "text": "browser sandbox"}]}),
+        );
+        assert_eq!(r["result"]["ranked"][0]["id"], "b");
         let r = call(&mut s, "graph.communities", json!({"root": root, "min_size": 1}));
         assert!(!r["result"]["communities"].as_array().unwrap().is_empty());
         let r = call(

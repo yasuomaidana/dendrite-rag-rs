@@ -4,16 +4,17 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.2.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`)
+Protocol version: **1.3.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`; 1.3 added `rank`)
 
 | Method | Params | Result |
 |---|---|---|
-| `health` | — | `{name: "dendrite-rag", version, protocol: "1.2.0"}` |
+| `health` | — | `{name: "dendrite-rag", version, protocol: "1.3.0"}` |
 | `index` | `{root, full?: false, embed_budget_ms?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content}]}` |
 | `context` | `{root, query, token_budget?: 4000}` | `{spans: [hit...], tokens}` |
 | `symbols.definitions` | `{root, name}` | `{hits}`: chunks defining `name` |
 | `symbols.references` | `{root, name}` | `{hits}`: chunks calling or using `name` |
+| `rank` | `{root, query, documents: [{id, text}], top_k?: 0}` | `{ranked: [{id, score, lexical, dense?}]}`: hybrid ranking of supplied documents, no index needed ([retrieval.md](retrieval.md) § Ranking supplied documents) |
 | `graph.communities` | `{root, limit?: 50, min_size?: 2}` | `{communities: [{id, label, size, files, top_symbols, summary}]}`, largest first |
 | `graph.god_nodes` | `{root, min_in_degree?: 21, limit?: 50}` | `{nodes: [{symbol, path, line, in_degree, out_degree, used_from_files, community, summary}]}` |
 | `graph.path` | `{root, from, to, kinds?: ["call","import","type"], max_hops?: 6}` | `{found, directed, level: "symbol"\|"file", steps: [{node, location?, via?, reversed?}]}` |
