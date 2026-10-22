@@ -55,6 +55,13 @@
         "type": "boolean",
         "default": false,
         "description": "Ask the model even when the same prompt was answered before (answers are cached by model and exact prompt)"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Restrict retrieval to these paths (globs): the top hits among them, 4 unless top_k is set"
       }
     }
   },

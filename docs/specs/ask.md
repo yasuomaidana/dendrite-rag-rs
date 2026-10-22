@@ -2,7 +2,7 @@
 
 `ask` (DRAG-38) answers a question from the project. It moved here from Dendrite's Go `pkg/rag/ask.go`, whose prompts and answer handling it keeps, so answers do not change with the move; Dendrite's `dendrite ask` is now a client of it.
 
-1. **Context**: the context pack for the question (2,500 estimated tokens), or the top `top_k` hits, from the corpora in `corpus` (default `all`; [retrieval.md](retrieval.md) § Corpora).
+1. **Context**: the context pack for the question (2,500 estimated tokens), or the top `top_k` hits; with `paths` (a project that is a single file), the top hits among those paths, 4 unless `top_k` is set. Either comes from the corpora in `corpus` (default `all`; [retrieval.md](retrieval.md) § Corpora).
 2. **Prompt**: numbered sources `[n] Source: <path> (lines a-b)` with their heading (scope) and text, then the question.
 3. **Model**, by `mode`, always through the LiteLLM gateway (`LITELLM_PROXY_URL`, `LITELLM_MASTER_KEY`):
    - `local` (default): the local model (`local_model`, else `[ask] local_model`, else `local-coder`). An empty answer, or an engine's canned placeholder, counts as a failure.
