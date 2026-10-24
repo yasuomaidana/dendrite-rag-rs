@@ -460,17 +460,22 @@ impl LedgerWrite for LedgerBatch {
     }
 }
 
-fn encode_f32(v: &[f32]) -> Vec<u8> {
+pub(crate) fn encode_f32(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-fn decode_f32(b: &[u8]) -> Vec<f32> {
+pub(crate) fn decode_f32(b: &[u8]) -> Vec<f32> {
     b.as_chunks::<4>()
         .0
         .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
+
+#[cfg(feature = "sqlite")]
+mod import;
+#[cfg(feature = "sqlite")]
+pub(crate) use import::read_caches;
 
 #[cfg(test)]
 mod tests;

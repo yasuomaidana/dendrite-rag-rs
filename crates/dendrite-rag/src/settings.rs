@@ -28,6 +28,7 @@
 //!
 //! [storage]
 //! mode = "local"                # local (default) | remote (shared PostgreSQL) | edge
+//! # ledger = "sqlite"           # local ledger: redb (default) | sqlite (feature `sqlite`)
 //! # repo = "github.com/acme/app" # name in the shared tier; default: the origin URL
 //!
 //! [graph]
@@ -48,7 +49,7 @@
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
 //! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
-//! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
+//! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`, `DENDRITE_RAG_STORAGE_LEDGER`,
 //! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
 //! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_BM25_K1`, `_B`, `_Q`,
 //! `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
@@ -114,6 +115,8 @@ pub fn valid_docs_share(share: f32) -> bool {
 pub struct StorageSettings {
     pub mode: Option<loom_rag::store::StorageMode>,
     pub repo: Option<String>,
+    /// The local index's ledger: redb (default) or sqlite (feature `sqlite`).
+    pub ledger: Option<loom_rag::store::LedgerChoice>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -281,6 +284,12 @@ impl Settings {
             };
             self.storage.mode = Some(mode);
         }
+        if let Some(l) = var("DENDRITE_RAG_STORAGE_LEDGER") {
+            let Some(ledger) = loom_rag::store::LedgerChoice::parse(&l) else {
+                bail!("DENDRITE_RAG_STORAGE_LEDGER={l:?}: expected redb or sqlite");
+            };
+            self.storage.ledger = Some(ledger);
+        }
         set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
         set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
         set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
@@ -398,6 +407,7 @@ impl Settings {
             mode: self.storage.mode.unwrap_or_default(),
             repo: self.storage.repo.clone(),
             pg_url: self.pg_url.clone(),
+            ledger: self.storage.ledger.unwrap_or_default(),
         };
         cfg
     }

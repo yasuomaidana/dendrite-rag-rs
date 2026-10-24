@@ -32,6 +32,7 @@ tempfile = "3.27.0"
 [features]
 default = []
 postgres = ["loom-rag/postgres"]
+sqlite = ["loom-rag/sqlite"]
 hnsw = ["loom-rag/hnsw"]
 model2vec = ["loom-rag/model2vec"]
 candle = ["loom-rag/candle"]

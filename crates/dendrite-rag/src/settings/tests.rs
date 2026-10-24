@@ -289,3 +289,16 @@ fn lexical_bm25_from_file_and_environment() {
         "unknown keys are errors"
     );
 }
+
+#[test]
+fn storage_ledger_from_file_and_environment() {
+    let mut s = Settings::parse("[storage]\nledger = \"sqlite\"\n").unwrap();
+    assert_eq!(s.config().storage.ledger, loom_rag::store::LedgerChoice::Sqlite);
+    s.apply_env(env(&[("DENDRITE_RAG_STORAGE_LEDGER", "redb")]))
+        .unwrap();
+    assert_eq!(s.config().storage.ledger, loom_rag::store::LedgerChoice::Redb);
+    assert!(
+        s.apply_env(env(&[("DENDRITE_RAG_STORAGE_LEDGER", "lmdb")]))
+            .is_err()
+    );
+}

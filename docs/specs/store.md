@@ -38,11 +38,22 @@ Engine access to index storage is abstracted behind traits in `src/store/mod.rs`
 
 The `Store` struct aggregates these handles (`ledger`, `lexical`, `vectors`):
 
-- **LocalStore** (current implementation, via `Store::open_local`):
+- **LocalStore** (via `Store::open_local`; the ledger is redb or, opt-in, SQLite § SQLite ledger):
   - Ledger: redb (`ledger.redb`).
   - Lexical: Tantivy BM25 index (`tantivy/`).
   - Vectors: binary FlatIndex (`vectors.bin`) and optional in-memory HNSW graph (`vectors.hnsw`, feature `hnsw`) with self-healing on corruption.
 - **PgStore** (DRAG-33): PostgreSQL backend storing ledger tables, BM25 over postings in SQL, and vector embeddings (§ PostgreSQL below).
+
+## SQLite ledger (DRAG-49)
+
+`[storage] ledger = "sqlite"` (`DENDRITE_RAG_STORAGE_LEDGER`, feature `sqlite`) keeps the ledger in `index.db` (SQLite through `rusqlite` with the bundled amalgamation) instead of `ledger.redb`; Tantivy and the vector files are unchanged, and edge mode mirrors it the same way (`src/store/sqlite/`).
+
+- **Tables** mirror the redb tables: `files(path, entry JSON)`, `chunks(id, path, content_hash, record JSON)` indexed by path and content hash, `embeddings(model, hash, vec f32le)`, `meta`, `community_files`, `community_chunks`, `communities`, `llm_cache`, `concepts`. DDL versions live in `PRAGMA user_version` (a newer file is refused); the content schema version is `meta.schema`, cleared on mismatch like redb, keeping embeddings and the LLM cache.
+- **Concurrency.** WAL mode, one write connection and four read connections; writes are buffered and applied in one `BEGIN IMMEDIATE` transaction per commit. Unlike redb, other processes (the CLI next to `serve`) can read the file while it is open.
+- **Migration.** The first open next to a `ledger.redb` copies its embeddings and LLM cache, so switching re-chunks (seconds) but embeds nothing; `ledger.redb` is left as it was, so switching back is a settings change.
+- **Measured** (`~/go/pkg/mod/github.com`, 5,887 files, 49,302 chunks, two runs each): cold index 10.3–11.0 s against 10.3–10.8 s for redb, peak footprint 182–188 MB against 167–184 MB, no-op re-index 1.16 s against 1.20 s, file 176 MB against 179 MB. A cold index killed with `kill -9` after 4 s recovers to the identical graph and communities on the next run. Query path (criterion, 2,000 synthetic files): lexical +3 %, dense +24 %, hybrid +20 %, context packs +40 % (8.0 ms against 5.7 ms), from per-chunk reads; batching them through `json_each` was slower still. redb therefore stays the default.
+- **Vectors stay in memory.** sqlite-vec was measured for search (`vec0`, exact): int8 at 49k × 256-d p50 12 ms with one reader, p95 43 ms with eight (768-d: 117 ms), against 0.2 ms for the in-memory int8 scan, so it does not meet the 30 ms gate and is not a dependency; the `embeddings` table already persists the vectors the scan is rebuilt from.
+- **Turso** was evaluated first and not adopted: its Rust API is async-only (a blocking adapter in a synchronous engine), it is pre-1.0 with a changing file format, its default features install mimalloc and a second Tantivy, and its concurrent writers do not help a single-writer engine. Reconsider at 1.0 with a sync API or an ANN vector index.
 
 ## Incremental indexing
 

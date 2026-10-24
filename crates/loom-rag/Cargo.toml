@@ -29,6 +29,7 @@ model2vec-rs = { version = "0.3.0", default-features = false, features = ["fancy
 rayon = "1.12.0"
 redb = "4.4.0"
 regex = "1.13.1"
+rusqlite = { version = "=0.40.2", features = ["bundled"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 streaming-iterator = "0.1.9"
@@ -61,6 +62,8 @@ testutil = ["dep:tempfile"]
 dhat = ["dep:dhat"]
 # Shared tier on PostgreSQL 16 + pgvector (`[storage] mode = "remote"`).
 postgres = ["dep:postgres", "dep:pgvector"]
+# Local ledger in SQLite (`[storage] ledger = "sqlite"`).
+sqlite = ["dep:rusqlite"]
 # Approximate nearest-neighbour index for large corpora.
 hnsw = []
 # In-process static embeddings (model2vec), for fully offline indexing.

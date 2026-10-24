@@ -43,6 +43,7 @@ fn remote(url: &str, repo: &str) -> StorageConfig {
         mode: StorageMode::Remote,
         repo: Some(repo.to_string()),
         pg_url: Some(url.to_string()),
+        ..StorageConfig::default()
     }
 }
 
