@@ -146,6 +146,7 @@ impl Engine {
         // the next run re-chunks the rest, removing each file from the lexical index by
         // path first so a group committed only there is not duplicated.
         let opts = self.cfg.chunk;
+        let contexts = self.cfg.chunk_contexts.clone();
         let changed_files: Vec<&(SourceFile, String)> =
             scanned.iter().filter(|(f, _)| added.contains(&f.path)).collect();
         let groups: Vec<_> = changed_files.chunks(CHUNK_GROUP_FILES).collect();
@@ -159,8 +160,13 @@ impl Engine {
             let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = group
                 .par_iter()
                 .map(|(f, h)| {
-                    let (chunks, imports) = read_text(&f.abs)
+                    let (mut chunks, imports): (Vec<Chunk>, Vec<String>) = read_text(&f.abs)
                         .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
+                    if let Some(ctx) = &contexts {
+                        for c in &mut chunks {
+                            c.context = ctx.get(&c.id).cloned();
+                        }
+                    }
                     (f, h, chunks, imports)
                 })
                 .collect();

@@ -4,10 +4,12 @@
 //!     loom-eval quality <root> eval/golden-dendrite.json [more sets…] [--index-dir DIR] [--json RUN.json]
 //!     loom-eval compare <A.json> <B.json>
 //!     loom-eval abstain-probe <root> <golden…> --negatives eval/golden-negatives.json --set NAME
+//!     loom-eval export-chunks <root> --index-dir DIR --out chunks.jsonl
 //!     loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--corpus code] [--llm]
 
 mod abstain;
 mod baselines;
+mod contextual;
 mod golden;
 mod methods;
 mod metrics;
@@ -48,6 +50,18 @@ enum Cmd {
         /// Write raw per-query scores to a JSON file.
         #[arg(long)]
         json: Option<PathBuf>,
+        /// Index chunks with these contexts (`{chunk_id: text}`); use a fresh index dir.
+        #[arg(long)]
+        contexts: Option<PathBuf>,
+    },
+    /// Write every indexed file with its chunks as JSON lines, for an external model to
+    /// write contexts for (`--contexts`).
+    ExportChunks {
+        root: PathBuf,
+        #[arg(long)]
+        index_dir: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Calibrate `[rerank] abstain`: the best reranked hit's relevance on golden and
     /// unanswerable questions, and how thresholds split them.
@@ -103,7 +117,19 @@ fn main() -> anyhow::Result<()> {
             index_dir,
             only,
             json,
-        } => quality(root, golden, index_dir, only, json),
+            contexts,
+        } => quality(root, golden, index_dir, only, json, contexts),
+        Cmd::ExportChunks { root, index_dir, out } => {
+            let mut cfg = dendrite_rag::settings::resolve(&root)?;
+            if index_dir.is_some() {
+                cfg.index_dir = index_dir;
+            }
+            let mut engine = Engine::open(&root, cfg)?;
+            engine.index(false)?;
+            let files = contextual::export(&engine, &out)?;
+            eprintln!("exported {files} files to {}", out.display());
+            Ok(())
+        }
         Cmd::Compare { a, b } => compare(a, b),
         Cmd::AbstainProbe {
             root,
@@ -136,10 +162,14 @@ fn quality(
     index_dir: Option<PathBuf>,
     only: Option<String>,
     json: Option<PathBuf>,
+    contexts: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let mut cfg = dendrite_rag::settings::resolve(&root)?;
     if index_dir.is_some() {
         cfg.index_dir = index_dir;
+    }
+    if let Some(path) = contexts {
+        cfg.chunk_contexts = Some(std::sync::Arc::new(contextual::load(&path)?));
     }
     let walk = cfg.walk.clone();
     let mut engine = Engine::open(&root, cfg)?;

@@ -190,6 +190,7 @@ fn pseudo_chunk(id: &str, path: &str, text: &str, start_line: usize, end_line: u
         refs: Vec::new(),
         calls: Vec::new(),
         method_calls: Vec::new(),
+        context: None,
         content: text.to_string(),
     }
 }

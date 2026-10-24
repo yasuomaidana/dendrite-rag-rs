@@ -57,6 +57,10 @@ pub struct Chunk {
     #[serde(default)]
     pub method_calls: Vec<String>,
     pub content: String,
+    /// A short text situating the chunk in its file (contextual retrieval, DRAG-48):
+    /// indexed with the chunk, never returned in results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 impl Chunk {
@@ -71,9 +75,12 @@ impl Chunk {
         h
     }
 
-    /// Header plus content: the text BM25 and the embedder see.
+    /// Header, context and content: the text BM25 and the embedder see.
     pub fn indexed_text(&self) -> String {
-        format!("{}{}", self.header(), self.content)
+        match &self.context {
+            Some(ctx) => format!("{}// context: {ctx}\n{}", self.header(), self.content),
+            None => format!("{}{}", self.header(), self.content),
+        }
     }
 }
 
@@ -205,6 +212,7 @@ fn build(
         refs,
         calls,
         method_calls,
+        context: None,
         content,
     })
 }

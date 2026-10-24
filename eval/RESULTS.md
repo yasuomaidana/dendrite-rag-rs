@@ -95,6 +95,17 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## LLM contextual chunk prefixes: go/no-go (DRAG-48, 2026-10-24)
+
+Contextual retrieval with an LLM (a 50-100 token text situating each chunk in its file, indexed with the chunk and never returned) against the no-LLM header the index already has (path and scope). Prefixes by Gemini 3.8 Flash through `agy` (`eval/contextual/gen.py`: one call per file with the whole document and its chunks; files of one chunk under 2,000 characters skipped): 593 of 672 chunks of dendrite-rag-rs (116 calls, 22 min) and 669 of 826 of embedag. Fresh indexes with and without them, `loom-eval compare`, MRR@10:
+
+| set | lexical search | hybrid search (`nomic-embed-text`) | hybrid context pack |
+|---|---|---|---|
+| dendrite-rag-rs | +0.004 [-0.056, 0.060] | +0.049 [-0.093, 0.195] | +0.042 [-0.108, 0.192] |
+| embedag | +0.027 [0.000, 0.080] | -0.030 [-0.073, 0.000] | -0.030 [-0.073, 0.000] |
+
+Dense search alone moved -0.063 (dendrite-rag-rs) and +0.014 (embedag); on embedag the hybrid nDCG@10 fell, -0.025 [-0.057, -0.002]. **No-go:** the gate (+0.02 MRR with a CI above 0 on two of the three code sets) fails on both sets measured, so the Dendrite set (915 files) was not generated and the enrichment pipeline (outbox, worker, enrich RPC: DRAG-50) is not built. The reported gains of contextual retrieval came from prose corpora; code chunks here already carry their path and scope, and the extra text dilutes the embedding as often as it helps. `Chunk.context`, `Config::chunk_contexts`, `loom-eval export-chunks` and `--contexts` stay for a later experiment (another generator, a reranker, larger corpora).
+
 ## Abstention and the outline fallback (DRAG-51, 2026-10-24)
 
 **Abstention.** `loom-eval abstain-probe` with the in-process `BAAI/bge-reranker-base` (candle, Metal), `nomic-embed-text` vectors, the golden sets as answerable questions and `eval/golden-negatives.json` (8 questions per repository naming features the repository does not have, checked by grep). Shares abstained at each threshold of the best hit's relevance probability:

@@ -64,6 +64,7 @@ pub fn summary_chunk(c: &Community) -> Option<Chunk> {
         refs: Vec::new(),
         calls: Vec::new(),
         method_calls: Vec::new(),
+        context: None,
         content,
     })
 }
