@@ -30,7 +30,7 @@ The schema version is `2` (version 2 added `calls`, `method_calls` and `imports`
 
 ## Storage backends
 
-Engine access to index storage is abstracted behind traits in `src/store.rs`:
+Engine access to index storage is abstracted behind traits in `src/store/mod.rs`:
 
 - `LedgerStore` / `LedgerWrite`: file metadata, chunk records, embedding cache, metadata entries, and graph communities.
 - `LexicalStore` / `LexicalWrite`: full-text lexical search and chunk document indexing.
@@ -42,16 +42,16 @@ The `Store` struct aggregates these handles (`ledger`, `lexical`, `vectors`):
   - Ledger: redb (`ledger.redb`).
   - Lexical: Tantivy BM25 index (`tantivy/`).
   - Vectors: binary FlatIndex (`vectors.bin`) and optional in-memory HNSW graph (`vectors.hnsw`, feature `hnsw`) with self-healing on corruption.
-- **PgStore** (planned in DRAG-33): PostgreSQL backend storing ledger tables, BM25 / tsvector lexical search, and vector embeddings directly in PostgreSQL.
+- **PgStore** (DRAG-33): PostgreSQL backend storing ledger tables, BM25 over postings in SQL, and vector embeddings (§ PostgreSQL below).
 
 ## Incremental indexing
 
 1. Walk the project. A file whose `(size, mtime)` matches the ledger reuses its stored hash without being read. Every other file is read and hashed with BLAKE3 (in parallel).
 2. Build Merkle trees over `path → file hash` for the ledger and for the walk (`embedag::dag::merkle::MerkleNode::from_paths`) and `diff` them. Equal subtrees are pruned, so the cost follows the size of the change. A path in the delta that names a directory stands for every file under it.
 3. A file whose content is unchanged but whose mtime moved only gets its ledger entry refreshed.
-4. For removed and modified files, delete their chunks from Tantivy, the vector index and the ledger.
-5. Re-chunk added and modified files. Embed only chunks whose `(model, content_hash)` is not cached, then insert them everywhere.
-6. Commit Tantivy first, then redb with the new Merkle root and `last_indexed`. Re-running after a crash between the two is safe: files are removed from Tantivy by path before their chunks are added again.
+4. For removed and modified files, delete their chunks from Tantivy, the vector index and the ledger, and their ledger entries.
+5. Re-chunk added and modified files in groups of 512. Each group is written to Tantivy and the ledger and committed, Tantivy first, before the next group is chunked, so a cold index never holds every chunk in memory (DRAG-44: peak footprint 556 MB to under 200 MB at 49k chunks). Embed only chunks whose `(model, content_hash)` is not cached, then insert them everywhere.
+6. The last commit writes the new Merkle root and `last_indexed`. Re-running after a crash at any point is safe: committed groups are current, and every re-chunked file is removed from Tantivy by path before its chunks are added again, so a group that reached only Tantivy is not duplicated.
 
 Measured on the Dendrite repository (828 files, 5,281 chunks, Apple Silicon, lexical only): full index 0.93 s, no-op re-index 43 ms, BM25 query 0.1–0.5 ms.
 

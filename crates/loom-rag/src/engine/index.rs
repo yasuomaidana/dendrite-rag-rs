@@ -17,6 +17,10 @@ fn expand<'a>(delta_path: &str, files: impl Iterator<Item = &'a str>) -> Vec<Str
         .collect()
 }
 
+/// Files chunked together before their chunks are written: enough for the parallel
+/// chunker to stay busy, few enough that a group's chunks stay small in memory.
+pub(super) const CHUNK_GROUP_FILES: usize = 512;
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -95,18 +99,6 @@ impl Engine {
             added.extend(expand(p, new_paths.iter().copied()));
         }
 
-        // Chunk the added and modified files.
-        let opts = self.cfg.chunk;
-        let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = scanned
-            .par_iter()
-            .filter(|(f, _)| added.contains(&f.path))
-            .map(|(f, h)| {
-                let (chunks, imports) = read_text(&f.abs)
-                    .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
-                (f, h, chunks, imports)
-            })
-            .collect();
-
         let walk_ms = walked.elapsed().as_millis() as u64;
         let mut report = IndexReport {
             open_ms: std::mem::take(&mut self.open_ms),
@@ -128,17 +120,13 @@ impl Engine {
         for p in &removed {
             lw.remove_file(p);
         }
-        for (_, _, chunks, _) in &fresh {
-            for c in chunks {
-                lw.add(c)?;
-            }
-        }
-        lw.commit()?;
-
         let mut batch = self.ledger.batch()?;
         if full {
             batch.clear_index()?;
         }
+        // Removals before additions: a modified file's unchanged chunks keep their ids.
+        // A modified file loses its entry too, so after a crash before its group commits
+        // the next run sees it as added even if its content went back to the old hash.
         for p in &removed {
             if let Some(e) = old.get(p) {
                 for id in &e.chunk_ids {
@@ -146,25 +134,56 @@ impl Engine {
                     report.chunks_removed += 1;
                 }
             }
+            batch.remove_file(p)?;
             if !new_paths.contains(p.as_str()) {
-                batch.remove_file(p)?;
                 batch.remove_concepts(p)?;
             }
         }
-        for (f, h, chunks, imports) in &fresh {
-            for c in chunks {
-                batch.put_chunk(c)?;
+        // Chunk the added and modified files a group at a time and commit each group to both
+        // stores, lexical index first, before the next is chunked: holding every chunk of a
+        // cold index at once, and one ledger transaction over all of them, was its peak
+        // memory (DRAG-44). A crash between groups leaves the committed groups current;
+        // the next run re-chunks the rest, removing each file from the lexical index by
+        // path first so a group committed only there is not duplicated.
+        let opts = self.cfg.chunk;
+        let changed_files: Vec<&(SourceFile, String)> =
+            scanned.iter().filter(|(f, _)| added.contains(&f.path)).collect();
+        let groups: Vec<_> = changed_files.chunks(CHUNK_GROUP_FILES).collect();
+        for (i, group) in groups.iter().enumerate() {
+            if i > 0 {
+                lw.commit()?;
+                batch.commit()?;
+                lw = self.lexical.writer()?;
+                batch = self.ledger.batch()?;
             }
-            report.chunks_added += chunks.len();
-            let entry = FileEntry {
-                hash: (*h).clone(),
-                size: f.size,
-                mtime_ns: f.mtime_ns,
-                chunk_ids: chunks.iter().map(|c| c.id.clone()).collect(),
-                imports: imports.clone(),
-            };
-            batch.put_file(&f.path, &entry)?;
+            let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = group
+                .par_iter()
+                .map(|(f, h)| {
+                    let (chunks, imports) = read_text(&f.abs)
+                        .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
+                    (f, h, chunks, imports)
+                })
+                .collect();
+            for (f, h, chunks, imports) in fresh {
+                lw.remove_file(&f.path);
+                for c in &chunks {
+                    lw.add(c)?;
+                    batch.put_chunk(c)?;
+                }
+                report.chunks_added += chunks.len();
+                let entry = FileEntry {
+                    hash: h.clone(),
+                    size: f.size,
+                    mtime_ns: f.mtime_ns,
+                    chunk_ids: chunks.iter().map(|c| c.id.clone()).collect(),
+                    imports,
+                };
+                batch.put_file(&f.path, &entry)?;
+            }
         }
+        // Lexical index first: the ledger commit below is what makes the run count.
+        lw.commit()?;
+
         // Unchanged content with a new mtime: refresh the entry so the next run skips it.
         for (f, h) in &scanned {
             if added.contains(&f.path) {

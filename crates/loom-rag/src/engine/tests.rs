@@ -193,3 +193,58 @@ fn a_cleared_ledger_rebuilds_the_lexical_index() {
     e.index(false).unwrap();
     assert_eq!(e.lexical.len(), docs, "lexical documents must not be duplicated");
 }
+
+/// A project of `n` Go files, each defining one uniquely named function.
+fn many_files(n: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..n {
+        let d = dir.path().join(format!("pkg/p{}", i / 100));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join(format!("f{i}.go")),
+            format!("package p\n\nfunc Unique{i}Marker() {{}}\n"),
+        )
+        .unwrap();
+    }
+    dir
+}
+
+#[test]
+fn cold_index_commits_in_groups_and_stays_consistent() {
+    let n = 2 * index::CHUNK_GROUP_FILES + 7;
+    let dir = many_files(n);
+    let mut e = open(dir.path());
+    let r = e.index(false).unwrap();
+    assert_eq!((r.files_scanned, r.files_changed), (n, n));
+    assert_eq!(e.lexical.len(), e.ledger.chunk_count().unwrap());
+    assert_eq!(
+        e.search_lexical(&format!("Unique{}Marker", n - 1), 5)
+            .unwrap()
+            .len(),
+        1
+    );
+    let r = e.index(false).unwrap();
+    assert_eq!((r.files_changed, r.chunks_added), (0, 0));
+}
+
+#[test]
+fn a_group_committed_only_to_the_lexical_index_is_not_duplicated() {
+    let dir = many_files(3);
+    let mut e = open(dir.path());
+    e.index(false).unwrap();
+    // A crash after the lexical commit and before the ledger's: the lexical index holds
+    // the file's chunks, the ledger does not know the file.
+    let path = "pkg/p0/f1.go";
+    let entry = e.ledger.files().unwrap()[path].clone();
+    let mut b = e.ledger.batch().unwrap();
+    for id in &entry.chunk_ids {
+        b.remove_chunk(id).unwrap();
+    }
+    b.remove_file(path).unwrap();
+    b.commit().unwrap();
+
+    let r = e.index(false).unwrap();
+    assert_eq!(r.files_changed, 1);
+    assert_eq!(e.search_lexical("Unique1Marker", 5).unwrap().len(), 1);
+    assert_eq!(e.lexical.len(), e.ledger.chunk_count().unwrap());
+}
