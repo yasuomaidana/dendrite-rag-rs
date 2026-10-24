@@ -42,6 +42,7 @@ fn open(
             mode,
             repo: Some(repo.to_string()),
             pg_url: Some(url.to_string()),
+            ..StorageConfig::default()
         },
         ..Config::default()
     };

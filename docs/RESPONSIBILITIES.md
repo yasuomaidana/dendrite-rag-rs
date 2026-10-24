@@ -149,7 +149,7 @@ The technical specification lives in this repository: [ARCHITECTURE.md](ARCHITEC
 
 ## 9. Engine Stack (decided 2026-10-18, revised 2026-10-20)
 
-Selection criteria: pure-Rust storage, < 200 MB baseline RSS, concurrent readers, incremental updates. The tree-sitter grammars are the only native code (C sources compiled by `cc`, no system libraries).
+Selection criteria: no system libraries (bundled C compiled by `cc` is accepted, as for the tree-sitter grammars and, opt-in, SQLite), < 200 MB peak memory at 50k chunks, concurrent readers, incremental updates.
 
 | Concern | Choice | Rejected (reason) |
 |---|---|---|
@@ -159,6 +159,6 @@ Selection criteria: pure-Rust storage, < 200 MB baseline RSS, concurrent readers
 | Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default) and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
 | Fusion | weighted **RRF** (k = 60) over lexical, dense and symbol-name lists, implemented locally | `embedag-rag::RrfRanker` (two lists only, `Uuid` keys, pulls in `oxirag`) |
 | Change detection | **embedag-core** BLAKE3 Merkle tree (`MerkleNode::from_paths` + `diff`) | full rescans |
-| Ledger | **redb** (pure Rust) | SQLite (FFI) |
+| Ledger | **redb** (pure Rust, default); **SQLite** (`rusqlite` bundled, feature `sqlite`, `[storage] ledger = "sqlite"`, DRAG-49) as an opt-in | Turso (async-only Rust API in a synchronous engine, pre-1.0 file format, mimalloc and Tantivy in its default features; its MVCC writers do not help a single-writer engine; revisit at 1.0 with a sync API or an ANN index); sqlite-vec for search (int8 `vec0` exact scan p95 43 ms at 49k × 256-d with 8 readers, against 0.2 ms for the in-memory scan) |
 
 Benchmark gate (DRAG-15): RSS < 200 MB at 50k chunks, p95 query latency < 30 ms with 8 concurrent readers, quantized recall@10 ≥ 0.95 versus exact f32 search, hybrid recall@10 ≥ lexical-only on the golden query set.

@@ -1,7 +1,7 @@
 //! Indexes a project (lexical only) and prints code-graph counts, timing, the symbols
 //! with the most users and the largest communities.
 //!
-//!     cargo run --release --example graph_stats -- <root> [index-dir]
+//!     cargo run --release --example graph_stats -- <root> [index-dir] [redb|sqlite]
 
 use std::time::Instant;
 
@@ -14,6 +14,10 @@ fn main() -> anyhow::Result<()> {
     let mut cfg = Config::default();
     if let Some(dir) = args.next() {
         cfg.index_dir = Some(dir.into());
+    }
+    if let Some(ledger) = args.next() {
+        cfg.storage.ledger = loom_rag::store::LedgerChoice::parse(&ledger)
+            .ok_or_else(|| anyhow::anyhow!("unknown ledger {ledger:?}"))?;
     }
     let mut engine = Engine::open_with_embedder(root.as_ref(), cfg, None)?;
     let report = engine.index(false)?;

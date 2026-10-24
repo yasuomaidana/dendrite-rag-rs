@@ -23,9 +23,16 @@ const QUERIES: [&str; 4] = [
 
 fn engine() -> (tempfile::TempDir, Engine) {
     let dir = synthetic_project(FILES);
+    let mut cfg = Config::default();
+    // `LOOM_BENCH_LEDGER=sqlite` (with `--features sqlite`) measures the SQLite ledger.
+    if let Some(l) = std::env::var("LOOM_BENCH_LEDGER")
+        .ok()
+        .and_then(|l| loom_rag::store::LedgerChoice::parse(&l))
+    {
+        cfg.storage.ledger = l;
+    }
     let mut e =
-        Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(HashEmbedder::new())))
-            .expect("open");
+        Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(HashEmbedder::new()))).expect("open");
     e.index(false).expect("index");
     (dir, e)
 }

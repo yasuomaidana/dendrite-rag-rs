@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature: [model2vec, candle, oxillama, hnsw]
+        feature: [model2vec, candle, oxillama, hnsw, sqlite]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

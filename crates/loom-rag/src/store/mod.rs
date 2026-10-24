@@ -6,6 +6,8 @@ pub mod edge;
 pub mod pg;
 #[cfg(feature = "postgres")]
 pub mod push;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -124,6 +126,23 @@ impl StorageMode {
     }
 }
 
+/// Which backend holds the ledger of a local index (`[storage] ledger`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerChoice {
+    /// redb in `ledger.redb`.
+    #[default]
+    Redb,
+    /// SQLite in `index.db` (feature `sqlite`).
+    Sqlite,
+}
+
+impl LedgerChoice {
+    pub fn parse(s: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(s.trim().to_ascii_lowercase())).ok()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
     pub mode: StorageMode,
@@ -131,6 +150,8 @@ pub struct StorageConfig {
     pub repo: Option<String>,
     /// The shared tier URL, set by the caller: credentials never go in a settings file.
     pub pg_url: Option<String>,
+    /// The ledger backend of a local index (local and edge modes).
+    pub ledger: LedgerChoice,
 }
 
 /// The repository name used in the shared tier: the configured one, else the `origin`
@@ -157,7 +178,9 @@ impl Store {
     pub fn open(dir: &Path, root: &Path, cfg: &crate::engine::Config) -> Result<Self> {
         let config_err = |msg: String| crate::engine::Error::Other(anyhow::anyhow!(msg));
         match cfg.storage.mode {
-            StorageMode::Local => Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search),
+            StorageMode::Local => {
+                Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search, cfg.storage.ledger)
+            }
             StorageMode::Remote => {
                 let Some(url) = cfg.storage.pg_url.as_deref() else {
                     return Err(config_err(
@@ -184,7 +207,8 @@ impl Store {
                 };
                 #[cfg(feature = "postgres")]
                 {
-                    let local = Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search)?;
+                    let local =
+                        Self::open_local_with(dir, cfg.vector_index, cfg.hnsw_ef_search, cfg.storage.ledger)?;
                     let edge = edge::Edge::new(
                         url,
                         &repo_name(root, cfg.storage.repo.as_deref()),
@@ -206,17 +230,37 @@ impl Store {
     /// Opens the default local storage backend in `dir`: redb ledger, Tantivy lexical index,
     /// and `vectors.bin` flat index (self-healing from cache if corrupt).
     pub fn open_local(dir: &Path) -> Result<Self> {
-        Self::open_local_with(dir, VectorIndexChoice::Auto, 64)
+        Self::open_local_with(dir, VectorIndexChoice::Auto, 64, LedgerChoice::Redb)
     }
 
-    /// Opens the local storage backend in `dir` with the chosen vector index backend.
-    pub fn open_local_with(dir: &Path, choice: VectorIndexChoice, ef_search: usize) -> Result<Self> {
+    /// Opens the local storage backend in `dir` with the chosen vector index and ledger
+    /// backends. The SQLite ledger needs the `sqlite` feature.
+    pub fn open_local_with(
+        dir: &Path,
+        choice: VectorIndexChoice,
+        ef_search: usize,
+        ledger: LedgerChoice,
+    ) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let ignore = dir.join(".gitignore");
         if !ignore.exists() {
             std::fs::write(ignore, "*\n")?;
         }
-        let ledger = Ledger::open(&dir.join("ledger.redb"))?;
+        let ledger: Box<dyn LedgerStore> = match ledger {
+            LedgerChoice::Redb => Box::new(Ledger::open(&dir.join("ledger.redb"))?),
+            LedgerChoice::Sqlite => {
+                #[cfg(feature = "sqlite")]
+                {
+                    Box::new(sqlite::SqliteLedger::open(&dir.join(sqlite::INDEX_FILE))?)
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    return Err(crate::engine::Error::Other(anyhow::anyhow!(
+                        "ledger \"sqlite\" needs the `sqlite` feature; this build was made without it"
+                    )));
+                }
+            }
+        };
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
         let vectors_path = dir.join(VECTORS_FILE);
         let flat = match FlatIndex::load(&vectors_path) {
@@ -257,7 +301,7 @@ impl Store {
         };
 
         Ok(Self {
-            ledger: Box::new(ledger),
+            ledger,
             lexical: Box::new(lexical),
             vectors,
         })
@@ -281,14 +325,33 @@ mod tests {
     #[test]
     fn open_local_rejects_hnsw_without_feature() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64).is_err());
+        let opened = Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64, LedgerChoice::Redb);
+        assert!(opened.is_err());
     }
 
     #[cfg(feature = "hnsw")]
     #[test]
     fn open_local_opens_hnsw_when_feature_enabled() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64).unwrap();
+        let store =
+            Store::open_local_with(dir.path(), VectorIndexChoice::Hnsw, 64, LedgerChoice::Redb).unwrap();
         assert_eq!(store.vectors.len(), 0);
+    }
+
+    #[test]
+    fn ledger_choice_parses_names() {
+        assert_eq!(LedgerChoice::parse(" SQLite "), Some(LedgerChoice::Sqlite));
+        assert_eq!(LedgerChoice::parse("redb"), Some(LedgerChoice::Redb));
+        assert_eq!(LedgerChoice::parse("postgres"), None);
+        assert_eq!(LedgerChoice::default(), LedgerChoice::Redb);
+    }
+
+    #[cfg(not(feature = "sqlite"))]
+    #[test]
+    fn open_local_rejects_sqlite_without_feature() {
+        let dir = tempfile::tempdir().unwrap();
+        let opened = Store::open_local_with(dir.path(), VectorIndexChoice::Auto, 64, LedgerChoice::Sqlite);
+        let msg = opened.err().expect("sqlite is refused").to_string();
+        assert!(msg.contains("`sqlite` feature"), "{msg}");
     }
 }
