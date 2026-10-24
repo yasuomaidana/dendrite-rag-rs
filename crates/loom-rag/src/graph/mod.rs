@@ -76,42 +76,72 @@ impl CodeGraph {
         files: &BTreeMap<String, FileEntry>,
         go_mods: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
+        let mut b = GraphBuilder::new(files);
+        for c in chunks {
+            b.add(c);
+        }
+        b.finish(go_mods)
+    }
+}
+
+/// Builds a [`CodeGraph`] one chunk at a time, so the ledger can stream chunks into it
+/// without holding every chunk's text in memory (DRAG-44).
+pub struct GraphBuilder<'a> {
+    g: CodeGraph,
+    files: &'a BTreeMap<String, FileEntry>,
+    /// Per chunk, what it uses: linked once every definition is known.
+    uses: Vec<Uses>,
+}
+
+impl<'a> GraphBuilder<'a> {
+    pub fn new(files: &'a BTreeMap<String, FileEntry>) -> Self {
         let mut g = CodeGraph::default();
         for path in files.keys() {
             g.file(path);
         }
-        // Collect definitions first, keeping per chunk what it uses.
-        let mut uses: Vec<Uses> = Vec::new();
-        for c in chunks {
-            if summary::is_summary(&c.path) {
-                continue;
-            }
-            let file = g.file(&c.path);
-            let mut owners: Vec<u32> = Vec::new();
-            for s in &c.symbols {
-                let id = g.symbol(s, file);
-                g.sites[id as usize].push(Site {
-                    path: c.path.clone(),
-                    line: c.start_line,
-                    chunk: c.id.clone(),
-                });
-                owners.push(id);
-            }
-            // A chunk cut from inside a large function belongs to that function.
-            if owners.is_empty()
-                && let Some(name) = c.scope.last().and_then(|s| s.split_once(' ')).map(|(_, n)| n)
-            {
-                owners.push(g.symbol(name, file));
-            }
-            let types = c.refs.iter().filter(|r| !c.calls.contains(r)).cloned().collect();
-            uses.push(Uses {
-                file,
-                owners,
-                calls: c.calls,
-                method_calls: c.method_calls.into_iter().collect(),
-                types,
-            });
+        GraphBuilder {
+            g,
+            files,
+            uses: Vec::new(),
         }
+    }
+
+    /// Records the chunk's definitions and what it uses; its text is dropped here.
+    pub fn add(&mut self, c: Chunk) {
+        let g = &mut self.g;
+        if summary::is_summary(&c.path) {
+            return;
+        }
+        let file = g.file(&c.path);
+        let mut owners: Vec<u32> = Vec::new();
+        for s in &c.symbols {
+            let id = g.symbol(s, file);
+            g.sites[id as usize].push(Site {
+                path: c.path.clone(),
+                line: c.start_line,
+                chunk: c.id.clone(),
+            });
+            owners.push(id);
+        }
+        // A chunk cut from inside a large function belongs to that function.
+        if owners.is_empty()
+            && let Some(name) = c.scope.last().and_then(|s| s.split_once(' ')).map(|(_, n)| n)
+        {
+            owners.push(g.symbol(name, file));
+        }
+        let types = c.refs.iter().filter(|r| !c.calls.contains(r)).cloned().collect();
+        self.uses.push(Uses {
+            file,
+            owners,
+            calls: c.calls,
+            method_calls: c.method_calls.into_iter().collect(),
+            types,
+        });
+    }
+
+    /// Links imports, calls and type uses.
+    pub fn finish(self, go_mods: impl IntoIterator<Item = (String, String)>) -> CodeGraph {
+        let GraphBuilder { mut g, files, uses } = self;
         // Imports first: they decide which definitions a name may link to.
         let resolver = Resolver::new(files.keys().map(String::as_str), go_mods);
         let mut imported: Vec<HashSet<u32>> = vec![HashSet::new(); g.files.len()];
@@ -179,7 +209,9 @@ impl CodeGraph {
         }
         g
     }
+}
 
+impl CodeGraph {
     /// The files defining `sym` that a use in `from` can mean: the same directory (package
     /// or module) or a file `from` imports. Names are not qualified, so without this a call
     /// to `time.Now` would link to any project function named `Now`. Go cannot use a name
@@ -335,9 +367,9 @@ impl Engine {
             .filter(|p| *p == "go.mod" || p.ends_with("/go.mod"))
             .filter_map(|p| Some((p.clone(), std::fs::read_to_string(self.root.join(p)).ok()?)))
             .collect();
-        let mut chunks = Vec::new();
-        self.ledger.for_each_chunk(&mut |c| chunks.push(c))?;
-        let g = Arc::new(CodeGraph::build(chunks, &files, go_mods));
+        let mut builder = GraphBuilder::new(&files);
+        self.ledger.for_each_chunk(&mut |c| builder.add(c))?;
+        let g = Arc::new(builder.finish(go_mods));
         *self.graph.write().expect("graph lock") = Some(g.clone());
         Ok(g)
     }

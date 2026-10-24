@@ -108,6 +108,24 @@ Findings:
 - A cold local rebuild of a 50k-chunk corpus takes 14 s, under the 30 s set in DRAG-42, against about 17 minutes to embed the same corpus on candle Metal (scaled from the Dendrite run). Edge mode therefore keeps sharing embeddings only; pulling index segments would pay off from roughly ten times this size and is not built.
 - Peak memory is 463 MB, over the 200 MB budget: the code graph build holds every chunk with its text (DRAG-44).
 
+### Cold index memory after DRAG-44 (2026-10-24)
+
+Same corpus and command, `/usr/bin/time -l`, re-measured before and after on the same machine (the baseline is higher than the 463 MB above). Ranges are over repeated runs.
+
+| run | wall time | max RSS | peak memory footprint |
+|---|---|---|---|
+| before | 8.5 s | 714 MB | 556 MB |
+| code graph streamed from the ledger (`GraphBuilder`) | 8.7 s | 442 MB | 321 MB |
+| + files chunked and written 256 at a time, one commit | 8.0–11.4 s | 389–395 MB | 227–230 MB |
+| + both stores committed per group of 256 files | 12.9–14.1 s | 376–398 MB | 201–208 MB |
+| **+ groups of 512 files (shipped)** | 10.4–10.9 s | 420–446 MB | 179–202 MB |
+
+Findings:
+- RSS probes per stage put the peak at chunking: every chunk of a cold index (49k, with text and up to 64 refs each) was held at once until both stores were written, and the graph build then collected them all again. Chunking and committing a group of files at a time, and streaming the ledger into the graph, cut the peak footprint (the process's dirty memory) by 64 %, to the 200 MB budget.
+- Max RSS stays near 400 MB: it also counts Tantivy's memory-mapped segment files, which grow and merge during the run, and pages the allocator keeps after freeing them; neither is the process's own working memory. The budget is checked against the footprint.
+- Per-group commits cost fsyncs: 512-file groups take about 2 s more than one commit, 256-file groups about 4 s.
+- A crash between groups leaves the committed groups current. Each file is removed from the lexical index by path before its chunks are added, and a modified file's ledger entry is removed with its chunks, so the next run re-chunks exactly the uncommitted files without duplicates (`a_group_committed_only_to_the_lexical_index_is_not_duplicated`).
+
 ## Vector index at scale (DRAG-41, 2026-10-22)
 
 `BENCH_FLAT_ONLY=1 cargo run --release --features hnsw --example vector_bench -- 768 50000 100000 200000 400000` (768-d clustered unit vectors, 200 queries, Apple Silicon; recall@10 of the 40-candidate shortlist rescored with exact vectors).
