@@ -71,7 +71,12 @@ pub trait LedgerWrite {
 
 /// Full-text search and document updates for lexical retrieval.
 pub trait LexicalStore: Send + Sync {
-    fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>>;
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        params: &crate::bm25::Bm25Params,
+    ) -> tantivy::Result<Vec<(String, f32)>>;
     fn writer(&self) -> tantivy::Result<Box<dyn LexicalWrite + '_>>;
     fn len(&self) -> u64;
     fn is_empty(&self) -> bool {

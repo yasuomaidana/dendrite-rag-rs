@@ -3,6 +3,7 @@
 //!
 //! See `docs/ARCHITECTURE.md` for the pipeline and `docs/specs/` for each stage.
 
+pub mod bm25;
 pub mod chunk;
 pub mod config;
 pub mod corpus;

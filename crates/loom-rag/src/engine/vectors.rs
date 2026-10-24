@@ -81,7 +81,7 @@ impl Engine {
         if let Some(q) = focus.filter(|_| deadline.is_some()) {
             let first: HashSet<String> = self
                 .lexical
-                .search(q, FOCUS_CANDIDATES)?
+                .search(q, FOCUS_CANDIDATES, &self.cfg.bm25)?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect();
@@ -191,7 +191,7 @@ impl Engine {
 
     /// BM25-only search.
     pub fn search_lexical(&self, query: &str, top_k: usize) -> Result<Vec<Hit>> {
-        let ranked = self.lexical.search(query, top_k)?;
+        let ranked = self.lexical.search(query, top_k, &self.cfg.bm25)?;
         self.hits(&ranked)
     }
 

@@ -332,7 +332,7 @@ impl Engine {
     /// The `n` best BM25 matches within `corpus`.
     fn lexical_in(&self, query: &str, n: usize, corpus: CorpusFilter, t: &mut Timings) -> Result<Ranking> {
         let started = Instant::now();
-        let ranked = self.lexical.search(query, fetch(n, corpus))?;
+        let ranked = self.lexical.search(query, fetch(n, corpus), &self.cfg.bm25)?;
         let ranked = self.keep(ranked, n, corpus)?;
         t.lexical_ms += ms_since(started);
         Ok(ranked)

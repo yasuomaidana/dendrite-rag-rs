@@ -21,6 +21,11 @@
 //! symbol = 1.5
 //! community = 0.0               # boost for code in the best-matching communities
 //!
+//! [lexical]                     # BM25 (docs/specs/retrieval.md § Lexical index)
+//! k1 = 1.2                      # term-frequency saturation
+//! b = 0.75                      # length normalization, 0 to 1
+//! q = 1.0                       # q-logarithm of the IDF, (0, 1]; 1 is classic BM25
+//!
 //! [storage]
 //! mode = "local"                # local (default) | remote (shared PostgreSQL) | edge
 //! # repo = "github.com/acme/app" # name in the shared tier; default: the origin URL
@@ -45,7 +50,8 @@
 //! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
 //! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`,
 //! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
-//! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
+//! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_BM25_K1`, `_B`, `_Q`,
+//! `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
 //! `_MODEL`, `_SUMMARIES`, `_CONCEPTS` (all `DENDRITE_RAG_GRAPH_LLM_*`), and `DENDRITE_RAG_CONFIG` to read another file. A backend chosen in the environment
 //! discards the file's model, URL, prefixes and pooling, which belong to the file's backend.
 
@@ -71,6 +77,7 @@ pub struct Settings {
     pub index: IndexSettings,
     pub graph: GraphSettings,
     pub fusion: loom_rag::retrieve::FusionConfig,
+    pub lexical: loom_rag::bm25::Bm25Params,
     pub storage: StorageSettings,
     pub ask: AskSettings,
     /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
@@ -256,6 +263,18 @@ impl Settings {
                 bail!("fusion.{name} must be a non-negative number, got {w}");
             }
         }
+        for (key, field) in [
+            ("DENDRITE_RAG_BM25_K1", &mut self.lexical.k1),
+            ("DENDRITE_RAG_BM25_B", &mut self.lexical.b),
+            ("DENDRITE_RAG_BM25_Q", &mut self.lexical.q),
+        ] {
+            if let Some(v) = var(key) {
+                *field = v.parse().with_context(|| format!("{key}={v:?}"))?;
+            }
+        }
+        if let Err(e) = self.lexical.validate() {
+            bail!("lexical: {e}");
+        }
         if let Some(m) = var("DENDRITE_RAG_STORAGE_MODE") {
             let Some(mode) = loom_rag::store::StorageMode::parse(&m) else {
                 bail!("DENDRITE_RAG_STORAGE_MODE={m:?}: expected local, remote or edge");
@@ -372,6 +391,7 @@ impl Settings {
             cfg.hnsw_ef_search = ef;
         }
         cfg.fusion = self.fusion;
+        cfg.bm25 = self.lexical;
         // Dendrite keeps its own state under `.dendrite/`; only the index is ours.
         cfg.walk.exclude.push(".dendrite/**".to_string());
         cfg.storage = loom_rag::store::StorageConfig {

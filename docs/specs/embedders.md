@@ -27,6 +27,11 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 [index]
 # max_file_bytes = 1048576
 
+[lexical]
+# k1 = 1.2                      # BM25 term-frequency saturation
+# b = 0.75                      # BM25 length normalization
+# q = 1.0                       # q-logarithm of the IDF; 1 is classic BM25
+
 [graph]
 # resolution = 1.0
 
@@ -46,6 +51,7 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 | `DENDRITE_RAG_GRAPH_RESOLUTION` | `graph.resolution` |
 | `DENDRITE_RAG_GRAPH_LLM_ENABLED`, `_MODEL`, `_SUMMARIES`, `_CONCEPTS` | `graph.llm.enabled`, `graph.llm.model`, `graph.llm.summaries`, `graph.llm.concepts` |
 | `DENDRITE_RAG_ASK_LOCAL_MODEL`, `DENDRITE_RAG_ASK_PAID_MODEL`, `DENDRITE_RAG_ASK_DOCS_SHARE` | `ask.local_model`, `ask.paid_model`, `ask.docs_share` ([ask.md](ask.md)) |
+| `DENDRITE_RAG_BM25_K1`, `_B`, `_Q` | `lexical.k1`, `lexical.b`, `lexical.q` (BM25; [retrieval.md](retrieval.md) § Lexical index) |
 | `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO` | `storage.mode` (`local`, `remote`, `edge`), `storage.repo` |
 | `DENDRITE_RAG_PG_URL` | the shared tier's URL; environment only ([store.md](store.md) § PostgreSQL) |
 

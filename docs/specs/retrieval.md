@@ -11,7 +11,9 @@ Fields:
 | `path` | code tokenizer | 1.5 |
 | `chunk_id` | raw, stored | — |
 
-**Code tokenizer.** Each token is split on non-alphanumerics, then on case and digit boundaries (`parseHTTPResponse2` → `parse`, `http`, `response`, `2`). Everything is lowercased. The whole identifier (`parsehttpresponse2`) is also emitted, so exact identifier queries score higher than scattered sub-word matches. BM25 parameters are Tantivy's defaults (k1 = 1.2, b = 0.75).
+**Code tokenizer.** Each token is split on non-alphanumerics, then on case and digit boundaries (`parseHTTPResponse2` → `parse`, `http`, `response`, `2`). Everything is lowercased. The whole identifier (`parsehttpresponse2`) is also emitted, so exact identifier queries score higher than scattered sub-word matches.
+
+**BM25 parameters** (`[lexical] k1`, `b`, `q`; `DENDRITE_RAG_BM25_K1`, `_B`, `_Q`; DRAG-47) default to k1 = 1.2, b = 0.75 and q = 1. The IDF is `ln_q(1 + (N - df + 0.5) / (df + 0.5))` with the q-logarithm `ln_q(x) = (x^(1-q) - 1) / (1 - q)`, the natural logarithm at q = 1 (`src/bm25.rs`, shared with PostgreSQL and `rank`). At the defaults Tantivy's own scorer runs; other values score the query's distinct code terms in each field with the same formula over Tantivy's postings and field norms (`lexical/scorer.rs`), as the PostgreSQL BM25 does. The sweep (eval/RESULTS.md, DRAG-47) found no setting that improves code questions significantly; q < 1 and b < 0.75 hurt documentation questions.
 
 The `symbols` boost also decides how code competes with documentation, which defines no symbols, when both share a ranking. It was 3.0 until the corpus evaluation (eval/RESULTS.md, 2026-10-22). Higher values let natural-language words that happen to name a function (`test`, `check`) outrank the text that answers; lower ones let documentation crowd out code. A sweep over 1.5, 2, 2.5 and 3 on the five golden sets picked 2.5, the best mean MRR for both corpora in one ranking (0.743 for `search`, 0.742 for `auto` context packs).
 

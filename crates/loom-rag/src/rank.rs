@@ -7,12 +7,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bm25::Bm25Params;
 use crate::engine::{Engine, Error, Result, cache_key};
 use crate::fusion::{RRF_K, rrf};
 use crate::lexical::{code_terms, sanitize};
-
-const K1: f32 = 1.2;
-const B: f32 = 0.75;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
@@ -33,7 +31,7 @@ pub struct Ranked {
 }
 
 /// Okapi BM25 of each document for `query`, over the code tokenizer's terms.
-fn bm25(documents: &[Document], query: &str) -> Vec<f32> {
+fn bm25(documents: &[Document], query: &str, params: &Bm25Params) -> Vec<f32> {
     let docs: Vec<HashMap<String, f32>> = documents
         .iter()
         .map(|d| {
@@ -57,9 +55,8 @@ fn bm25(documents: &[Document], query: &str) -> Vec<f32> {
                 .iter()
                 .filter_map(|t| {
                     let f = *tf.get(t)?;
-                    let df = docs.iter().filter(|d| d.contains_key(t)).count() as f32;
-                    let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
-                    Some(idf * f * (K1 + 1.0) / (f + K1 * (1.0 - B + B * len / avg)))
+                    let df = docs.iter().filter(|d| d.contains_key(t)).count() as f64;
+                    Some(params.idf(n as f64, df) * params.tf(f, *len, avg))
                 })
                 .sum()
         })
@@ -78,7 +75,7 @@ impl Engine {
     /// embeddings are cached by content like chunk embeddings, so a fixed catalogue is
     /// embedded once. An unreachable embedder leaves a lexical ranking.
     pub fn rank(&self, documents: &[Document], query: &str, top_k: usize) -> Result<Vec<Ranked>> {
-        let lexical = bm25(documents, query);
+        let lexical = bm25(documents, query, &self.cfg.bm25);
         let dense = match self.embed_documents_cached(documents) {
             Ok(Some(vectors)) => match self.embed_query(query) {
                 Ok(Some(q)) => Some(vectors.iter().map(|v| cosine(&q, v)).collect::<Vec<f32>>()),

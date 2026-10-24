@@ -161,7 +161,7 @@ impl Baselines {
 
     fn lexical(&self, index: &LexicalIndex, query: &str) -> anyhow::Result<Vec<Unit>> {
         Ok(index
-            .search(query, TOP)?
+            .search(query, TOP, &Default::default())?
             .into_iter()
             .filter_map(|(id, _)| self.units.get(&id))
             .map(|(path, tokens, copies)| Unit {
