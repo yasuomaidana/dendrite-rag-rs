@@ -1,7 +1,8 @@
 //! Retrieval evaluation: quality, tokens read and latency of the engine against baselines,
-//! and the repeat-question timing run.
+//! paired comparisons, and the repeat-question timing run.
 //!
-//!     loom-eval quality <root> eval/golden-dendrite.json [more sets…] [--index-dir DIR]
+//!     loom-eval quality <root> eval/golden-dendrite.json [more sets…] [--index-dir DIR] [--json RUN.json]
+//!     loom-eval compare <A.json> <B.json>
 //!     loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--corpus code] [--llm]
 
 mod baselines;
@@ -10,6 +11,8 @@ mod methods;
 mod metrics;
 mod repeat;
 mod report;
+mod runs;
+mod stats;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -40,6 +43,16 @@ enum Cmd {
         /// Only methods whose label contains this text.
         #[arg(long)]
         only: Option<String>,
+        /// Write raw per-query scores to a JSON file.
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
+    /// Compare two evaluation runs.
+    Compare {
+        /// Baseline run JSON file (A).
+        a: PathBuf,
+        /// Candidate run JSON file (B).
+        b: PathBuf,
     },
     /// Print each query's corpus probe (best code and docs scores) as CSV, with the corpus
     /// its expected files belong to, to tune `corpus: auto`.
@@ -72,7 +85,9 @@ fn main() -> anyhow::Result<()> {
             golden,
             index_dir,
             only,
-        } => quality(root, golden, index_dir, only),
+            json,
+        } => quality(root, golden, index_dir, only, json),
+        Cmd::Compare { a, b } => compare(a, b),
         Cmd::Probe { root, golden } => probe(root, golden),
         Cmd::Repeat {
             root,
@@ -96,6 +111,7 @@ fn quality(
     golden: Vec<PathBuf>,
     index_dir: Option<PathBuf>,
     only: Option<String>,
+    json: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let mut cfg = dendrite_rag::settings::resolve(&root)?;
     if index_dir.is_some() {
@@ -133,9 +149,11 @@ fn quality(
         status.embed_model.as_deref().unwrap_or("none"),
         status.embed_coverage.unwrap_or(0.0) * 100.0
     );
+    let mut set_runs = Vec::new();
     for path in golden {
         let set = golden::load(&path)?;
         let mut rows = Vec::new();
+        let mut method_runs = Vec::new();
         for m in &methods {
             let mut scores = Scores::default();
             for q in &set.queries {
@@ -154,13 +172,45 @@ fn quality(
                 };
                 scores.add(q, &units, per_budget.as_deref(), elapsed);
             }
+            if json.is_some() {
+                method_runs.push(runs::MethodRun {
+                    label: m.label(),
+                    per_query: scores.per_query.clone(),
+                });
+            }
             rows.push((m.label(), scores));
         }
         println!(
             "{}",
             report::table(&format!("{} ({} queries)", set.name, set.queries.len()), &rows)
         );
+        if json.is_some() {
+            set_runs.push(runs::SetRun {
+                name: set.name,
+                methods: method_runs,
+            });
+        }
     }
+    if let Some(json_path) = json {
+        let run_file = runs::RunFile {
+            root: root.display().to_string(),
+            sets: set_runs,
+        };
+        let s = serde_json::to_string_pretty(&run_file)?;
+        if let Some(parent) = json_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&json_path, s)?;
+    }
+    Ok(())
+}
+
+fn compare(a: PathBuf, b: PathBuf) -> anyhow::Result<()> {
+    let file_a: runs::RunFile = serde_json::from_str(&std::fs::read_to_string(&a)?)?;
+    let file_b: runs::RunFile = serde_json::from_str(&std::fs::read_to_string(&b)?)?;
+    print!("{}", runs::compare(&file_a, &file_b));
     Ok(())
 }
 

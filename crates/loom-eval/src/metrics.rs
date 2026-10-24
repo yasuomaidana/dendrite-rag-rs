@@ -31,6 +31,15 @@ impl Unit {
     }
 }
 
+/// Detailed evaluation scores and recall flags for a single query.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueryScore {
+    pub q: String,
+    pub rr: f64,
+    pub ndcg: f64,
+    pub recall: Vec<bool>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Scores {
     pub n: usize,
@@ -48,6 +57,7 @@ pub struct Scores {
     pub mixed: usize,
     pub latency: Vec<Duration>,
     pub misses: Vec<String>,
+    pub per_query: Vec<QueryScore>,
 }
 
 /// The units a consumer reads within `budget` tokens.
@@ -77,15 +87,20 @@ impl Scores {
                 files.push(u);
             }
         }
-        match files.iter().take(10).position(|u| u.holds(wanted)) {
+        let query_rr = match files.iter().take(10).position(|u| u.holds(wanted)) {
             Some(i) => {
                 self.hit1 += (i < 1) as usize;
                 self.hit5 += (i < 5) as usize;
                 self.hit10 += 1;
-                self.rr += 1.0 / (i as f64 + 1.0);
+                let r = 1.0 / (i as f64 + 1.0);
+                self.rr += r;
+                r
             }
-            None => self.misses.push(q.q.clone()),
-        }
+            None => {
+                self.misses.push(q.q.clone());
+                0.0
+            }
+        };
         // Each expected file earns its gain once, however many copies of it are listed.
         let mut credited: Vec<&str> = Vec::new();
         let mut dcg = 0.0;
@@ -102,7 +117,8 @@ impl Scores {
         let ideal: f64 = (0..q.expect.len().min(10))
             .map(|i| 1.0 / (i as f64 + 2.0).log2())
             .sum();
-        self.ndcg += dcg / ideal.max(f64::MIN_POSITIVE);
+        let query_ndcg = dcg / ideal.max(f64::MIN_POSITIVE);
+        self.ndcg += query_ndcg;
 
         let mut read = 0;
         for u in units {
@@ -113,12 +129,15 @@ impl Scores {
             }
         }
 
+        let mut query_recall = Vec::with_capacity(BUDGETS.len());
         for (i, &b) in BUDGETS.iter().enumerate() {
             let seen: Vec<&Unit> = match at_budget {
                 Some(per) => per[i].iter().collect(),
                 None => within(units, b),
             };
-            self.recall[i] += seen.iter().any(|u| u.holds(wanted)) as usize;
+            let hit = seen.iter().any(|u| u.holds(wanted));
+            self.recall[i] += hit as usize;
+            query_recall.push(hit);
             if b == BOTH_BUDGET && q.is_mixed() {
                 self.mixed += 1;
                 let doc = seen.iter().any(|u| u.holds(|p| wanted(p) && is_doc(p)));
@@ -126,6 +145,12 @@ impl Scores {
                 self.both += (doc && code) as usize;
             }
         }
+        self.per_query.push(QueryScore {
+            q: q.q.clone(),
+            rr: query_rr,
+            ndcg: query_ndcg,
+            recall: query_recall,
+        });
     }
 
     pub fn mrr(&self) -> f64 {
@@ -191,6 +216,10 @@ mod tests {
             (1, 0),
             "doc.md does not fit with the code at 2.5k"
         );
+        assert_eq!(s.per_query.len(), 1);
+        assert_eq!(s.per_query[0].q, "x");
+        assert!((s.per_query[0].rr - 0.5).abs() < 1e-9);
+        assert_eq!(s.per_query[0].recall, vec![false, true, true]);
     }
 
     #[test]
