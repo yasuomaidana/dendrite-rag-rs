@@ -4,11 +4,11 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.7.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`; 1.3 added `rank`; 1.4 added `ask`; 1.5 added `corpus` to `search`, `context` and `ask`, `timings` to their results, and `open_ms`, `walk_ms` and `embed_ms` to `index`; 1.6 added `context.detail`, `chunks.get`, `index.focus`, the hit fields `duplicates` and `outline`, `status.embed_coverage` and `status.warnings`, and `ask.fresh` with `cached` answers; 1.7 added `docs_share` to `context` and `ask`)
+Protocol version: **1.8.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`; 1.3 added `rank`; 1.4 added `ask`; 1.5 added `corpus` to `search`, `context` and `ask`, `timings` to their results, and `open_ms`, `walk_ms` and `embed_ms` to `index`; 1.6 added `context.detail`, `chunks.get`, `index.focus`, the hit fields `duplicates` and `outline`, `status.embed_coverage` and `status.warnings`, and `ask.fresh` with `cached` answers; 1.7 added `docs_share` to `context` and `ask`; 1.8 added `abstained` to `context` and `ask` results, set when `[rerank] abstain` finds nothing likely relevant)
 
 | Method | Params | Result |
 |---|---|---|
-| `health` | — | `{name: "dendrite-rag", version, protocol: "1.7.0"}` |
+| `health` | — | `{name: "dendrite-rag", version, protocol: "1.8.0"}` |
 | `index` | `{root, full?: false, embed_budget_ms?, focus?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, open_ms, walk_ms, graph_ms, embed_ms, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue; `focus` (the question about to be asked) embeds the chunks it matches first ([retrieval.md](retrieval.md) § Embedding backlog) |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", corpus?: "all"\|"code"\|"docs", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content, duplicates?, outline?}], timings}` |
 | `context` | `{root, query, token_budget?: 4000, corpus?: "all"\|"code"\|"docs", detail?: "auto"\|"full"\|"map", docs_share?: 0..1}` | `{spans: [hit...], tokens, timings}` ([retrieval.md](retrieval.md) § Corpora and § Context packing) |

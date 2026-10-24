@@ -82,6 +82,8 @@ Backends (`[rerank] backend`):
 - `candle`: in-process cross-encoder on candle (feature `candle`, default model `BAAI/bge-reranker-base`). Checkpoints with `model_type` `xlm-roberta` (the BGE rerankers) run through candle's XLM-RoBERTa sequence classifier, and `bert` ones (MiniLM-style cross-encoders) through BERT with its pooler and linear head. Runs on the GPU (Metal, CUDA) or CPU. Its logits match the reference implementation (transformers) within 0.05 on `BAAI/bge-reranker-base` (`live_candle_bge_reranker_scores`).
 - `none`: reranking disabled.
 
+**Abstention** (`[rerank] abstain`, `DENDRITE_RAG_RERANK_ABSTAIN`, DRAG-51; off by default). With a reranker, a search whose best reranked hit is less likely than the threshold to be relevant returns no hits, and a context pack whose every search abstained comes back empty with `abstained: true`, as does `ask` (no model is called): an agent gets "the project does not cover this" instead of distractors. Gateway scores are already probabilities; candle logits go through the logistic function. Without a reranker it never abstains (no threshold on fused, BM25 or cosine scores separated answerable questions, § Corpora). A threshold is project-specific: `loom-eval abstain-probe <root> <golden…> --negatives eval/golden-negatives.json --set <name>` prints how each threshold splits the golden questions and the unanswerable ones. Measured with `bge-reranker-base` (eval/RESULTS.md): 0.45 abstains on 88 % of unanswerable questions while abstaining on at most 4 % of answerable ones for embedag and dendrite-rag-rs, but no threshold works for Dendrite, whose documentation questions score as low as unanswerable ones, so there is no default.
+
 ## Corpora
 
 Every chunk belongs to one corpus, derived from its path and language (`crates/loom-rag/src/corpus.rs`), so no store keeps an extra column:
@@ -137,6 +139,8 @@ Spans keep their fused order. The personalized PageRank re-weighting over the fi
 An outline is a span's first two meaningful lines (its doc comment or heading, and its declaration or first sentence; package, import and front-matter lines skipped), each cut to 160 characters, marked `outline: true`. On the Dendrite sets a `map` pack names the answer's file within a median 49 tokens, against 599 for `auto` and about 15,600 for a grep-driven agent reading whole files.
 
 The result lists the spans in score order, each with `chunk_id`, `path`, `start_line`, `end_line`, `scope`, `score`, `content`, `duplicates?` and `outline?`, plus the total estimated tokens and `timings`.
+
+**Outline fallback** (DRAG-51). A span whose text no longer fits the budget is replaced by its outline (doc comment and declaration, `outline: true`) when that fits, instead of being dropped: the pack still names the file, and the agent can fetch the body with `chunks.get`. Measured on the five golden sets (lexical): MRR unchanged, recall within 1,000 tokens up by 0.05 to 0.30 (Dendrite documentation questions 0.59 → 0.89), recall within 2,500 and 4,000 tokens never lower.
 
 ## Embedding backlog
 
