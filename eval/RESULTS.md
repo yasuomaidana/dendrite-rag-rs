@@ -95,6 +95,19 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## External validity and Qwen3-Embedding (DRAG-52, 2026-10-24)
+
+**CoIR CosQA, reproducible.** `uv run --no-project --with pyarrow python -I eval/coir/import.py cosqa <dir> --ext py --queries 500` materializes the corpus (20,604 Python functions, one file each) and 500 test queries from the Hugging Face Parquet files; lexical search scores MRR@10 0.243 [0.211, 0.277], nDCG@10 0.282, the same as the earlier hand-built run (0.243 / 0.283). BM25 there: q-log IDF is significantly worse (q = 0.5: -0.047 MRR [-0.066, -0.030]; q = 0.1: -0.074 [-0.098, -0.051]), k1 = 1.5 is neutral (+0.003 [-0.000, 0.007]): the DRAG-47 defaults hold on an external benchmark too.
+
+**Qwen3-Embedding-0.6B** on candle (Metal) against `nomic-embed-text` (Ollama), fresh indexes, `loom-eval compare`, MRR@10:
+
+| set | dense | hybrid | index time |
+|---|---|---|---|
+| dendrite-rag-rs (721 chunks) | -0.090 [-0.219, 0.026] | +0.007 [-0.117, 0.137] | 229 s against 55 s |
+| embedag (826 chunks) | +0.048 [-0.070, 0.177] | +0.007 [-0.053, 0.067] | 246 s against 84 s |
+
+No significant difference at three to four times the indexing cost: nomic stays the default for Ollama and jina-code for candle. Not done: paid embedders (no gateway key in this environment; configuration only, embedders.md) and a SWE-bench localization slice.
+
 ## LLM contextual chunk prefixes: go/no-go (DRAG-48, 2026-10-24)
 
 Contextual retrieval with an LLM (a 50-100 token text situating each chunk in its file, indexed with the chunk and never returned) against the no-LLM header the index already has (path and scope). Prefixes by Gemini 3.8 Flash through `agy` (`eval/contextual/gen.py`: one call per file with the whole document and its chunks; files of one chunk under 2,000 characters skipped): 593 of 672 chunks of dendrite-rag-rs (116 calls, 22 min) and 669 of 826 of embedag. Fresh indexes with and without them, `loom-eval compare`, MRR@10:

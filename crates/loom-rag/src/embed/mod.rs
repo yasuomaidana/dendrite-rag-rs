@@ -30,6 +30,8 @@ pub mod model2vec;
 #[cfg(feature = "oxillama")]
 pub mod oxillama;
 #[cfg(feature = "candle")]
+mod qwen3;
+#[cfg(feature = "candle")]
 pub(crate) mod tokenize;
 
 pub use openai::OpenAiEmbedder;
