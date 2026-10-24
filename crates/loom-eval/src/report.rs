@@ -1,6 +1,7 @@
 //! Markdown tables for `eval/RESULTS.md`.
 
 use crate::metrics::{BUDGETS, Scores};
+use crate::stats;
 
 pub fn table(title: &str, rows: &[(String, Scores)]) -> String {
     let mut out = format!("### {title}\n\n| method | hit@1 | hit@5 | hit@10 | MRR@10 | nDCG@10 |");
@@ -11,13 +12,22 @@ pub fn table(title: &str, rows: &[(String, Scores)]) -> String {
     out.push_str(&"---|".repeat(BUDGETS.len() + 1));
     out.push_str("---|---|---|\n");
     for (label, s) in rows {
+        let rrs: Vec<f64> = s.per_query.iter().map(|q| q.rr).collect();
+        let (mrr_lo, mrr_hi) = stats::bootstrap_ci(&rrs, stats::RESAMPLES, stats::SEED);
+        let ndcgs: Vec<f64> = s.per_query.iter().map(|q| q.ndcg).collect();
+        let (ndcg_lo, ndcg_hi) = stats::bootstrap_ci(&ndcgs, stats::RESAMPLES, stats::SEED);
+
         out.push_str(&format!(
-            "| {label} | {:.2} | {:.2} | {:.2} | {:.3} | {:.3} |",
+            "| {label} | {:.2} | {:.2} | {:.2} | {:.3} [{:.3}, {:.3}] | {:.3} [{:.3}, {:.3}] |",
             s.rate(s.hit1),
             s.rate(s.hit5),
             s.rate(s.hit10),
             s.mrr(),
-            s.ndcg10()
+            mrr_lo,
+            mrr_hi,
+            s.ndcg10(),
+            ndcg_lo,
+            ndcg_hi
         ));
         for r in s.recall {
             out.push_str(&format!(" {:.2} |", s.rate(r)));
@@ -44,5 +54,29 @@ fn fmt_k(tokens: usize) -> String {
         format!("{k:.0}")
     } else {
         format!("{k:.1}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::QueryScore;
+
+    #[test]
+    fn table_formats_bootstrap_ci() {
+        let s = Scores {
+            n: 1,
+            rr: 0.821,
+            ndcg: 0.810,
+            per_query: vec![QueryScore {
+                q: "q1".into(),
+                rr: 0.821,
+                ndcg: 0.810,
+                recall: vec![true, true, true],
+            }],
+            ..Scores::default()
+        };
+        let t = table("test", &[("search".into(), s)]);
+        assert!(t.contains("| search | 0.00 | 0.00 | 0.00 | 0.821 [0.821, 0.821] | 0.810 [0.810, 0.810] |"));
     }
 }
