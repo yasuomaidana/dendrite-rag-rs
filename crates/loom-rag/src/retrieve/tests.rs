@@ -391,3 +391,87 @@ fn outlines_keep_the_doc_comment_and_declaration() {
     let long = "x".repeat(400);
     assert_eq!(signature(&long).chars().count(), 161);
 }
+
+/// Scores a document 0.9 when the query mentions `.0` and the document `.1`, 0.1 otherwise.
+struct KeywordReranker(&'static str, &'static str);
+
+impl crate::rerank::Reranker for KeywordReranker {
+    fn rerank(&self, query: &str, documents: &[String]) -> crate::embed::Result<Vec<f32>> {
+        Ok(documents
+            .iter()
+            .map(|d| {
+                if query.contains(self.0) && d.contains(self.1) {
+                    0.9
+                } else {
+                    0.1
+                }
+            })
+            .collect())
+    }
+}
+
+#[test]
+fn abstains_when_the_reranker_finds_nothing_relevant() {
+    let dir = calls_project();
+    let mut cfg = Config::default();
+    cfg.rerank.abstain = Some(0.5);
+    let mut e = Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(HashEmbedder::new()))).unwrap();
+    e.index(false).unwrap();
+    e.reranker = Some(Box::new(KeywordReranker("binary", "LocateBinary")));
+
+    let answered = e.context("locate the sidecar binary", 2_000).unwrap();
+    assert!(!answered.abstained && !answered.spans.is_empty());
+    let unanswerable = e.context("configure the stripe webhook secret", 2_000).unwrap();
+    assert!(unanswerable.abstained, "no span is likely relevant");
+    assert!(unanswerable.spans.is_empty() && unanswerable.tokens == 0);
+    let opts = SearchOpts::default();
+    assert!(
+        e.search("configure the stripe webhook secret", &opts)
+            .unwrap()
+            .is_empty()
+    );
+
+    // Off without a threshold, and without a reranker.
+    e.cfg.rerank.abstain = None;
+    assert!(
+        !e.context("configure the stripe webhook secret", 2_000)
+            .unwrap()
+            .abstained
+    );
+    e.cfg.rerank.abstain = Some(0.5);
+    e.reranker = None;
+    assert!(
+        !e.context("configure the stripe webhook secret", 2_000)
+            .unwrap()
+            .abstained
+    );
+}
+
+#[test]
+fn a_span_that_no_longer_fits_is_outlined() {
+    let body = format!(
+        "// Locate finds a binary.\nfunc Locate() {{\n{}}}\n",
+        "\tstep()\n".repeat(200)
+    );
+    let hit = |id: &str, content: &str| Hit {
+        chunk_id: id.into(),
+        path: format!("{id}.go"),
+        start_line: 1,
+        end_line: 200,
+        scope: vec![],
+        score: 1.0,
+        content: content.into(),
+        duplicates: vec![],
+        outline: false,
+    };
+    let small = "func Small() {}\n";
+    let packed = super::pack::pack(vec![hit("small", small), hit("big", &body)], 100);
+    let big = packed
+        .spans
+        .iter()
+        .find(|s| s.path == "big.go")
+        .expect("outlined, not dropped");
+    assert!(big.outline);
+    assert_eq!(big.content, "// Locate finds a binary.\nfunc Locate() {");
+    assert!(packed.tokens <= 100);
+}

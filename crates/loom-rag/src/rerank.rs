@@ -17,6 +17,12 @@ use crate::embed::{EmbedError, Result};
 /// Scores `(query, document)` pairs; higher is more relevant.
 pub trait Reranker: Send + Sync {
     fn rerank(&self, query: &str, documents: &[String]) -> Result<Vec<f32>>;
+
+    /// A score of [`Reranker::rerank`] as a relevance probability, the scale `[rerank]
+    /// abstain` is set on: Cohere-style relevance scores already are one.
+    fn probability(&self, score: f32) -> f32 {
+        score
+    }
 }
 
 /// Which cross-encoder backend to use.
@@ -79,6 +85,10 @@ pub struct RerankConfig {
     pub api_key_env: Option<String>,
     /// Texts per forward pass (in-process reranker only).
     pub batch: Option<usize>,
+    /// Abstain when the best reranked hit is less likely than this to be relevant (0 to 1):
+    /// context packs come back empty with `abstained`, searches without hits. Off when
+    /// unset, and without a reranker (DRAG-51).
+    pub abstain: Option<f32>,
 }
 
 impl RerankConfig {
@@ -327,6 +337,11 @@ impl CandleReranker {
 
 #[cfg(feature = "candle")]
 impl Reranker for CandleReranker {
+    /// Cross-encoder logits through the logistic function.
+    fn probability(&self, score: f32) -> f32 {
+        1.0 / (1.0 + (-score).exp())
+    }
+
     fn rerank(&self, query: &str, documents: &[String]) -> Result<Vec<f32>> {
         if documents.is_empty() {
             return Ok(Vec::new());

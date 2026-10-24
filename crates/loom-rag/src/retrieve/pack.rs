@@ -70,7 +70,8 @@ pub(super) fn dedup(hits: Vec<Hit>) -> Vec<Hit> {
 }
 
 /// Packs spans (best first) greedily into `token_budget`, skipping spans already covered
-/// by a better one, then merges spans that touch within a file.
+/// by a better one, then merges spans that touch within a file. A span whose text no longer
+/// fits is outlined instead when its outline does (DRAG-51), so the pack still points to it.
 pub(super) fn pack(spans: Vec<Hit>, token_budget: usize) -> ContextPack {
     let mut picked: Vec<Hit> = Vec::new();
     let mut tokens = 0;
@@ -78,8 +79,19 @@ pub(super) fn pack(spans: Vec<Hit>, token_budget: usize) -> ContextPack {
         let covered = picked
             .iter()
             .any(|p| p.path == s.path && p.start_line <= s.start_line && p.end_line >= s.end_line);
+        if covered {
+            continue;
+        }
         let cost = estimate_tokens(&s.content);
-        if covered || tokens + cost > token_budget {
+        let s = if tokens + cost <= token_budget {
+            s
+        } else if s.outline {
+            continue;
+        } else {
+            outline(s)
+        };
+        let cost = estimate_tokens(&s.content);
+        if tokens + cost > token_budget {
             continue;
         }
         tokens += cost;
@@ -88,6 +100,7 @@ pub(super) fn pack(spans: Vec<Hit>, token_budget: usize) -> ContextPack {
     ContextPack {
         spans: merge_adjacent(picked),
         tokens,
+        abstained: false,
         timings: Timings::default(),
     }
 }

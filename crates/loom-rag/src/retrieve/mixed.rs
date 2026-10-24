@@ -60,6 +60,7 @@ impl Engine {
         Ok(ContextPack {
             tokens: code.tokens + docs.tokens,
             spans: interleave(code.spans, docs.spans, |h| rank.get(&h.chunk_id).copied()),
+            abstained: false,
             timings: Timings::default(),
         })
     }

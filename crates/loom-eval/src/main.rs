@@ -3,8 +3,10 @@
 //!
 //!     loom-eval quality <root> eval/golden-dendrite.json [more sets…] [--index-dir DIR] [--json RUN.json]
 //!     loom-eval compare <A.json> <B.json>
+//!     loom-eval abstain-probe <root> <golden…> --negatives eval/golden-negatives.json --set NAME
 //!     loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--corpus code] [--llm]
 
+mod abstain;
 mod baselines;
 mod golden;
 mod methods;
@@ -47,6 +49,21 @@ enum Cmd {
         #[arg(long)]
         json: Option<PathBuf>,
     },
+    /// Calibrate `[rerank] abstain`: the best reranked hit's relevance on golden and
+    /// unanswerable questions, and how thresholds split them.
+    AbstainProbe {
+        root: PathBuf,
+        #[arg(required = true)]
+        golden: Vec<PathBuf>,
+        #[arg(long)]
+        negatives: PathBuf,
+        /// The negatives set for this project (a key of the file's `sets`).
+        #[arg(long)]
+        set: String,
+        /// Index directory (default: the project's own).
+        #[arg(long)]
+        index_dir: Option<PathBuf>,
+    },
     /// Compare two evaluation runs.
     Compare {
         /// Baseline run JSON file (A).
@@ -88,6 +105,13 @@ fn main() -> anyhow::Result<()> {
             json,
         } => quality(root, golden, index_dir, only, json),
         Cmd::Compare { a, b } => compare(a, b),
+        Cmd::AbstainProbe {
+            root,
+            golden,
+            negatives,
+            set,
+            index_dir,
+        } => abstain::run(root, golden, negatives, set, index_dir),
         Cmd::Probe { root, golden } => probe(root, golden),
         Cmd::Repeat {
             root,

@@ -10,6 +10,7 @@
 //! [rerank]
 //! backend = "gateway"            # gateway (default) | candle | none
 //! model = "bge-reranker-v2-m3"
+//! # abstain = 0.3               # empty context when the best reranked hit is less likely relevant
 //!
 //! [index]
 //! max_file_bytes = 1048576
@@ -47,7 +48,7 @@
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
-//! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `DENDRITE_RAG_MAX_FILE_BYTES`,
+//! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `_ABSTAIN`, `DENDRITE_RAG_MAX_FILE_BYTES`,
 //! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
 //! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`, `DENDRITE_RAG_STORAGE_LEDGER`,
 //! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
@@ -225,6 +226,17 @@ impl Settings {
         set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
         set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
         set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
+        if let Some(v) = var("DENDRITE_RAG_RERANK_ABSTAIN") {
+            self.rerank.abstain = Some(
+                v.parse()
+                    .with_context(|| format!("DENDRITE_RAG_RERANK_ABSTAIN={v:?}"))?,
+            );
+        }
+        if let Some(a) = self.rerank.abstain
+            && !(0.0..=1.0).contains(&a)
+        {
+            bail!("rerank.abstain must be within 0..=1, got {a}");
+        }
         if let Some(n) = var("DENDRITE_RAG_RERANK_BATCH") {
             self.rerank.batch = Some(
                 n.parse()

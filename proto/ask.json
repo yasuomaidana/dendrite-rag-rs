@@ -168,6 +168,10 @@
       "cached": {
         "type": "boolean",
         "description": "The model's answers came from the cache of earlier identical prompts"
+      },
+      "abstained": {
+        "type": "boolean",
+        "description": "Protocol 1.8: the reranker found nothing likely to answer ([rerank] abstain); no model was asked and answer is empty. Absent when false"
       }
     }
   },

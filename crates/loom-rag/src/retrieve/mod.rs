@@ -93,6 +93,10 @@ pub struct ContextPack {
     pub spans: Vec<Hit>,
     /// Estimated tokens of all spans.
     pub tokens: usize,
+    /// The reranker found nothing likely to answer the query (`[rerank] abstain`), so the
+    /// pack is empty instead of holding distractors.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub abstained: bool,
     #[serde(default)]
     pub timings: Timings,
 }
@@ -111,6 +115,19 @@ pub struct Timings {
     /// Symbol-graph expansion and PageRank (code context packs only).
     pub expand_ms: u64,
     pub total_ms: u64,
+    /// Searches that ran the reranker with an abstention threshold, and those that
+    /// abstained: a pack abstains when every such search did.
+    #[serde(skip)]
+    pub(crate) gated: u32,
+    #[serde(skip)]
+    pub(crate) abstained: u32,
+}
+
+impl Timings {
+    /// Whether every reranked search of the query abstained (`[rerank] abstain`).
+    pub fn abstained(&self) -> bool {
+        self.gated > 0 && self.abstained == self.gated
+    }
 }
 
 /// Weights of the hybrid fusion (`[fusion]` in the project settings, `docs/specs/retrieval.md`
@@ -242,8 +259,15 @@ impl Engine {
             hits.retain(|h| set.is_match(&h.path));
         }
         let reranked = Instant::now();
-        self.rerank(query, &mut hits);
+        let top = self.rerank(query, &mut hits);
         t.rerank_ms += ms_since(reranked);
+        if let (Some(top), Some(floor)) = (top, self.cfg.rerank.abstain) {
+            t.gated += 1;
+            if top < floor {
+                t.abstained += 1;
+                hits.clear();
+            }
+        }
         if let Some(min) = opts.min_score {
             hits.retain(|h| h.score >= min);
         }
@@ -308,14 +332,25 @@ impl Engine {
             CorpusFilter::All => self.mixed_context(query, token_budget, detail, docs_share, &mut t)?,
         };
         t.total_ms = ms_since(started);
+        if t.abstained() {
+            pack.spans.clear();
+            pack.tokens = 0;
+            pack.abstained = true;
+        }
         pack.timings = t;
         Ok(pack)
     }
 
+    /// A reranked hit's score as a relevance probability, when a reranker is configured
+    /// (the scale of `[rerank] abstain`; `loom-eval abstain-probe` calibrates it).
+    pub fn rerank_probability(&self, score: f32) -> Option<f32> {
+        self.reranker.as_ref().map(|r| r.probability(score))
+    }
+
     /// Reorders the top hits with the cross-encoder when one is configured; on failure the
-    /// fused order stands.
-    fn rerank(&self, query: &str, hits: &mut [Hit]) {
-        let Some(reranker) = &self.reranker else { return };
+    /// fused order stands. Returns the best hit's relevance probability when it reranked.
+    fn rerank(&self, query: &str, hits: &mut [Hit]) -> Option<f32> {
+        let reranker = self.reranker.as_ref()?;
         let top = hits.len().min(RERANK_TOP);
         let docs: Vec<String> = hits[..top]
             .iter()
@@ -326,7 +361,9 @@ impl Engine {
                 h.score = s;
             }
             hits[..top].sort_by(|a, b| b.score.total_cmp(&a.score));
+            return hits.first().map(|h| reranker.probability(h.score));
         }
+        None
     }
 
     /// The `n` best BM25 matches within `corpus`.

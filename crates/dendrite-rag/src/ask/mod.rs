@@ -84,6 +84,10 @@ pub struct AskAnswer {
     pub timings: AskTimings,
     /// The model's answers came from the cache of earlier identical prompts.
     pub cached: bool,
+    /// The reranker found nothing in the project likely to answer (`[rerank] abstain`), so
+    /// no model was asked and `answer` is empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub abstained: bool,
 }
 
 /// Where an answer spent its time, in milliseconds.
@@ -158,6 +162,17 @@ pub fn ask(
         retrieval = pack.timings;
         pack.spans
     };
+    if retrieval.abstained() {
+        return Ok(AskAnswer {
+            abstained: true,
+            timings: AskTimings {
+                retrieval,
+                total_ms: started.elapsed().as_millis() as u64,
+                ..AskTimings::default()
+            },
+            ..AskAnswer::default()
+        });
+    }
     let local_ms = Cell::new(0);
     let paid_ms = Cell::new(0);
     let cached = cache::CachedGateway {

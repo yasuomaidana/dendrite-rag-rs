@@ -58,6 +58,10 @@
       "tokens": {
         "type": "integer"
       },
+      "abstained": {
+        "type": "boolean",
+        "description": "Protocol 1.8: the reranker found nothing likely to answer ([rerank] abstain), so spans is empty. Absent when false"
+      },
       "timings": {
         "type": "object",
         "description": "Milliseconds spent per stage",

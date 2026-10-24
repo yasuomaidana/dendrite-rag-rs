@@ -95,6 +95,21 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Abstention and the outline fallback (DRAG-51, 2026-10-24)
+
+**Abstention.** `loom-eval abstain-probe` with the in-process `BAAI/bge-reranker-base` (candle, Metal), `nomic-embed-text` vectors, the golden sets as answerable questions and `eval/golden-negatives.json` (8 questions per repository naming features the repository does not have, checked by grep). Shares abstained at each threshold of the best hit's relevance probability:
+
+| threshold | Dendrite: unanswerable / answerable | embedag | dendrite-rag-rs |
+|---|---|---|---|
+| 0.20 | 0.75 / 0.08 | 0.50 / 0.00 | 0.62 / 0.00 |
+| 0.30 | 1.00 / 0.12 | 0.75 / 0.00 | 0.62 / 0.00 |
+| 0.45 | 1.00 / 0.18 | 0.88 / 0.00 | 0.88 / 0.04 |
+| 0.50 | 1.00 / 0.18 | 1.00 / 0.00 | 0.88 / 0.08 |
+
+The gate (≥ 0.8 of unanswerable questions, ≤ 0.05 of answerable ones) holds at 0.45 for embedag and dendrite-rag-rs and at no threshold for Dendrite (76 questions, many about its documentation, which the reranker scores as low as unanswerable questions). Abstention therefore ships off, set per project from the probe.
+
+**Outline fallback.** Context packs, lexical only, before and after (`loom-eval compare`): MRR@10 within ±0.014 on every set and method (no CI excludes 0); recall within 1,000 tokens up for `context auto / all` on every set (Dendrite 0.65 → 0.78, Dendrite docs 0.59 → 0.89, mixed 0.75 → 0.92, embedag 0.92 → 1.00, dendrite-rag-rs 0.72 → 0.84), and recall within 2,500 and 4,000 tokens never lower. It is on.
+
 ## BM25 parameters and q-log IDF (DRAG-47, 2026-10-24)
 
 `[lexical] k1, b, q` (`DENDRITE_RAG_BM25_*`) now reach Tantivy (a bag-of-terms scorer over its postings when they differ from Tantivy's built-in 1.2 / 0.75), the PostgreSQL BM25 and `rank`. Sweep: k1 ∈ {0.8, 1.0, 1.2, 1.5} × b ∈ {0.3, 0.45, 0.6, 0.75} × q ∈ {1, 0.5, 0.2, 0.1, 0.05}, lexical only (embedder `none`), the five golden sets, `loom-eval quality --json` per configuration and `loom-eval compare` for paired 95 % CIs. MRR@10 of `search lexical / all`; "code" is the mean of Dendrite, embedag and dendrite-rag-rs.
