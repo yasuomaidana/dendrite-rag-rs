@@ -19,6 +19,19 @@ jobs:
           if [ -n "$long" ]; then echo "$long"; exit 1; fi
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+  memory:
+    # The benchmarks build, and the peak-heap regression gate holds (dhat, release).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: memory
+      - run: cargo clippy -p loom-rag --all-targets --features testutil,dhat -- -D warnings
+      - run: cargo test --release -p loom-rag --features dhat,testutil --test peak_heap -- --nocapture
   embedders:
     # Each in-process embedder builds and passes its unit tests on its own; live model
     # tests stay behind --ignored.
