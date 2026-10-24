@@ -18,7 +18,7 @@ use super::tokenize::Tokenizer;
 use super::{EmbedConfig, EmbedError, Embedder, Pooling, Result, normalize, truncate};
 
 /// Tokens per input; chunks are far shorter, and attention cost grows with the square.
-const MAX_TOKENS: usize = 512;
+pub(super) const MAX_TOKENS: usize = 512;
 
 enum Arch {
     Bert(bert::BertModel),
@@ -27,6 +27,8 @@ enum Arch {
     Jina(jina_bert::BertModel),
     /// JinaBERT with query/key post-norm (jina-embeddings-v2-base-code).
     JinaCode(super::jina_code::JinaCodeModel),
+    /// Qwen3-Embedding: a causal decoder, one text per pass, last-token pooling.
+    Qwen3(super::qwen3::Qwen3Encoder),
 }
 
 pub struct CandleEmbedder {
@@ -124,9 +126,14 @@ impl CandleEmbedder {
         let config_text = std::fs::read_to_string(&config_path).map_err(model_err)?;
         let probe: Probe = serde_json::from_str(&config_text).map_err(model_err)?;
         let device = device()?;
+        let dtype = if probe.model_type.as_deref() == Some("qwen3") {
+            super::qwen3::dtype(&device)
+        } else {
+            DType::F32
+        };
         // SAFETY: the weights file is not modified while it is mapped.
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device) }
-            .map_err(model_err)?;
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device) }.map_err(model_err)?;
         let parse = |what| move |e: serde_json::Error| EmbedError::Model(format!("{what} config: {e}"));
         let jina = probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
             || probe.position_embedding_type.as_deref() == Some("alibi");
@@ -144,6 +151,10 @@ impl CandleEmbedder {
                 let c: jina_bert::Config = serde_json::from_str(&config_text).map_err(parse("JinaBERT"))?;
                 Arch::Jina(jina_bert::BertModel::new(vb, &c).map_err(model_err)?)
             }
+            Some("qwen3") => {
+                let tokenizer = Tokenizer::load(&tokenizer_path, MAX_TOKENS)?;
+                Arch::Qwen3(super::qwen3::Qwen3Encoder::load(vb, &config_text, &tokenizer)?)
+            }
             Some("bert") | Some("roberta") | Some("xlm-roberta") => {
                 let c: bert::Config = serde_json::from_str(&config_text).map_err(parse("BERT"))?;
                 Arch::Bert(bert::BertModel::load(vb, &c).map_err(model_err)?)
@@ -151,7 +162,7 @@ impl CandleEmbedder {
             other => {
                 return Err(EmbedError::Model(format!(
                     "{model}: model_type {other:?} is not supported by the candle backend \
-                     (bert, nomic_bert or JinaBERT); use the ollama, hf or oxillama backend"
+                     (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
                 )));
             }
         };
@@ -182,6 +193,7 @@ impl CandleEmbedder {
             Arch::Nomic(m) => m.forward(&ids, None, Some(&mask)),
             Arch::Jina(m) => m.forward(&ids),
             Arch::JinaCode(m) => m.forward(&ids, &mask),
+            Arch::Qwen3(q) => return q.embed(&self.tokenizer, &self.device, self.pooling, texts),
         }
         .map_err(model_err)?;
         let pooled = pool(&hidden, &mask, self.pooling).map_err(model_err)?;
@@ -194,7 +206,7 @@ impl CandleEmbedder {
         // Similar lengths share a batch, so little compute goes to padding.
         let mut order: Vec<usize> = (0..inputs.len()).collect();
         order.sort_by_key(|&i| inputs[i].len());
-        let batch = if matches!(self.arch, Arch::Jina(_)) {
+        let batch = if matches!(self.arch, Arch::Jina(_) | Arch::Qwen3(_)) {
             1
         } else {
             self.batch
@@ -211,7 +223,7 @@ impl CandleEmbedder {
 }
 
 /// `[batch, tokens, dim]` → `[batch, dim]`, ignoring padding.
-fn pool(hidden: &Tensor, mask: &Tensor, pooling: Pooling) -> candle_core::Result<Tensor> {
+pub(super) fn pool(hidden: &Tensor, mask: &Tensor, pooling: Pooling) -> candle_core::Result<Tensor> {
     match pooling {
         Pooling::Cls => hidden.narrow(1, 0, 1)?.squeeze(1),
         Pooling::Mean => {

@@ -68,4 +68,15 @@ impl Tokenizer {
         }
         Ok(batch)
     }
+
+    /// Id of a special token written literally (`"<|endoftext|>"`), or `None` when the
+    /// vocabulary does not know it. A post-processor may add the same token around the
+    /// text, so the encoding only has to consist of that one id.
+    pub fn token_id(&self, token: &str) -> Result<Option<u32>> {
+        let ids = self.encode(vec![token.to_string()])?.ids.remove(0);
+        Ok(match ids.first() {
+            Some(&id) if ids.iter().all(|&i| i == id) => Some(id),
+            _ => None,
+        })
+    }
 }
