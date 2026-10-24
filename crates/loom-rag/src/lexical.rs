@@ -3,15 +3,18 @@
 use std::path::Path;
 
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{Query, QueryParser};
 use tantivy::schema::{
     Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
 use tantivy::tokenizer::{TextAnalyzer, Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, doc};
 
+use crate::bm25::Bm25Params;
 use crate::chunk::Chunk;
 use crate::store::{LexicalStore, LexicalWrite};
+
+mod scorer;
 
 pub(crate) const TOKENIZER: &str = "code";
 const WRITER_HEAP: usize = 50_000_000;
@@ -215,12 +218,32 @@ impl LexicalIndex {
         })
     }
 
-    /// BM25 search; returns `(chunk_id, score)` best first.
-    pub fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>> {
-        let mut parser = QueryParser::for_index(&self.index, vec![self.f_text, self.f_symbols, self.f_path]);
-        parser.set_field_boost(self.f_symbols, SYMBOL_BOOST);
-        parser.set_field_boost(self.f_path, PATH_BOOST);
-        let (q, _errors) = parser.parse_query_lenient(&sanitize(query));
+    /// BM25 search; returns `(chunk_id, score)` best first. Default parameters use
+    /// Tantivy's query parser and scorer; others score the query's distinct code terms
+    /// with [`scorer::bag_of_terms`], as the PostgreSQL BM25 does.
+    pub fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        params: &Bm25Params,
+    ) -> tantivy::Result<Vec<(String, f32)>> {
+        let q: Box<dyn Query> = if params.is_default() {
+            let mut parser =
+                QueryParser::for_index(&self.index, vec![self.f_text, self.f_symbols, self.f_path]);
+            parser.set_field_boost(self.f_symbols, SYMBOL_BOOST);
+            parser.set_field_boost(self.f_path, PATH_BOOST);
+            parser.parse_query_lenient(&sanitize(query)).0
+        } else {
+            let mut terms = code_terms(&sanitize(query));
+            terms.sort_unstable();
+            terms.dedup();
+            let fields = [
+                (self.f_text, 1.0),
+                (self.f_symbols, SYMBOL_BOOST),
+                (self.f_path, PATH_BOOST),
+            ];
+            Box::new(scorer::bag_of_terms(&fields, &terms, *params))
+        };
         let searcher = self.reader.searcher();
         let top = searcher.search(&q, &TopDocs::with_limit(limit).order_by_score())?;
         top.into_iter()
@@ -307,8 +330,8 @@ impl LexicalWriter<'_> {
 }
 
 impl LexicalStore for LexicalIndex {
-    fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>> {
-        self.search(query, limit)
+    fn search(&self, query: &str, limit: usize, params: &Bm25Params) -> tantivy::Result<Vec<(String, f32)>> {
+        self.search(query, limit, params)
     }
 
     fn writer(&self) -> tantivy::Result<Box<dyn LexicalWrite + '_>> {
@@ -402,21 +425,28 @@ mod tests {
         }
         w.commit().unwrap();
 
-        let hits = idx.search("locate binary", 5).unwrap();
+        let hits = idx.search("locate binary", 5, &Bm25Params::default()).unwrap();
         assert_eq!(hits[0].0, a[0].id);
-        let hits = idx.search("index_project", 5).unwrap();
+        let hits = idx.search("index_project", 5, &Bm25Params::default()).unwrap();
         assert_eq!(hits[0].0, b[0].id);
-        assert!(idx.search("(unbalanced \"quote", 5).is_ok());
+        assert!(
+            idx.search("(unbalanced \"quote", 5, &Bm25Params::default())
+                .is_ok()
+        );
 
         let mut w = idx.writer().unwrap();
         w.remove_file("pkg/rag/indexer.go");
         w.commit().unwrap();
-        assert!(idx.search("IndexProject", 5).unwrap().is_empty());
+        assert!(
+            idx.search("IndexProject", 5, &Bm25Params::default())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(idx.len(), a.len() as u64);
 
         // Reopening keeps the data.
         drop(idx);
         let idx = LexicalIndex::open(dir.path()).unwrap();
-        assert_eq!(idx.search("sidecar", 5).unwrap().len(), 1);
+        assert_eq!(idx.search("sidecar", 5, &Bm25Params::default()).unwrap().len(), 1);
     }
 }

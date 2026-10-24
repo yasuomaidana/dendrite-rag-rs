@@ -276,3 +276,16 @@ fn docs_share_from_file_and_env() {
     let mut s = Settings::parse("[ask]\ndocs_share = -0.1\n").unwrap();
     assert!(s.apply_env(env(&[])).is_err());
 }
+
+#[test]
+fn lexical_bm25_from_file_and_environment() {
+    let mut s = Settings::parse("[lexical]\nk1 = 0.9\nb = 0.4\n").unwrap();
+    assert_eq!((s.lexical.k1, s.lexical.b, s.lexical.q), (0.9, 0.4, 1.0));
+    s.apply_env(env(&[("DENDRITE_RAG_BM25_Q", "0.2")])).unwrap();
+    assert_eq!(s.config().bm25.q, 0.2);
+    assert!(s.apply_env(env(&[("DENDRITE_RAG_BM25_B", "2")])).is_err());
+    assert!(
+        Settings::parse("[lexical]\nk3 = 1\n").is_err(),
+        "unknown keys are errors"
+    );
+}

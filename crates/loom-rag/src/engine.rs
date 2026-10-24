@@ -58,6 +58,8 @@ pub struct Config {
     pub hnsw_ef_search: usize,
     pub fusion: crate::retrieve::FusionConfig,
     pub storage: crate::store::StorageConfig,
+    /// BM25 parameters of the lexical index (`[lexical]`).
+    pub bm25: crate::bm25::Bm25Params,
 }
 
 impl Default for Config {
@@ -75,6 +77,7 @@ impl Default for Config {
             hnsw_ef_search: 128,
             fusion: Default::default(),
             storage: Default::default(),
+            bm25: crate::bm25::Bm25Params::default(),
         }
     }
 }
@@ -290,6 +293,12 @@ impl Engine {
     pub fn with_llm(mut self, client: crate::llm::Client) -> Self {
         self.llm = Some(client);
         self
+    }
+
+    /// Changes the BM25 parameters of later searches (the eval sweep uses it); the index is
+    /// unchanged, since only scoring depends on them.
+    pub fn set_bm25(&mut self, params: crate::bm25::Bm25Params) {
+        self.cfg.bm25 = params;
     }
 
     pub fn root(&self) -> &Path {

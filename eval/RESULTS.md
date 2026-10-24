@@ -95,7 +95,27 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
-## Benchmarks and memory gate (DRAG-46, 2026-10-24)
+## BM25 parameters and q-log IDF (DRAG-47, 2026-10-24)
+
+`[lexical] k1, b, q` (`DENDRITE_RAG_BM25_*`) now reach Tantivy (a bag-of-terms scorer over its postings when they differ from Tantivy's built-in 1.2 / 0.75), the PostgreSQL BM25 and `rank`. Sweep: k1 ∈ {0.8, 1.0, 1.2, 1.5} × b ∈ {0.3, 0.45, 0.6, 0.75} × q ∈ {1, 0.5, 0.2, 0.1, 0.05}, lexical only (embedder `none`), the five golden sets, `loom-eval quality --json` per configuration and `loom-eval compare` for paired 95 % CIs. MRR@10 of `search lexical / all`; "code" is the mean of Dendrite, embedag and dendrite-rag-rs.
+
+| k1 / b / q | code | Dendrite | embedag | dendrite-rag-rs | docs | mixed |
+|---|---|---|---|---|---|---|
+| 1.2 / 0.75 / 1 (default) | 0.697 | 0.609 | 0.833 | 0.648 | 0.393 | 0.669 |
+| same, bag-of-terms scorer | 0.697 | — | — | — | 0.393 | 0.669 |
+| 1.2 / 0.75 / 0.5 | 0.688 | 0.501 | 0.920 | 0.643 | 0.069 | 0.388 |
+| 1.2 / 0.75 / 0.05 | 0.622 | 0.384 | 0.903 | 0.580 | 0.012 | 0.240 |
+| 1.5 / 0.75 / 1 | 0.702 | | | | 0.440 | 0.669 |
+| 1.2 / 0.45 / 1 | 0.699 | | | | 0.300 | 0.635 |
+| 0.8 / 0.75 / 1 | 0.710 | | | | 0.359 | 0.700 |
+
+Findings:
+- **The custom scorer is exact.** At Tantivy's parameters it ranks every set identically to Tantivy's own scorer (unit test: scores within 0.1 %), and PostgreSQL ranks alike with configured parameters (`configured_bm25_ranks_alike_in_sql_and_tantivy`).
+- **q-log IDF hurts here.** It helps only embedag (0.833 → 0.920 at q = 0.5) and costs Dendrite 0.11 to 0.23 MRR and documentation almost everything (0.393 → 0.012): sharpening rare terms lets one rare word in a natural-language question outrank the passage that answers it. The reported CoIR-Go gain does not carry over to these paraphrased questions. q stays 1.
+- **Lower b does not help code** (0.697 → 0.699 at b = 0.45) and costs documentation 0.09; b stays 0.75.
+- **k1 = 1.5** is the only significant change: documentation questions in lexical search +0.048 MRR [0.006, 0.106]; code sets +0.000 to +0.020, every CI spanning 0. With the full hybrid pipeline (Dendrite, `nomic-embed-text`, 100 % vector coverage) no method × set row of 38 changes significantly except that same lexical docs search (+0.048 [0.001, 0.119]). The defaults stay; the settings are there for projects whose own sweep says otherwise.
+
+, 2026-10-24)
 
 `cargo bench -p loom-rag --features testutil --bench retrieval` (criterion, Apple Silicon): a synthetic Go project of 2,000 files (`testutil::synthetic_project`), the 64-d `HashEmbedder`, each query-path figure covering the same four queries.
 

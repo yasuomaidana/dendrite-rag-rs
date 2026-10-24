@@ -171,7 +171,13 @@ fn community_summaries_rank_and_expand_to_code() {
     .unwrap();
     e.index(false).unwrap();
     assert_eq!(summaries(&e), n);
-    assert_eq!(e.lexical.search("community", 50).unwrap().len(), n);
+    assert_eq!(
+        e.lexical
+            .search("community", 50, &Default::default())
+            .unwrap()
+            .len(),
+        n
+    );
 }
 
 #[test]

@@ -1,11 +1,12 @@
 //! BM25 in SQL over the code_terms postings.
 
 use super::*;
+use crate::bm25::Bm25Params;
 
 pub(super) struct PgLexical(pub(super) Arc<Pg>);
 
 impl LexicalStore for PgLexical {
-    fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>> {
+    fn search(&self, query: &str, limit: usize, params: &Bm25Params) -> tantivy::Result<Vec<(String, f32)>> {
         let terms = code_terms(&sanitize(query));
         if terms.is_empty() {
             return Ok(Vec::new());
@@ -13,7 +14,19 @@ impl LexicalStore for PgLexical {
         let rows = self
             .0
             .client()
-            .query(BM25, &[&self.0.repo, &terms, &(limit as i64)])
+            .query(
+                BM25,
+                &[
+                    &self.0.repo,
+                    &terms,
+                    &(limit as i64),
+                    &(params.k1 as f64),
+                    &(params.b as f64),
+                    &(params.q as f64),
+                    &(crate::lexical::SYMBOL_BOOST as f64),
+                    &(crate::lexical::PATH_BOOST as f64),
+                ],
+            )
             .map_err(lexical_err)?;
         Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
     }

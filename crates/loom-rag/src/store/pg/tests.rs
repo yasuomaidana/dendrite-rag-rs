@@ -130,3 +130,35 @@ fn remote_incremental_changes_and_graph() {
     assert!(ids(&pg, "ExtraThing", Mode::Lexical).is_empty());
     assert!(!pg.graph_communities(10, 1).unwrap().is_empty());
 }
+
+#[test]
+fn configured_bm25_ranks_alike_in_sql_and_tantivy() {
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let params = crate::bm25::Bm25Params {
+        k1: 0.9,
+        b: 0.4,
+        q: 0.5,
+    };
+    let dir = project();
+    let embedder = Arc::new(HashEmbedder::new());
+    let mut local = open(dir.path(), StorageConfig::default(), &embedder);
+    local.set_bm25(params);
+    local.index(false).unwrap();
+    let mut remote_e = open(dir.path(), remote(&pg.url, &unique("bm25")), &embedder);
+    remote_e.set_bm25(params);
+    remote_e.index(false).unwrap();
+    for q in [
+        "LocateBinary",
+        "IndexProject",
+        "sidecar binary",
+        "project used in tests",
+    ] {
+        assert_eq!(
+            ids(&remote_e, q, Mode::Lexical).first(),
+            ids(&local, q, Mode::Lexical).first(),
+            "{q}"
+        );
+    }
+}

@@ -2,6 +2,7 @@
 //! shared tier through the journal.
 
 use super::*;
+use crate::bm25::Bm25Params;
 
 // ---------------------------------------------------------------------------------------------
 // Lexical
@@ -12,8 +13,8 @@ pub(super) struct EdgeLexical {
 }
 
 impl LexicalStore for EdgeLexical {
-    fn search(&self, query: &str, limit: usize) -> tantivy::Result<Vec<(String, f32)>> {
-        self.local.search(query, limit)
+    fn search(&self, query: &str, limit: usize, params: &Bm25Params) -> tantivy::Result<Vec<(String, f32)>> {
+        self.local.search(query, limit, params)
     }
 
     fn writer(&self) -> tantivy::Result<Box<dyn LexicalWrite + '_>> {

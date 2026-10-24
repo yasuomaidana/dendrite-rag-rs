@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS rag_concepts (
 /// `stats` must stay MATERIALIZED: inlined, the planner re-aggregates it for every posting
 /// (500 ms instead of 5 ms on 5k chunks).
 ///
-/// text (field 0) ×1, symbols (field 1) ×2.5, path (field 2) ×1.5 ([`crate::lexical::SYMBOL_BOOST`],
-/// [`crate::lexical::PATH_BOOST`]); k1 = 1.2, b = 0.75.
+/// text (field 0) ×1, symbols (field 1) ×`$7`, path (field 2) ×`$8` ([`crate::lexical::SYMBOL_BOOST`],
+/// [`crate::lexical::PATH_BOOST`]); `$4` k1, `$5` b and `$6` q of [`crate::bm25::Bm25Params`],
+/// the same formula as [`crate::bm25`].
 const BM25: &str = r#"
 WITH q AS (SELECT DISTINCT unnest($2::text[]) AS term),
 stats AS MATERIALIZED (
@@ -109,9 +110,10 @@ df AS (
     FROM rag_postings p JOIN q ON q.term = p.term
     WHERE p.repo = $1 GROUP BY p.field, p.term)
 SELECT p.chunk, sum(
-    (CASE p.field WHEN 0 THEN 1.0 WHEN 1 THEN 2.5 ELSE 1.5 END)
-    * ln(1 + (s.n - df.df + 0.5) / (df.df + 0.5))
-    * (p.tf * 2.2) / (p.tf + 1.2 * (0.25 + 0.75 * (CASE p.field
+    (CASE p.field WHEN 0 THEN 1.0 WHEN 1 THEN $7::float8 ELSE $8::float8 END)
+    * (CASE WHEN $6::float8 = 1 THEN ln(1 + (s.n - df.df + 0.5) / (df.df + 0.5))
+       ELSE (power(1 + (s.n - df.df + 0.5) / (df.df + 0.5), 1 - $6::float8) - 1) / (1 - $6::float8) END)
+    * (p.tf * ($4::float8 + 1)) / (p.tf + $4::float8 * ((1 - $5::float8) + $5::float8 * (CASE p.field
         WHEN 0 THEN d.len_text / nullif(s.a0, 0)
         WHEN 1 THEN d.len_symbols / nullif(s.a1, 0)
         ELSE d.len_path / nullif(s.a2, 0) END)))
