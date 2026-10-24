@@ -95,6 +95,21 @@ Run with `cargo run --release [--features model2vec] --example eval -- <root> <g
 
 Decision: the default stays nomic through the gateway (best hybrid). model2vec is the offline option: it embeds the corpus in 1.3 s, against 558 s through the gateway.
 
+## Benchmarks and memory gate (DRAG-46, 2026-10-24)
+
+`cargo bench -p loom-rag --features testutil --bench retrieval` (criterion, Apple Silicon): a synthetic Go project of 2,000 files (`testutil::synthetic_project`), the 64-d `HashEmbedder`, each query-path figure covering the same four queries.
+
+| benchmark | time |
+|---|---|
+| `query/lexical` (4 queries, top 10) | 320 µs |
+| `query/dense` | 1.13 ms |
+| `query/hybrid` | 1.44 ms |
+| `query/context_2500` (context packs) | 5.75 ms |
+| `flat_scan_50k_256d_top40` (int8 scan, one query) | 195 µs |
+| `rrf_3x100` (fusing three lists of 100) | 10.4 µs |
+
+`cargo test --release -p loom-rag --features dhat,testutil --test peak_heap`: a cold index of 4,000 synthetic files peaks at 61.2 MB of heap (dhat), most of it the fixed 50 MB Tantivy writer budget; the test fails above 96 MB and runs in CI (`memory` job). These are the baseline the BM25 (DRAG-47) and storage (DRAG-49) changes are compared with.
+
 ## Cold local index at 49k chunks (DRAG-42, 2026-10-22)
 
 `cargo run --release --example graph_stats -- ~/go/pkg/mod/github.com <index-dir>` (5,887 files, 49,302 chunks, no embedder: what an edge-mode checkout rebuilds locally while its embeddings come from the shared tier).

@@ -26,6 +26,55 @@ pub fn project() -> tempfile::TempDir {
     dir
 }
 
+/// Words the synthetic corpus draws identifiers and comments from.
+const WORDS: [&str; 48] = [
+    "parse", "index", "chunk", "vector", "ledger", "merge", "token", "query", "graph", "commit", "stream",
+    "buffer", "cache", "embed", "score", "rank", "fusion", "lexical", "dense", "symbol", "resolve", "import",
+    "module", "client", "server", "request", "response", "error", "retry", "budget", "window", "segment",
+    "writer", "reader", "schema", "migrate", "journal", "replay", "mirror", "shard", "batch", "worker",
+    "queue", "lease", "prompt", "model", "config", "status",
+];
+
+/// A deterministic Go project of `files` files in packages of 50, each with a few
+/// functions named and commented from [`WORDS`] and calling each other: a corpus for
+/// benchmarks and memory gates that needs no checkout.
+pub fn synthetic_project(files: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let word = |n: u64| WORDS[(n % WORDS.len() as u64) as usize];
+    for f in 0..files {
+        let pkg = format!("p{}", f / 50);
+        let d = dir.path().join("pkg").join(&pkg);
+        fs::create_dir_all(&d).unwrap();
+        let mut src = format!("package {pkg}\n\nimport \"fmt\"\n");
+        for i in 0..4 {
+            let (a, b, c) = (word(next()), word(next()), word(next()));
+            let name = format!("{}{}{}{f}x{i}", cap(a), cap(b), cap(c));
+            let callee = format!("{}{}{}", cap(word(next())), cap(word(next())), cap(word(next())));
+            src.push_str(&format!(
+                "\n// {name} will {a} the {b} before it can {c} each {} in the {}.\nfunc {name}(n int) error {{\n\tif n > {} {{\n\t\treturn fmt.Errorf(\"{a} {b}: %d\", n)\n\t}}\n\t_ = {callee}\n\treturn nil\n}}\n",
+                word(next()),
+                word(next()),
+                next() % 100
+            ));
+        }
+        fs::write(d.join(format!("f{f}.go")), src).unwrap();
+    }
+    dir
+}
+
+fn cap(w: &str) -> String {
+    let mut c = w.chars();
+    c.next()
+        .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+}
+
 /// Feature-hashed bag of code tokens: deterministic, and texts sharing identifiers land
 /// close together. Setting `fail` makes every document call error.
 pub struct HashEmbedder {
