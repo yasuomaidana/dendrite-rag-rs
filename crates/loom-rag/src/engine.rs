@@ -60,6 +60,9 @@ pub struct Config {
     pub storage: crate::store::StorageConfig,
     /// BM25 parameters of the lexical index (`[lexical]`).
     pub bm25: crate::bm25::Bm25Params,
+    /// Contexts to index with chunks, by chunk id (the contextual retrieval experiment,
+    /// `loom-eval enrich-experiment`); chunks without one get none.
+    pub chunk_contexts: Option<Arc<std::collections::HashMap<String, String>>>,
 }
 
 impl Default for Config {
@@ -78,6 +81,7 @@ impl Default for Config {
             fusion: Default::default(),
             storage: Default::default(),
             bm25: crate::bm25::Bm25Params::default(),
+            chunk_contexts: None,
         }
     }
 }

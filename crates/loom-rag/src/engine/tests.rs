@@ -248,3 +248,46 @@ fn a_group_committed_only_to_the_lexical_index_is_not_duplicated() {
     assert_eq!(e.search_lexical("Unique1Marker", 5).unwrap().len(), 1);
     assert_eq!(e.lexical.len(), e.ledger.chunk_count().unwrap());
 }
+
+#[test]
+fn chunk_contexts_are_indexed_but_never_returned() {
+    let dir = project();
+    let mut probe = open(dir.path());
+    probe.index(false).unwrap();
+    let mut ids = Vec::new();
+    probe
+        .ledger
+        .for_each_chunk(&mut |c| {
+            if c.path == "pkg/rag/indexer.go" {
+                ids.push(c.id)
+            }
+        })
+        .unwrap();
+    drop(probe);
+
+    let contexts = ids
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                "walks the repository with a zebra crawler".to_string(),
+            )
+        })
+        .collect();
+    let cfg = Config {
+        index_dir: Some(dir.path().join(".loom-ctx")),
+        chunk_contexts: Some(Arc::new(contexts)),
+        ..Config::default()
+    };
+    let mut e = Engine::open_with_embedder(dir.path(), cfg, None).unwrap();
+    e.index(false).unwrap();
+    let hits = e.search_lexical("zebra crawler", 3).unwrap();
+    assert_eq!(hits[0].path, "pkg/rag/indexer.go", "the context is searchable");
+    assert!(!hits[0].content.contains("zebra"), "and never returned");
+    assert!(
+        open(dir.path())
+            .search_lexical("zebra crawler", 3)
+            .unwrap()
+            .is_empty()
+    );
+}

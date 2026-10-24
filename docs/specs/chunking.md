@@ -53,4 +53,4 @@ Before indexing, each chunk's text is prefixed with a short header:
 <content>
 ```
 
-This is the no-LLM form of contextual retrieval. Both BM25 and the embedding model see the file and the enclosing scope, which disambiguates generic bodies such as `return nil, err`. The header is used only for indexing; results return the raw content.
+This is the no-LLM form of contextual retrieval. A chunk may also carry an LLM-written `context` (`Chunk.context`, indexed as a `// context:` line after the header, never returned); `Config::chunk_contexts` supplies them by chunk id at index time. Measured, LLM contexts did not improve retrieval of code here (eval/RESULTS.md, DRAG-48), so nothing writes them by default. Both BM25 and the embedding model see the file and the enclosing scope, which disambiguates generic bodies such as `return nil, err`. The header is used only for indexing; results return the raw content.
