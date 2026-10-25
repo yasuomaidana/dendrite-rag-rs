@@ -5,6 +5,14 @@ edition = "2024"
 publish = false
 description = "Retrieval evaluation: quality, tokens read and latency against baselines"
 
+[lib]
+name = "loom_eval"
+path = "src/lib.rs"
+
+[[bin]]
+name = "loom-eval"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4.6.7", features = ["derive"] }

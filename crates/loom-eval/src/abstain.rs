@@ -2,7 +2,9 @@
 //! questions the project answers (golden sets) and for questions it cannot answer
 //! (`eval/golden-negatives.json`), and how a threshold would split them.
 //!
-//!     loom-eval abstain-probe <root> <golden…> --negatives eval/golden-negatives.json --set dendrite [--index-dir DIR]
+//! ```text
+//! loom-eval abstain-probe <root> <golden…> --negatives eval/golden-negatives.json --set dendrite [--index-dir DIR]
+//! ```
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

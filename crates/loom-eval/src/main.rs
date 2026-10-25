@@ -7,26 +7,20 @@
 //!     loom-eval export-chunks <root> --index-dir DIR --out chunks.jsonl
 //!     loom-eval repeat <root> "<question>" --bin target/release/dendrite-rag [--corpus code] [--llm]
 
-mod abstain;
-mod baselines;
-mod contextual;
-mod golden;
-mod methods;
-mod metrics;
-mod repeat;
-mod report;
-mod runs;
-mod stats;
-
 use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
+use loom_eval::abstain;
+use loom_eval::baselines::Baselines;
+use loom_eval::contextual;
+use loom_eval::golden;
+use loom_eval::methods::Method;
+use loom_eval::metrics::{BUDGETS, Scores};
+use loom_eval::repeat;
+use loom_eval::report;
+use loom_eval::runs;
 use loom_rag::engine::Engine;
-
-use crate::baselines::Baselines;
-use crate::methods::Method;
-use crate::metrics::{BUDGETS, Scores};
 
 #[derive(Parser)]
 struct Cli {
@@ -107,10 +101,55 @@ enum Cmd {
         #[arg(long, default_value_t = 2)]
         runs: usize,
     },
+    /// Benchmark SWE-bench Verified file localization.
+    Swebench {
+        /// SWE-bench Verified instances JSON file (from eval/swebench/import.py).
+        instances: PathBuf,
+        /// Directory where git repositories are cloned/cached.
+        #[arg(long)]
+        repos_cache: PathBuf,
+        /// Directory where repository indexes are stored.
+        #[arg(long)]
+        index_root: PathBuf,
+        /// Write raw per-instance scores to JSON.
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// Run only the Stratified-120 subset.
+        #[arg(long)]
+        stratified: bool,
+        /// Filter by repository name.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Limit number of instances.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 5-instance smoke test.
+        #[arg(long)]
+        smoke: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
+        Cmd::Swebench {
+            instances,
+            repos_cache,
+            index_root,
+            json,
+            stratified,
+            repo,
+            limit,
+            smoke,
+        } => loom_eval::swebench::run(loom_eval::swebench::SwebenchOpts {
+            instances_path: instances,
+            repos_cache,
+            index_root,
+            json_out: json,
+            stratified_only: stratified,
+            repo_filter: repo,
+            limit,
+            smoke,
+        }),
         Cmd::Quality {
             root,
             golden,
