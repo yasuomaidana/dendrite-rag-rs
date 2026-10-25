@@ -4,18 +4,18 @@
 
 JSON Schemas for every method's params and result live in [`proto/`](../../proto).
 
-Protocol version: **1.8.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`; 1.3 added `rank`; 1.4 added `ask`; 1.5 added `corpus` to `search`, `context` and `ask`, `timings` to their results, and `open_ms`, `walk_ms` and `embed_ms` to `index`; 1.6 added `context.detail`, `chunks.get`, `index.focus`, the hit fields `duplicates` and `outline`, `status.embed_coverage` and `status.warnings`, and `ask.fresh` with `cached` answers; 1.7 added `docs_share` to `context` and `ask`; 1.8 added `abstained` to `context` and `ask` results, set when `[rerank] abstain` finds nothing likely relevant)
+Protocol version: **1.9.0** (1.1 added the `graph.*` methods and the `communities` fields of `index` and `status`; 1.2 added `sync`, `pull`, `push` and `status.sync_pending`; 1.3 added `rank`; 1.4 added `ask`; 1.5 added `corpus` to `search`, `context` and `ask`, `timings` to their results, and `open_ms`, `walk_ms` and `embed_ms` to `index`; 1.6 added `context.detail`, `chunks.get`, `index.focus`, the hit fields `duplicates` and `outline`, `status.embed_coverage` and `status.warnings`, and `ask.fresh` with `cached` answers; 1.7 added `docs_share` to `context` and `ask`; 1.8 added `abstained` to `context` and `ask` results, set when `[rerank] abstain` finds nothing likely relevant; 1.9 added `embed_budget_tokens` to `index`, `embed_tokens` and `budget_tokens_remaining` to its result, and `features` to `health`)
 
 | Method | Params | Result |
 |---|---|---|
-| `health` | — | `{name: "dendrite-rag", version, protocol: "1.8.0"}` |
-| `index` | `{root, full?: false, embed_budget_ms?, focus?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_error?, open_ms, walk_ms, graph_ms, embed_ms, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue; `focus` (the question about to be asked) embeds the chunks it matches first ([retrieval.md](retrieval.md) § Embedding backlog) |
+| `health` | — | `{name: "dendrite-rag", version, protocol: "1.9.0", features: [...]}`; `features` lists the cargo features the binary was built with (protocol 1.9) |
+| `index` | `{root, full?: false, embed_budget_ms?, embed_budget_tokens?, focus?}` | `{files_scanned, files_changed, files_removed, chunks_added, chunks_removed, embedded, embed_pending, embed_tokens, budget_tokens_remaining?, embed_error?, open_ms, walk_ms, graph_ms, embed_ms, duration_ms}`; with a budget, embedding stops when it runs out and later calls continue; `focus` (the question about to be asked) embeds the chunks it matches first ([retrieval.md](retrieval.md) § Embedding backlog) |
 | `search` | `{root, query, top_k?: 10, mode?: "hybrid"\|"lexical"\|"dense", corpus?: "all"\|"code"\|"docs", paths?: [glob], min_score?, offset?: 0}` | `{hits: [{chunk_id, path, start_line, end_line, scope, score, content, duplicates?, outline?}], timings}` |
-| `context` | `{root, query, token_budget?: 4000, corpus?: "all"\|"code"\|"docs", detail?: "auto"\|"full"\|"map", docs_share?: 0..1}` | `{spans: [hit...], tokens, timings}` ([retrieval.md](retrieval.md) § Corpora and § Context packing) |
+| `context` | `{root, query, token_budget?: 4000, corpus?: "all"\|"code"\|"docs", detail?: "auto"\|"full"\|"map", docs_share?: 0..1}` | `{spans: [hit...], tokens, abstained?, timings}` ([retrieval.md](retrieval.md) § Corpora and § Context packing) |
 | `chunks.get` | `{root, ids: [chunk_id]}` | `{hits}`: the full text of chunks, in the order asked (the bodies behind outlines); unknown ids are skipped |
 | `symbols.definitions` | `{root, name}` | `{hits}`: chunks defining `name` |
 | `symbols.references` | `{root, name}` | `{hits}`: chunks calling or using `name` |
-| `ask` | `{root, question, mode?: "local"\|"hybrid"\|"paid", top_k?, corpus?: "all", docs_share?: 0..1, fresh?: false, local_model?, paid_model?, allow_paid?: false}` | `{answer, source_tier, model, local_draft?, escalation_needed, local_error?, escalated, prompt_tokens, output_tokens, hits, timings, cached}` ([ask.md](ask.md)) |
+| `ask` | `{root, question, mode?: "local"\|"hybrid"\|"paid", top_k?, corpus?: "all", docs_share?: 0..1, fresh?: false, local_model?, paid_model?, allow_paid?: false}` | `{answer, source_tier, model, local_draft?, escalation_needed, local_error?, escalated, prompt_tokens, output_tokens, hits, timings, cached, abstained?}` ([ask.md](ask.md)); `abstained` is set when `[rerank] abstain` found nothing likely relevant: no model was called and `answer` is empty |
 | `rank` | `{root, query, documents: [{id, text}], top_k?: 0}` | `{ranked: [{id, score, lexical, dense?}]}`: hybrid ranking of supplied documents, no index needed ([retrieval.md](retrieval.md) § Ranking supplied documents) |
 | `graph.communities` | `{root, limit?: 50, min_size?: 2}` | `{communities: [{id, label, size, files, top_symbols, summary}]}`, largest first |
 | `graph.god_nodes` | `{root, min_in_degree?: 21, limit?: 50}` | `{nodes: [{symbol, path, line, in_degree, out_degree, used_from_files, community, summary}]}` |
@@ -30,7 +30,7 @@ Protocol version: **1.8.0** (1.1 added the `graph.*` methods and the `communitie
 | `status` | `{root}` | `{files, chunks, vectors, embed_model, embed_coverage?, warnings?, merkle_root, index_dir, last_indexed}` |
 | `purge` | `{root}` | `{removed: true}` |
 | `embedders` | — | `{backends: [{backend, compiled, default_model, default_url, description}]}` |
-| `settings` | `{root}` | `{file, file_exists, settings: {embed, rerank, index}}`: the project's settings after environment overrides (keys are never returned) |
+| `settings` | `{root}` | `{file, file_exists, settings: {embed, rerank, index, graph, fusion, lexical, storage, ask}}`: the project's settings after environment overrides (keys are never returned) |
 
 `root` is the project directory. The server keeps one open engine per root.
 

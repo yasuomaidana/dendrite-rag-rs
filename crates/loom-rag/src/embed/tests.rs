@@ -1,3 +1,4 @@
+use super::auto::resolve_auto_in;
 use super::*;
 
 #[test]
@@ -54,21 +55,37 @@ fn auto_prefers_gpu_then_tei_then_ollama() {
         ..Default::default()
     };
     assert_eq!(cfg.backend, Backend::Auto);
-    // GPU builds and HF_TEI_ENDPOINT vary between machines; check the order that holds
-    // for this build and environment.
+    // GPU builds vary between machines; the environment is injected, so the order is exact.
     let gpu = cfg!(any(feature = "candle-metal", feature = "candle-cuda"));
-    let tei = std::env::var("HF_TEI_ENDPOINT").is_ok_and(|v| !v.trim().is_empty());
-    let (with_ollama, _) = resolve_auto(&cfg, |_| true);
-    let (without, reason) = resolve_auto(&cfg, |_| false);
-    if !gpu && !tei {
+    let none = |_: &str| -> Option<String> { None };
+    let gateway_env = |k: &str| (k == "LITELLM_PROXY_URL").then(|| "http://localhost:4000".to_string());
+    let (with_ollama, _) = resolve_auto_in(&cfg, none, |_| true, |_| true);
+    let (without, reason) = resolve_auto_in(&cfg, none, |_| false, |_| false);
+    let (gateway, why) = resolve_auto_in(&cfg, gateway_env, |_| false, |_| true);
+    let (dead_gateway, _) = resolve_auto_in(&cfg, gateway_env, |_| false, |_| false);
+    let (ollama_first, _) = resolve_auto_in(&cfg, gateway_env, |_| true, |_| true);
+    if !gpu {
         assert_eq!(with_ollama.backend, Backend::Ollama);
         assert_eq!(with_ollama.model(), "nomic-embed-text");
         let fallback = if Backend::Candle.compiled() {
             Backend::Candle
+        } else if Backend::Model2vec.compiled() {
+            Backend::Model2vec
         } else {
             Backend::None
         };
         assert_eq!(without.backend, fallback, "{reason}");
+        assert_eq!(gateway.backend, Backend::Openai, "{why}");
+        assert_eq!(gateway.url.as_deref(), Some("http://localhost:4000"));
+        assert_eq!(
+            dead_gateway.backend, fallback,
+            "an unreachable gateway is skipped"
+        );
+        assert_eq!(
+            ollama_first.backend,
+            Backend::Ollama,
+            "Ollama comes before the gateway"
+        );
     }
     for c in [&with_ollama, &without] {
         assert!(!matches!(c.backend, Backend::Oxillama | Backend::Auto));

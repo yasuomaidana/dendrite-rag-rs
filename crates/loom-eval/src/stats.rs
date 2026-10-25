@@ -72,6 +72,83 @@ pub fn paired_diff_ci(a: &[f64], b: &[f64], resamples: usize, seed: u64) -> (f64
     (mean, lo, hi)
 }
 
+/// Stratified bootstrap resampling across groups (e.g. repositories).
+/// Resamples within each stratum to preserve stratum sizes, computing the macro-average or micro-average.
+pub fn stratified_bootstrap_ci(
+    strata: &[Vec<f64>],
+    resamples: usize,
+    seed: u64,
+    macro_average: bool,
+) -> (f64, f64) {
+    let valid_strata: Vec<&Vec<f64>> = strata.iter().filter(|s| !s.is_empty()).collect();
+    if valid_strata.is_empty() || resamples == 0 {
+        return (0.0, 0.0);
+    }
+    let mut rng = SplitMix64::new(seed);
+    let mut means = Vec::with_capacity(resamples);
+    for _ in 0..resamples {
+        if macro_average {
+            let mut stratum_means = Vec::with_capacity(valid_strata.len());
+            for s in &valid_strata {
+                let n = s.len();
+                let sum: f64 = (0..n).map(|_| s[rng.gen_range(n)]).sum();
+                stratum_means.push(sum / (n as f64));
+            }
+            let macro_mean = stratum_means.iter().sum::<f64>() / (stratum_means.len() as f64);
+            means.push(macro_mean);
+        } else {
+            let mut total_sum = 0.0;
+            let mut total_n = 0;
+            for s in &valid_strata {
+                let n = s.len();
+                total_sum += (0..n).map(|_| s[rng.gen_range(n)]).sum::<f64>();
+                total_n += n;
+            }
+            means.push(total_sum / (total_n as f64));
+        }
+    }
+    means.sort_by(|x, y| x.total_cmp(y));
+    let lo_idx = ((resamples as f64 * 0.025).round() as usize).min(resamples - 1);
+    let hi_idx = ((resamples as f64 * 0.975).round() as usize).min(resamples - 1);
+    (means[lo_idx], means[hi_idx])
+}
+
+/// Computes the sample mean of paired differences `b - a` and its 95% confidence interval
+/// using stratified resampling across repository groups.
+pub fn stratified_paired_diff_ci(
+    paired_strata: &[(Vec<f64>, Vec<f64>)],
+    resamples: usize,
+    seed: u64,
+    macro_average: bool,
+) -> (f64, f64, f64) {
+    let diff_strata: Vec<Vec<f64>> = paired_strata
+        .iter()
+        .map(|(a, b)| a.iter().zip(b).map(|(x, y)| y - x).collect())
+        .collect();
+    let point_estimate = if macro_average {
+        let valid: Vec<_> = diff_strata.iter().filter(|s| !s.is_empty()).collect();
+        if valid.is_empty() {
+            0.0
+        } else {
+            valid
+                .iter()
+                .map(|s| s.iter().sum::<f64>() / (s.len() as f64))
+                .sum::<f64>()
+                / (valid.len() as f64)
+        }
+    } else {
+        let total_sum: f64 = diff_strata.iter().flat_map(|s| s.iter()).sum();
+        let total_n: usize = diff_strata.iter().map(|s| s.len()).sum();
+        if total_n == 0 {
+            0.0
+        } else {
+            total_sum / total_n as f64
+        }
+    };
+    let (lo, hi) = stratified_bootstrap_ci(&diff_strata, resamples, seed, macro_average);
+    (point_estimate, lo, hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +191,21 @@ mod tests {
     fn empty_input_returns_zeros() {
         assert_eq!(bootstrap_ci(&[], RESAMPLES, SEED), (0.0, 0.0));
         assert_eq!(paired_diff_ci(&[], &[], RESAMPLES, SEED), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn stratified_bootstrap_recovers_macro_and_micro_means() {
+        // Stratum 1: 2 items with mean 1.0; Stratum 2: 8 items with mean 0.0
+        let s1 = vec![1.0, 1.0];
+        let s2 = vec![0.0; 8];
+        let (lo_macro, hi_macro) = stratified_bootstrap_ci(&[s1.clone(), s2.clone()], RESAMPLES, SEED, true);
+        // Macro mean = (1.0 + 0.0) / 2 = 0.5
+        assert!((lo_macro - 0.5).abs() < 1e-6);
+        assert!((hi_macro - 0.5).abs() < 1e-6);
+
+        let (lo_micro, hi_micro) = stratified_bootstrap_ci(&[s1, s2], RESAMPLES, SEED, false);
+        // Micro mean = 2.0 / 10 = 0.2
+        assert!((lo_micro - 0.2).abs() < 1e-6);
+        assert!((hi_micro - 0.2).abs() < 1e-6);
     }
 }

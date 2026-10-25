@@ -135,7 +135,12 @@ pub fn serve<H: Handler>(
 
 /// The `health` result.
 pub fn health() -> Value {
-    json!({ "name": crate::NAME, "version": crate::VERSION, "protocol": crate::PROTOCOL })
+    json!({
+        "name": crate::NAME,
+        "version": crate::VERSION,
+        "protocol": crate::PROTOCOL,
+        "features": crate::features(),
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +172,14 @@ mod tests {
         assert_eq!(r["id"], 1);
         assert_eq!(r["result"]["name"], "dendrite-rag");
         assert_eq!(r["result"]["protocol"], crate::PROTOCOL);
+        let features: Vec<&str> = r["result"]["features"]
+            .as_array()
+            .expect("features is a list")
+            .iter()
+            .map(|f| f.as_str().unwrap())
+            .collect();
+        assert_eq!(features, crate::features());
+        assert_eq!(features.contains(&"sqlite"), cfg!(feature = "sqlite"));
     }
 
     #[test]

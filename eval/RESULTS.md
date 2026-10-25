@@ -108,7 +108,7 @@ Decision: the default stays nomic through the gateway (best hybrid). model2vec i
 
 No significant difference at three to four times the indexing cost: nomic stays the default for Ollama and jina-code for candle. Not done: paid embedders (no gateway key in this environment; configuration only, embedders.md) and a SWE-bench localization slice.
 
-## LLM contextual chunk prefixes: go/no-go (DRAG-48, 2026-10-24)
+## LLM contextual chunk prefixes: inconclusive (DRAG-48, 2026-10-24, revised)
 
 Contextual retrieval with an LLM (a 50-100 token text situating each chunk in its file, indexed with the chunk and never returned) against the no-LLM header the index already has (path and scope). Prefixes by Gemini 3.8 Flash through `agy` (`eval/contextual/gen.py`: one call per file with the whole document and its chunks; files of one chunk under 2,000 characters skipped): 593 of 672 chunks of dendrite-rag-rs (116 calls, 22 min) and 669 of 826 of embedag. Fresh indexes with and without them, `loom-eval compare`, MRR@10:
 
@@ -117,7 +117,47 @@ Contextual retrieval with an LLM (a 50-100 token text situating each chunk in it
 | dendrite-rag-rs | +0.004 [-0.056, 0.060] | +0.049 [-0.093, 0.195] | +0.042 [-0.108, 0.192] |
 | embedag | +0.027 [0.000, 0.080] | -0.030 [-0.073, 0.000] | -0.030 [-0.073, 0.000] |
 
-Dense search alone moved -0.063 (dendrite-rag-rs) and +0.014 (embedag); on embedag the hybrid nDCG@10 fell, -0.025 [-0.057, -0.002]. **No-go:** the gate (+0.02 MRR with a CI above 0 on two of the three code sets) fails on both sets measured, so the Dendrite set (915 files) was not generated and the enrichment pipeline (outbox, worker, enrich RPC: DRAG-50) is not built. The reported gains of contextual retrieval came from prose corpora; code chunks here already carry their path and scope, and the extra text dilutes the embedding as often as it helps. `Chunk.context`, `Config::chunk_contexts`, `loom-eval export-chunks` and `--contexts` stay for a later experiment (another generator, a reranker, larger corpora).
+Dense search alone moved -0.063 (dendrite-rag-rs) and +0.014 (embedag); on embedag the hybrid nDCG@10 fell, -0.025 [-0.057, -0.002].
+
+**Inconclusive (underpowered, 63–81% coverage):** The previous "no-go" label was not statistically supported. At evaluation time only 465 of 742 dendrite-rag-rs chunks (63%) had a context (commits landed between export and evaluation), and 669 of 826 embedag chunks (81%) had contexts. Furthermore, 25 queries per set gives paired SD ≈ 0.30 and a CI half-width of ±0.12 MRR against the 0.02 target, meaning the sample size was underpowered (n ≈ 280–790 queries required for 80% power), and calling no-go requires a TOST equivalence test within ±0.02. DRAG-50 (enrichment pipeline: outbox, worker, enrich RPC) is reopened and marked "blocked by the DRAG-48 re-run" rather than "not built". A pre-registered re-run on pinned snapshots and SWE-bench with >= 800 pooled queries is planned (DRAG-58). `Chunk.context`, `Config::chunk_contexts`, `loom-eval export-chunks` and `--contexts` remain in place.
+
+## Adaptive fusion weights, corpus `auto` routing and ALL_CAPS symbols: measured and removed (DRAG-61, 2026-10-25)
+
+Three retrieval changes entered a working tree outside the plan, with no measurement behind them. Each was switched on and off in one binary and compared with `loom-eval compare` on the five golden sets (126 queries; MRR@10; paired bootstrap 95 % CIs).
+
+**1. ALL_CAPS constants as chunk symbols** (every `FOO_BAR` token of a chunk added to `symbols`, which the lexical index boosts 2.5x and the code graph turns into nodes; symbols cut to 64). Lexical-only, fresh indexes, so only the chunker differs:
+
+| set | search hybrid / all | context auto / all |
+|---|---|---|
+| Dendrite code (37) | **-0.044 [-0.097, -0.006]** | **-0.045 [-0.099, -0.008]** |
+| Dendrite docs (27) | **-0.046 [-0.095, -0.013]** | **-0.047 [-0.097, -0.013]** |
+| Dendrite mixed (12) | +0.028 [-0.042, 0.125] | +0.028 [-0.042, 0.125] |
+| embedag (25) | -0.020 [-0.060, 0.000] | -0.020 [-0.060, 0.000] |
+| dendrite-rag-rs (25) | -0.025 [-0.100, 0.039] | -0.025 [-0.100, 0.039] |
+
+Significantly worse on both Dendrite sets and not better anywhere: constants are mostly *used* in a chunk, not defined, so the symbol lookup returns every user of the constant ahead of its definition. Removed.
+
+**2. Adaptive fusion weights** (`adapt_for_query`: lexical x0.85 and dense x1.35 for natural-language queries, lexical x1.15, dense x0.90 and symbol x1.25 when the query holds an identifier; applied to every hybrid search), `nomic-embed-text` vectors, chunking held at the baseline. Pooled over all 126 queries:
+
+| method | without | with | difference |
+|---|---|---|---|
+| search hybrid / all | 0.726 | 0.730 | +0.004 [-0.010, +0.020] |
+| search hybrid / code | 0.635 | 0.629 | -0.007 [-0.024, +0.010] |
+| context auto / all | 0.712 | 0.719 | +0.007 [-0.010, +0.027] |
+
+Per set only dendrite-rag-rs improves significantly (`all` +0.049 [0.005, 0.111]); Dendrite code and docs move -0.008 and -0.020, not significantly. It stacks unmeasured constants on the per-embedder weights swept in DRAG-26 and changes every default search, so earlier baselines stop reproducing. Removed.
+
+**3. Corpus `auto`** (identifier or `.` in the query -> code; the substrings `spec`, `usage`, `setup`, `guide`, `install`... -> documentation; else all). MRR@10 per set, `search hybrid`: all / code / auto:
+
+| set | all | code | auto |
+|---|---|---|---|
+| Dendrite code | 0.688 | 0.724 | 0.728 |
+| Dendrite docs | 0.728 | 0.000 | **0.617** |
+| Dendrite mixed | 0.604 | 0.715 | 0.653 |
+| embedag | 0.833 | 0.940 | 0.880 |
+| dendrite-rag-rs | 0.731 | 0.848 | 0.771 |
+
+Pooled, `auto` against `all`: +0.010 [-0.026, +0.041] (search), +0.016 [-0.021, +0.049] (context): no gain. It beats `all` on the code sets by routing identifier queries to code, but loses 0.11 on documentation questions (any `.` or identifier sends them to code, which scores 0 on them), and an explicit `code` beats it on all three code sets. Dendrite already chooses the corpus with `dendrite ask -d`. This repeats the DRAG-25 finding that no automatic rule separates the two kinds of question. Removed, so the protocol keeps `all`, `code` and `docs`.
 
 ## Abstention and the outline fallback (DRAG-51, 2026-10-24)
 
@@ -312,3 +352,40 @@ How memory came down from 191 MB to 96 MB (lexical, 49k chunks):
 - The embedding phase keeps only `(chunk id, content hash)` pairs and loads texts per group.
 
 The eval prints RSS after each phase to stderr, to make regressions easy to locate.
+
+## SWE-bench Verified file localization, lexical baselines (DRAG-54 / DRAG-55, 2026-10-25)
+
+`loom-eval swebench` on SWE-bench Verified (500 instances, 12 Python repositories, 499 base commits; 429 single-file and 71 multi-file). Each instance is checked out at its `base_commit`, indexed incrementally and queried with the problem statement (Q1); a ranked file is correct only if it is exactly a file the gold patch modifies (pre-image paths; `test_patch` excluded). Data from `eval/swebench/import.py`; the dataset file is generated, not committed.
+
+**Setup.** Stratified-120: 16 instances evenly spaced by date from each of the five largest repositories (django, sympy, sphinx, matplotlib, scikit-learn) and 40 from the other seven together (84), so flask and seaborn are rarely sampled. **Lexical only** (`DENDRITE_RAG_EMBED_BACKEND=none`): `hybrid` here is BM25 plus symbol names, with no vectors. All 120 instances were scored, none skipped. Leakage classes by what the statement mentions: `path_explicit` (a gold file's path, basename or module: 45 of the 120), `traceback_symbol` (30), `opaque_nl` (45). Hit@k is "a gold file within the top k"; Gold-recall@10 is the fraction of the instance's gold files within the top 10.
+
+| method | Hit@1 | Hit@5 | Hit@10 | repo-macro Hit@10 | Gold-recall@10 | MRR@10 |
+|---|---|---|---|---|---|---|
+| grep-agent (whole files) | 0.033 | 0.208 | 0.300 | 0.365 | 0.269 | 0.114 |
+| bm25-file (whole files) | 0.225 | 0.525 | 0.642 | 0.685 | 0.596 | 0.348 |
+| chunk-bm25, best chunk per file | 0.283 | 0.675 | 0.775 | 0.785 | 0.724 | 0.443 |
+| chunk-bm25, top-3 decaying sum | 0.375 | 0.783 | 0.842 | 0.832 | 0.788 | 0.537 |
+| chunk-bm25, decaying sum, tests and migrations removed | 0.442 | 0.825 | 0.883 | 0.920 | 0.826 | 0.606 |
+| hybrid (BM25 + symbols), best chunk | 0.367 | 0.625 | 0.775 | 0.785 | 0.719 | 0.491 |
+| hybrid, decaying sum | 0.400 | 0.700 | 0.800 | 0.818 | 0.747 | 0.523 |
+
+Paired differences in MRR@10 over the 120 instances (bootstrap 95 % CI):
+
+| comparison | difference |
+|---|---|
+| chunks instead of whole files (bm25-file → chunk-bm25) | **+0.096 [+0.031, +0.161]** |
+| whole-file BM25 instead of grep-agent | **+0.234 [+0.163, +0.305]** |
+| pooling a file's top three chunks (chunk-bm25 → decay) | **+0.094 [+0.057, +0.132]** |
+| dropping test files and numbered migrations (decay → notests) | **+0.069 [+0.044, +0.097]** |
+| symbol names added (chunk-bm25 → hybrid) | +0.048 [-0.029, +0.125] |
+| symbol names added, decaying sum | -0.014 [-0.088, +0.058] |
+
+Findings:
+- **Chunks beat whole files, and pooling matters.** Ranking by the best chunk already beats whole-file BM25; summing a file's top three chunks (so a file with several relevant chunks outranks one lucky chunk) adds as much again. Neither is in the engine's file ranking yet: `search` returns chunks.
+- **Test files are the main distractor.** The gold patch never touches tests, and removing test files and numbered migrations from the ranking is worth +0.07 to +0.16 MRR. That is knowledge of the task (a fix-localization agent wants source files), so it is a ranking prior to offer as an option, not a like-for-like gain over the other rows.
+- **Symbol names do not help here** (differences within noise), unlike on the golden sets.
+- **The statement's own wording decides.** Hit@10 for `chunk-bm25-notests` is 0.978 when the statement names a gold file, 0.967 with a traceback or backticked symbols, and 0.733 for opaque natural language, where no method passes 0.74; the leakage tables are in the run file.
+- **Indexing cost, lexical only:** the first checkout of each repository indexed in 0.5 to 3.5 s (django 3.5 s), and the 109 following instances in a median 1.2 s (90th percentile 3.1 s, maximum 12.7 s) with a median of 310 files changed. Lexical indexing is cheap enough that the Merkle diff matters little here; its saving is in embeddings, which the content-hash cache reuses across commits (not measured in this run).
+
+Not measured yet: dense and hybrid with real vectors (the remaining part of DRAG-55; embedding the repositories needs several hours with a local model), the Q2/Q3 query variants, the full 500, and a published reference to compare with. Repo-macro figures rest on 1 to 16 instances per repository; do not read single repositories from them.
+

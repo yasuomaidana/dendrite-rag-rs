@@ -5,7 +5,7 @@
 //!
 //! | backend | where the model runs | wire / runtime |
 //! |---|---|---|
-//! | `auto` (default) | the first available of: candle on a GPU, a TEI server, Ollama, candle on the CPU | see [`resolve_auto`] |
+//! | `auto` (default) | the first available of: candle on a GPU, a TEI server, Ollama, the LiteLLM gateway, candle on the CPU, model2vec | see [`resolve_auto`] |
 //! | `openai` | any OpenAI-compatible server: the LiteLLM gateway, vLLM, LM Studio, `oxillama serve` | `POST /v1/embeddings` |
 //! | `ollama` | an Ollama server | `POST /api/embed` |
 //! | `hf` | Hugging Face Inference (serverless or a dedicated endpoint) or a TEI server | `POST …/feature-extraction`, TEI `POST /embed` |
@@ -18,8 +18,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod hf;
 mod http;
+pub mod info;
 pub mod ollama;
 pub mod openai;
+
+pub use info::{BackendInfo, backends};
 
 #[cfg(feature = "candle")]
 pub mod candle;
@@ -227,6 +230,10 @@ pub struct EmbedConfig {
     pub pooling: Option<Pooling>,
     /// Texts per request or forward pass (default 32, in process 16).
     pub batch: Option<usize>,
+    /// Target vector dimensions (Matryoshka Representation Learning).
+    pub dimensions: Option<usize>,
+    /// Token budget capping an indexing run.
+    pub budget_tokens: Option<usize>,
 }
 
 impl EmbedConfig {
@@ -235,6 +242,15 @@ impl EmbedConfig {
             .clone()
             .or_else(|| self.backend.default_model().map(str::to_string))
             .unwrap_or_default()
+    }
+
+    /// The model id identifying stored vectors; includes `@dims` when `dimensions` is set.
+    pub fn model_id(&self) -> String {
+        let m = self.model();
+        match self.dimensions {
+            Some(d) => format!("{m}@{d}"),
+            None => m,
+        }
     }
 
     pub fn url(&self) -> Option<String> {
@@ -315,65 +331,14 @@ pub fn model_pooling(model: &str) -> Pooling {
     }
 }
 
-/// GPU-capable backends first, Rust before other runtimes: the concrete configuration
-/// `backend = "auto"` stands for, and why it was chosen.
-///
-/// 1. `candle` when built with `candle-metal` or `candle-cuda` and the device opens;
-/// 2. `hf` when `HF_TEI_ENDPOINT` names a Text Embeddings Inference server (Rust, GPU);
-/// 3. `ollama` when its server answers (GPU through llama.cpp);
-/// 4. `candle` on the CPU when built with `candle`;
-/// 5. `none`: lexical and symbol retrieval only.
-///
-/// oxillama is never chosen: oxillama-runtime 0.1.4 offloads only Q4_0 single-token
-/// decode to the GPU, so its embeddings run on the CPU (over 3 s per chunk measured).
-/// The configured model, prefixes, pooling and batch carry over to the chosen backend.
-pub fn resolve_auto(cfg: &EmbedConfig, ollama_reachable: impl Fn(&str) -> bool) -> (EmbedConfig, String) {
-    let with = |backend: Backend, url: Option<String>| EmbedConfig {
-        backend,
-        url,
-        ..cfg.clone()
-    };
-    #[cfg(feature = "candle")]
-    if let Some(device) = candle::accelerator() {
-        return (with(Backend::Candle, None), format!("candle on {device}"));
-    }
-    if let Some(tei) = std::env::var("HF_TEI_ENDPOINT")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        let reason = format!("Text Embeddings Inference at {tei}");
-        return (with(Backend::Hf, Some(tei)), reason);
-    }
-    let ollama = Backend::Ollama.default_url().unwrap_or_default();
-    if ollama_reachable(&ollama) {
-        return (with(Backend::Ollama, None), format!("Ollama at {ollama}"));
-    }
-    if Backend::Candle.compiled() {
-        return (
-            with(Backend::Candle, None),
-            "candle on the CPU (no GPU build, TEI server or Ollama found)".into(),
-        );
-    }
-    (
-        with(Backend::None, None),
-        "no embedder available (no GPU build of candle, TEI server or Ollama): lexical and symbol retrieval only".into(),
-    )
-}
-
-/// Whether an Ollama server answers at `url` within half a second.
-pub fn ollama_reachable(url: &str) -> bool {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_millis(500)))
-        .build()
-        .into();
-    agent.get(&format!("{url}/api/version")).call().is_ok()
-}
+pub(crate) mod auto;
+pub use auto::{gateway_reachable, ollama_reachable, resolve_auto};
 
 /// Builds the configured embedder; `Ok(None)` for `Backend::None`. `auto` is resolved
 /// first, and the choice is reported on stderr.
 pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
     if cfg.backend == Backend::Auto {
-        let (resolved, reason) = resolve_auto(cfg, ollama_reachable);
+        let (resolved, reason) = resolve_auto(cfg, ollama_reachable, gateway_reachable);
         eprintln!(
             "loom-rag: embedder auto -> {} ({reason})",
             resolved.backend.as_str()
@@ -449,29 +414,6 @@ pub fn pool(tokens: &[Vec<f32>], pooling: Pooling) -> Vec<f32> {
             sum
         }
     }
-}
-
-/// How one embedding backend is described when backends are listed.
-#[derive(Debug, Clone, Serialize)]
-pub struct BackendInfo {
-    pub backend: &'static str,
-    pub compiled: bool,
-    pub default_model: Option<&'static str>,
-    pub default_url: Option<String>,
-    pub description: &'static str,
-}
-
-pub fn backends() -> Vec<BackendInfo> {
-    Backend::ALL
-        .iter()
-        .map(|&b| BackendInfo {
-            backend: b.as_str(),
-            compiled: b.compiled(),
-            default_model: b.default_model(),
-            default_url: b.default_url(),
-            description: b.describe(),
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 ## Walking
 
 - `ignore::WalkBuilder` (parallel), honouring `.gitignore`, `.ignore`, global git excludes and hidden-file rules.
-- Always skipped: `.git/`, `target/`, `node_modules/`, `vendor/`, `dist/`, `.dendrite/`, plus every path matched by `Config::exclude` globs.
+- Always skipped: `.git/`, `target/`, `node_modules/`, `vendor/`, `dist/`, `.loom/`, `__pycache__/`, `.venv/`, `.dendrite/` (via `Config::exclude`), plus every path matched by `Config::exclude` globs.
 - Files over `Config::max_file_bytes` (default 1 MiB) are skipped. So is any file whose first 8 KiB contain a NUL byte (binary).
 - The language comes from the file extension. Go, Rust, Python, TypeScript/TSX, JavaScript/JSX, Java, C and C++ are parsed with tree-sitter. Markdown is split by headings. Known text formats (configuration, data, SQL, shell, and languages without a bundled grammar) are split as plain text. Files with any other extension are not indexed.
 
@@ -31,7 +31,7 @@ Each code file also yields its **imports**: the module specifiers of its import 
 
 | Field | Meaning |
 |---|---|
-| `id` | `blake3(path ‖ 0x00 ‖ start_byte ‖ end_byte ‖ content)`, hex, first 32 chars |
+| `id` | `blake3(path ‖ 0x00 ‖ start_byte ‖ 0x00 ‖ end_byte ‖ 0x00 ‖ content)`, hex, first 32 chars |
 | `content_hash` | `blake3(content)`: the embedding cache key, so identical code is embedded once |
 | `path` | Path relative to the project root, `/` separators |
 | `lang` | Language tag |
@@ -42,6 +42,7 @@ Each code file also yields its **imports**: the module specifiers of its import 
 | `calls` | The subset of `refs` that are calls |
 | `method_calls` | The subset of `calls` made through a receiver or qualifier (`x.len()`, `pkg.F()`) |
 | `content` | Source text |
+| `context` | Optional LLM-written text situating the chunk in its file (indexed, never returned) |
 
 ## Contextual header
 
@@ -53,4 +54,4 @@ Before indexing, each chunk's text is prefixed with a short header:
 <content>
 ```
 
-This is the no-LLM form of contextual retrieval. A chunk may also carry an LLM-written `context` (`Chunk.context`, indexed as a `// context:` line after the header, never returned); `Config::chunk_contexts` supplies them by chunk id at index time. Measured, LLM contexts did not improve retrieval of code here (eval/RESULTS.md, DRAG-48), so nothing writes them by default. Both BM25 and the embedding model see the file and the enclosing scope, which disambiguates generic bodies such as `return nil, err`. The header is used only for indexing; results return the raw content.
+This is the no-LLM form of contextual retrieval. A chunk may also carry an LLM-written `context` (`Chunk.context`, indexed as a `// context:` line after the header, never returned); `Config::chunk_contexts` supplies them by chunk id at index time. Measured in DRAG-48, results were inconclusive due to underpowered sample size and 63–81% coverage (`eval/RESULTS.md`), so nothing writes them by default pending the pre-registered re-run (DRAG-58). Both BM25 and the embedding model see the file and the enclosing scope, which disambiguates generic bodies such as `return nil, err`. The header is used only for indexing; results return the raw content.

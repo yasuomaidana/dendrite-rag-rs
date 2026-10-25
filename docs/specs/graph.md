@@ -57,11 +57,13 @@ Files are partitioned with **Leiden** (`src/graph/leiden.rs`, pure Rust) maximiz
 - **Record:** id, label, member files and the 10 most-used symbols (`name`, `path`, `line`, `in_degree`).
 - Files with no edges (most docs and config) are communities of one.
 
-| redb table | Key | Value |
+| Ledger table (redb / sqlite) | Key | Value |
 |---|---|---|
 | `community_files` | path | community id |
 | `community_chunks` | chunk id | community id (each chunk inherits its file's) |
 | `communities` | community id | the record, JSON |
+
+The local ledger uses redb by default, with SQLite opt-in (`[storage] ledger = "sqlite"`, feature `sqlite`, DRAG-49); both implement the same tables.
 
 ## Queries
 
@@ -76,9 +78,9 @@ Served as JSON-RPC methods ([protocol.md](protocol.md)) and as `dendrite-rag gra
 
 ## Summary chunks
 
-Every community of two or more files gets a summary chunk (`src/graph/summary.rs`): its label, files, most-used symbols and a one-paragraph description, all deterministic (an optional LLM summary is DRAG-36). Its id and path start with `@community/`, which no project file can; the id carries the content hash, so a changed summary is a new chunk and its old vector is dropped. Summaries are written with the communities: lexical index first, then the ledger (replacing the last run's), and embedded with the other chunks.
+Every community of two or more files gets a summary chunk (`src/graph/summary.rs`): its label, files, most-used symbols and a one-paragraph description, all deterministic (an optional LLM summary is supported via DRAG-36, § Optional LLM layer). Its id and path start with `@community/`, which no project file can; the id carries the content hash, so a changed summary is a new chunk and its old vector is dropped. Summaries are written with the communities: lexical index first, then the ledger (replacing the last run's), and embedded with the other chunks.
 
-In search they never appear and never compete with code: hybrid search splits them out of the lexical and dense rankings and fuses them into a separate summary ranking. Code that the other rankings found inside the two best-matching communities can be raised by `COMMUNITY_BOOST`; it is 0 (off) by default, because on the golden sets it did not help (eval/RESULTS.md, DRAG-31), and DRAG-26 makes it tunable per corpus.
+In search they never appear and never compete with code: hybrid search splits them out of the lexical and dense rankings and fuses them into a separate summary ranking. Code that the other rankings found inside the two best-matching communities can be raised by `community` (`[fusion] community` / `DENDRITE_RAG_FUSION_COMMUNITY`, formerly `COMMUNITY_BOOST`); it is 0 (off) by default, because on the golden sets it did not help (eval/RESULTS.md, DRAG-31), and DRAG-26 makes it tunable per corpus.
 
 In context packs, a neighbour pulled in through the symbol graph keeps `HOP_DECAY` when it is in the same community as its hit and decays once more (×0.5) when it is not.
 
@@ -89,5 +91,5 @@ The graph layer supports an optional LLM enrichment phase (`[graph.llm]` in `.de
 - **Gateway client**: A small blocking client (`src/llm.rs`) communicating with an OpenAI-compatible LiteLLM proxy via `POST {url}/v1/chat/completions`. URL is read from `LITELLM_PROXY_URL` (default `http://localhost:4000`), bearer key from `LITELLM_MASTER_KEY` then `LITELLM_API_KEY`. Always runs at temperature 0 with a timeout and JSON mode support. Failures yield typed errors and never panic.
 - **Community summaries**: When `summaries = true`, the model generates a 3-5 sentence summary from the deterministic community summary text plus the first lines of its top-symbol chunks. This description is appended to the summary chunk, updating its content and hash.
 - **Concepts**: When `concepts = true`, the model extracts up to 8 key concepts as JSON `[{name, description}]` per prose file (Markdown, `.txt`, `.rst`; the first 12,000 characters), not the configuration and data files that are also indexed as text. Extracted concepts are stored in the ledger table `concepts` (`path -> JSON list`) and exposed read-only in `graph.explain` for a file (`concepts` field, omitted when empty) and in `proto/graph.explain.json`. Images are out of scope for now.
-- **Caching & cost control**: Every model response is cached in the redb ledger table `llm_cache` keyed by `(model, BLAKE3 of prompt)` through `LedgerStore` and `LedgerWrite`. Unchanged communities and files never call the model again. The `llm_cache` table is preserved across index rebuilds. If a model call fails, the deterministic summary is kept, indexing succeeds, the error is reported in `IndexReport` under `llm_error`, and the gateway is not asked again in that run (only cached answers are used), so a gateway outage costs one timeout, not one per community or file.
+- **Caching & cost control**: Every model response is cached in the ledger table `llm_cache` (redb or SQLite) keyed by `(model, BLAKE3 of prompt)` through `LedgerStore` and `LedgerWrite`. Unchanged communities and files never call the model again. The `llm_cache` table is preserved across index rebuilds. If a model call fails, the deterministic summary is kept, indexing succeeds, the error is reported in `IndexReport` under `llm_error`, and the gateway is not asked again in that run (only cached answers are used), so a gateway outage costs one timeout, not one per community or file.
 - **What is sent**: community labels, file paths, symbol names and their first lines, and the text of prose files, to the gateway's model only. Nothing is sent unless `enabled` and `summaries` or `concepts` are set.

@@ -10,7 +10,12 @@
     "properties": {
       "name": { "const": "dendrite-rag" },
       "version": { "type": "string" },
-      "protocol": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+      "protocol": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+      "features": {
+        "type": "array",
+        "description": "Protocol 1.9: the cargo features the binary was built with (postgres, sqlite, hnsw, model2vec, candle, candle-metal, candle-cuda, candle-accelerate, oxillama)",
+        "items": { "type": "string" }
+      }
     }
   }
 }

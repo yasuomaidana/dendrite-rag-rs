@@ -1,8 +1,10 @@
 //! The contextual retrieval experiment (DRAG-48): chunks are exported per file for an
 //! external model to situate, and its contexts are read back to index with the chunks.
 //!
-//!     loom-eval export-chunks <root> --index-dir DIR --out chunks.jsonl
-//!     loom-eval quality <root> <golden…> --index-dir FRESH_DIR --contexts contexts.json
+//! ```text
+//! loom-eval export-chunks <root> --index-dir DIR --out chunks.jsonl
+//! loom-eval quality <root> <golden…> --index-dir FRESH_DIR --contexts contexts.json
+//! ```
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;

@@ -47,7 +47,7 @@
 //! ```
 //!
 //! Environment overrides: `DENDRITE_RAG_EMBED_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`,
-//! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` (all `DENDRITE_RAG_EMBED_*`),
+//! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH`, `_DIMENSIONS`, `_BUDGET_TOKENS` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `_ABSTAIN`, `DENDRITE_RAG_MAX_FILE_BYTES`,
 //! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
 //! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`, `DENDRITE_RAG_STORAGE_LEDGER`,
@@ -205,6 +205,18 @@ impl Settings {
             e.batch = Some(
                 n.parse()
                     .with_context(|| format!("DENDRITE_RAG_EMBED_BATCH={n:?}"))?,
+            );
+        }
+        if let Some(d) = var("DENDRITE_RAG_EMBED_DIMENSIONS") {
+            e.dimensions = Some(
+                d.parse()
+                    .with_context(|| format!("DENDRITE_RAG_EMBED_DIMENSIONS={d:?}"))?,
+            );
+        }
+        if let Some(t) = var("DENDRITE_RAG_EMBED_BUDGET_TOKENS") {
+            e.budget_tokens = Some(
+                t.parse()
+                    .with_context(|| format!("DENDRITE_RAG_EMBED_BUDGET_TOKENS={t:?}"))?,
             );
         }
         let r = &mut self.rerank;
@@ -371,6 +383,19 @@ impl Settings {
         }
         if self.index.vector_index == Some(VectorIndexChoice::Hnsw) && !cfg!(feature = "hnsw") {
             bail!("vector index 'hnsw' requires cargo feature 'hnsw'");
+        }
+        if let Some(d) = self.embed.dimensions {
+            if d == 0 {
+                bail!("embed.dimensions must be a positive number");
+            }
+            // Only the OpenAI-compatible request carries `dimensions`; elsewhere it would be
+            // ignored and the vectors would keep the model's size under a `@dims` name.
+            if !matches!(self.embed.backend, Backend::Openai | Backend::Auto) {
+                bail!(
+                    "embed.dimensions needs the openai backend (or auto), got {}",
+                    self.embed.backend.as_str()
+                );
+            }
         }
         if self.graph.llm.enabled && self.graph.llm.model.as_deref().unwrap_or("").trim().is_empty() {
             bail!(

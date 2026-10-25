@@ -17,6 +17,8 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 # query_prefix = "search_query: "
 # pooling = "mean"              # mean | cls | last (in-process and token-level outputs)
 # batch = 32                    # texts per request or forward pass
+# dimensions = 1024             # Matryoshka target dimensions
+# budget_tokens = 50000000      # maximum tokens to embed in an indexing run
 
 [rerank]
 # backend = "gateway"           # gateway (default) | candle | none
@@ -45,7 +47,7 @@ url = "http://localhost:11434"  # optional, HTTP backends only
 | Variable | Overrides |
 |---|---|
 | `DENDRITE_RAG_EMBED_BACKEND` | `embed.backend`. A backend different from the file's drops the file's `model`, `url`, prefixes and pooling, because they belong to the file's backend |
-| `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH` | the matching `embed.*` key |
+| `DENDRITE_RAG_EMBED_MODEL`, `_URL`, `_API_KEY_ENV`, `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH`, `_DIMENSIONS`, `_BUDGET_TOKENS` | the matching `embed.*` key |
 | `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL` | `rerank.backend`, `rerank.model`, `rerank.url`. A backend different from the file's drops the file's model and URL |
 | `DENDRITE_RAG_MAX_FILE_BYTES` | `index.max_file_bytes` |
 | `DENDRITE_RAG_GRAPH_RESOLUTION` | `graph.resolution` |
@@ -66,12 +68,20 @@ Unknown keys, unknown backends and malformed values are errors, never silently r
 1. `candle` when the binary was built with `candle-metal` or `candle-cuda` and the GPU opens (default model `jinaai/jina-embeddings-v2-base-code`).
 2. `hf` when `HF_TEI_ENDPOINT` names a Text Embeddings Inference server (Rust, GPU).
 3. `ollama` when its server answers within 0.5 s.
-4. `candle` on the CPU when the binary has the `candle` feature.
-5. `none`: lexical and symbol retrieval only.
+4. `openai` through the LiteLLM gateway when `LITELLM_PROXY_URL` names a server that answers within 0.5 s (any HTTP status counts), with the gateway's default embedding model (`local-nomic-embed-text-latest`). An unreachable gateway is skipped, so a stale variable never leaves a project without an embedder.
+5. `candle` on the CPU when the binary has the `candle` feature.
+6. `model2vec` (static embeddings) when the binary has the `model2vec` feature.
+7. `none`: lexical and symbol retrieval only.
 
 A configured `model`, prefixes, pooling and batch carry over to the chosen backend. oxillama is never chosen automatically: oxillama-runtime 0.1.4 offloads only Q4_0 single-token decode to the GPU, so its embeddings run on the CPU (over 3 s per chunk measured). Because the choice can differ between machines, a project that needs identical vectors everywhere pins `backend` and `model`.
 
 Recommended builds: `cargo install --locked --git https://github.com/yasuomaidana/dendrite-rag-rs --features candle-metal` on Apple Silicon, `--features candle-cuda` on NVIDIA (needs the CUDA toolkit), none to use Ollama.
+
+## Dimensions and token budgets
+
+- `[embed] dimensions` (`DENDRITE_RAG_EMBED_DIMENSIONS`) asks an OpenAI-compatible server for shorter vectors (Matryoshka models such as `text-embedding-3-large` and `voyage-code-3`): it is sent as `dimensions`, and a longer answer is cut to that size and re-normalized. Only the `openai` backend (or `auto`) accepts it; any other backend is a configuration error, because it would ignore the setting. A vector shorter than requested is an error. The stored model id becomes `model@dims`, so vectors of different sizes never share a cache entry. Truncating a model that was not trained for it (not Matryoshka) degrades retrieval.
+- `[embed] budget_tokens` (`DENDRITE_RAG_EMBED_BUDGET_TOKENS`, or `embed_budget_tokens` on `index`) caps the embedding phase of one run, in estimated tokens (about 4 characters per token, so code is under-counted by roughly a third). The run stops at the first group that would exceed it, reports `embed_pending`, `embed_tokens` and `budget_tokens_remaining`, and the next run continues. The first group always runs, so a budget smaller than a group is exceeded by up to one group.
+- Requests that answer 429 or 5xx are retried up to four times with exponential backoff and jitter; a `Retry-After` header is honoured up to 60 seconds. Connection failures and timeouts are not retried: they surface as `embed_error` and the next run picks up the missing vectors.
 
 ## Backends
 
@@ -87,7 +97,7 @@ Recommended builds: `cargo install --locked --git https://github.com/yasuomaidan
 
 Server backends send batches of 32 texts. Inputs over 8,000 bytes are cut at a character boundary.
 
-**Qwen3-Embedding and paid code embedders (DRAG-52).** `backend = "candle"`, `model = "Qwen/Qwen3-Embedding-0.6B"` (1024-d) measured level with `nomic-embed-text` on the golden sets (dense -0.090 / +0.048 MRR on dendrite-rag-rs / embedag, hybrid +0.007 on both, no CI excluding 0) and indexes 3-4x slower on Metal (229 s against 55 s for 721 chunks), so it is an option, not a default. Paid code embedders (voyage-code, Qwen3-Embedding-8B through OpenRouter) need no code: point `backend = "openai"` at the LiteLLM gateway and name the gateway's model. Vectors above 2,000 dimensions do not fit a pgvector index; request a smaller output (Matryoshka truncation, e.g. `dimensions` on the gateway model) before using the shared tier.
+**Qwen3-Embedding and paid code embedders (DRAG-52).** `backend = "candle"`, `model = "Qwen/Qwen3-Embedding-0.6B"` (1024-d) measured level with `nomic-embed-text` on the golden sets (dense -0.090 / +0.048 MRR on dendrite-rag-rs / embedag, hybrid +0.007 on both, no CI excluding 0) and indexes 3-4x slower on Metal (229 s against 55 s for 721 chunks), so it is an option, not a default. Paid code embedders (voyage-code, Qwen3-Embedding-8B through OpenRouter) need no code: point `backend = "openai"` at the LiteLLM gateway and name the gateway's model. The shared tier's `vector` columns are untyped with no ANN index, so the "pgvector 2,000-dimension limit" does not apply. The real limit is memory: the int8 scan holds `dims` bytes per vector, so 4096-d × 50k chunks ≈ 205 MB against the 200 MB budget, while 1024-d is 51 MB. When using high-dimension models, request a smaller output (Matryoshka truncation via `[embed] dimensions`) to stay within memory limits.
 
 ## Model conventions applied automatically
 
