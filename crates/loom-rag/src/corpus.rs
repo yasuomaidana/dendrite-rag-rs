@@ -63,25 +63,40 @@ impl CorpusFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn prose_is_docs_and_everything_else_is_code() {
-        assert_eq!(Corpus::of("README.md", Lang::Markdown), Corpus::Docs);
-        assert_eq!(Corpus::of("docs/guide.rst", Lang::Text), Corpus::Docs);
-        assert_eq!(Corpus::of("NOTES.TXT", Lang::Text), Corpus::Docs);
-        assert_eq!(Corpus::of("src/main.rs", Lang::Rust), Corpus::Code);
-        assert_eq!(Corpus::of("app/Main.kt", Lang::Text), Corpus::Code);
-        assert_eq!(Corpus::of("scripts/build.sh", Lang::Text), Corpus::Code);
-        assert_eq!(Corpus::of("Cargo.toml", Lang::Text), Corpus::Code);
-        assert_eq!(Corpus::of("@community/3/summary", Lang::Text), Corpus::Code);
+    #[rstest]
+    #[case("README.md", Lang::Markdown, Corpus::Docs)]
+    #[case("docs/guide.rst", Lang::Text, Corpus::Docs)]
+    #[case("NOTES.TXT", Lang::Text, Corpus::Docs)]
+    #[case("src/main.rs", Lang::Rust, Corpus::Code)]
+    #[case("app/Main.kt", Lang::Text, Corpus::Code)]
+    #[case("scripts/build.sh", Lang::Text, Corpus::Code)]
+    #[case("Cargo.toml", Lang::Text, Corpus::Code)]
+    #[case("@community/3/summary", Lang::Text, Corpus::Code)]
+    fn prose_is_docs_and_everything_else_is_code(
+        #[case] path: &str,
+        #[case] lang: Lang,
+        #[case] expected: Corpus,
+    ) {
+        assert_eq!(Corpus::of(path, lang), expected);
+    }
+
+    #[rstest]
+    #[case(CorpusFilter::All, Corpus::Docs, true)]
+    #[case(CorpusFilter::Code, Corpus::Code, true)]
+    #[case(CorpusFilter::Code, Corpus::Docs, false)]
+    #[case(CorpusFilter::Docs, Corpus::Code, false)]
+    fn filters_admit_their_corpora(
+        #[case] filter: CorpusFilter,
+        #[case] corpus: Corpus,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(filter.admits(corpus), expected);
     }
 
     #[test]
-    fn filters_admit_their_corpora() {
-        assert!(CorpusFilter::All.admits(Corpus::Docs));
-        assert!(CorpusFilter::Code.admits(Corpus::Code));
-        assert!(!CorpusFilter::Code.admits(Corpus::Docs));
-        assert!(!CorpusFilter::Docs.admits(Corpus::Code));
+    fn filter_deserializes_from_json() {
         assert_eq!(
             serde_json::from_str::<CorpusFilter>("\"docs\"").unwrap(),
             CorpusFilter::Docs

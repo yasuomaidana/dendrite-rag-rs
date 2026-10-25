@@ -386,15 +386,15 @@ mod tests {
         assert_eq!(code_terms(sample), from_tokens);
     }
 
-    #[test]
-    fn splits_identifiers_and_keeps_the_whole() {
-        assert_eq!(
-            texts("parseHTTPResponse2"),
-            ["parsehttpresponse2", "parse", "http", "response", "2"]
-        );
-        assert_eq!(texts("max_file_bytes"), ["maxfilebytes", "max", "file", "bytes"]);
-        assert_eq!(texts("Locate(name)"), ["locate", "name"]);
-        assert_eq!(texts("über_größe"), ["übergröße", "über", "größe"]);
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("parseHTTPResponse2", &["parsehttpresponse2", "parse", "http", "response", "2"][..])]
+    #[case("max_file_bytes", &["maxfilebytes", "max", "file", "bytes"][..])]
+    #[case("Locate(name)", &["locate", "name"][..])]
+    #[case("über_größe", &["übergröße", "über", "größe"][..])]
+    fn splits_identifiers_and_keeps_the_whole(#[case] input: &str, #[case] expected: &[&str]) {
+        assert_eq!(texts(input), expected);
     }
 
     #[test]

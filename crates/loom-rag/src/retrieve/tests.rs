@@ -3,6 +3,7 @@ use super::*;
 use crate::corpus::CorpusFilter;
 use crate::engine::Config;
 use crate::testutil::{HashEmbedder, project};
+use rstest::{fixture, rstest};
 use std::fs;
 
 fn engine(root: &std::path::Path) -> Engine {
@@ -22,10 +23,16 @@ fn calls_project() -> tempfile::TempDir {
     dir
 }
 
-#[test]
-fn hybrid_fuses_lexical_dense_and_symbols() {
+#[fixture]
+fn calls_engine() -> (tempfile::TempDir, Engine) {
     let dir = calls_project();
     let e = engine(dir.path());
+    (dir, e)
+}
+
+#[rstest]
+fn hybrid_fuses_lexical_dense_and_symbols(calls_engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = calls_engine;
     let hits = e.search("LocateBinary", &SearchOpts::default()).unwrap();
     assert_eq!(
         hits[0].path, "pkg/sidecar/sidecar.go",
@@ -50,10 +57,9 @@ fn hybrid_fuses_lexical_dense_and_symbols() {
     }
 }
 
-#[test]
-fn path_globs_filter_results() {
-    let dir = calls_project();
-    let e = engine(dir.path());
+#[rstest]
+fn path_globs_filter_results(calls_engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = calls_engine;
     let opts = SearchOpts {
         paths: vec!["**/*.md".into()],
         ..SearchOpts::default()
@@ -62,10 +68,9 @@ fn path_globs_filter_results() {
     assert!(!hits.is_empty() && hits.iter().all(|h| h.path.ends_with(".md")));
 }
 
-#[test]
-fn context_expands_through_the_symbol_graph_within_budget() {
-    let dir = calls_project();
-    let e = engine(dir.path());
+#[rstest]
+fn context_expands_through_the_symbol_graph_within_budget(calls_engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = calls_engine;
     let pack = e.context("Start helper process", 2000).unwrap();
     let paths: Vec<&str> = pack.spans.iter().map(|s| s.path.as_str()).collect();
     assert!(paths.contains(&"pkg/sidecar/client.go"));
@@ -211,30 +216,32 @@ fn corpus_search(e: &Engine, query: &str, corpus: CorpusFilter, mode: Mode) -> V
     .unwrap()
 }
 
-#[test]
-fn code_and_docs_corpora_stay_apart() {
-    let dir = calls_project();
-    let e = engine(dir.path());
-    for mode in [Mode::Hybrid, Mode::Lexical, Mode::Dense] {
-        let code = corpus_search(&e, "project", CorpusFilter::Code, mode);
-        assert!(!code.is_empty(), "{mode:?}");
-        assert!(
-            code.iter().all(|h| !h.path.ends_with(".md")),
-            "{mode:?}: {code:?}"
-        );
-        let docs = corpus_search(&e, "project", CorpusFilter::Docs, mode);
-        assert!(!docs.is_empty(), "{mode:?}");
-        assert!(docs.iter().all(|h| h.path == "README.md"), "{mode:?}: {docs:?}");
+#[rstest]
+fn code_and_docs_corpora_stay_apart(
+    calls_engine: (tempfile::TempDir, Engine),
+    #[values(Mode::Hybrid, Mode::Lexical, Mode::Dense)] mode: Mode,
+) {
+    let (_dir, e) = calls_engine;
+    let code = corpus_search(&e, "project", CorpusFilter::Code, mode);
+    assert!(!code.is_empty(), "{mode:?}");
+    assert!(
+        code.iter().all(|h| !h.path.ends_with(".md")),
+        "{mode:?}: {code:?}"
+    );
+    let docs = corpus_search(&e, "project", CorpusFilter::Docs, mode);
+    assert!(!docs.is_empty(), "{mode:?}");
+    assert!(docs.iter().all(|h| h.path == "README.md"), "{mode:?}: {docs:?}");
+
+    if mode == Mode::Hybrid {
+        let all = corpus_search(&e, "project", CorpusFilter::All, Mode::Hybrid);
+        assert!(all.iter().any(|h| h.path == "README.md"));
+        assert!(all.iter().any(|h| h.path.ends_with(".go")));
     }
-    let all = corpus_search(&e, "project", CorpusFilter::All, Mode::Hybrid);
-    assert!(all.iter().any(|h| h.path == "README.md"));
-    assert!(all.iter().any(|h| h.path.ends_with(".go")));
 }
 
-#[test]
-fn context_packs_follow_the_corpus() {
-    let dir = calls_project();
-    let e = engine(dir.path());
+#[rstest]
+fn context_packs_follow_the_corpus(calls_engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = calls_engine;
     let code = e
         .context_for("Start helper process", 2000, CorpusFilter::Code)
         .unwrap();

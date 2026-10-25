@@ -146,6 +146,7 @@ pub fn health() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     struct Echo;
 
@@ -182,17 +183,12 @@ mod tests {
         assert_eq!(features.contains(&"sqlite"), cfg!(feature = "sqlite"));
     }
 
-    #[test]
-    fn errors_use_standard_codes() {
-        assert_eq!(call("{not json")["error"]["code"], code::PARSE_ERROR);
-        assert_eq!(
-            call(r#"{"id":2,"method":"health"}"#)["error"]["code"],
-            code::INVALID_REQUEST
-        );
-        assert_eq!(
-            call(r#"{"jsonrpc":"2.0","id":3,"method":"nope"}"#)["error"]["code"],
-            code::METHOD_NOT_FOUND
-        );
+    #[rstest]
+    #[case("{not json", code::PARSE_ERROR)]
+    #[case(r#"{"id":2,"method":"health"}"#, code::INVALID_REQUEST)]
+    #[case(r#"{"jsonrpc":"2.0","id":3,"method":"nope"}"#, code::METHOD_NOT_FOUND)]
+    fn errors_use_standard_codes(#[case] req: &str, #[case] expected: i64) {
+        assert_eq!(call(req)["error"]["code"], expected);
     }
 
     #[test]

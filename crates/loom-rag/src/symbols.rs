@@ -295,7 +295,9 @@ mod tests {
     use super::*;
     use crate::chunk::{ChunkOptions, chunk_file};
     use crate::lang::Lang;
+    use rstest::{fixture, rstest};
 
+    #[fixture]
     fn chunks() -> Vec<Chunk> {
         let mut out = chunk_file(
             "pkg/sidecar/locate.go",
@@ -318,20 +320,21 @@ mod tests {
         out
     }
 
-    #[test]
-    fn extracts_identifier_shaped_tokens_only() {
-        assert_eq!(identifiers("where is LocateBinary defined"), ["LocateBinary"]);
-        assert_eq!(
-            identifiers("sidecar::Client.start() and max_bytes"),
-            ["sidecar::Client.start", "start", "max_bytes"]
-        );
-        assert_eq!(identifiers("how do we index files"), Vec::<String>::new());
-        assert_eq!(identifiers("call run(x)"), ["run"]);
+    #[rstest]
+    #[case("where is LocateBinary defined", &["LocateBinary"][..])]
+    #[case(
+        "sidecar::Client.start() and max_bytes",
+        &["sidecar::Client.start", "start", "max_bytes"][..]
+    )]
+    #[case("how do we index files", &[][..])]
+    #[case("call run(x)", &["run"][..])]
+    fn extracts_identifier_shaped_tokens_only(#[case] query: &str, #[case] expected: &[&str]) {
+        assert_eq!(identifiers(query), expected);
     }
 
-    #[test]
-    fn ranks_definitions_before_references() {
-        let c = chunks();
+    #[rstest]
+    fn ranks_definitions_before_references(chunks: Vec<Chunk>) {
+        let c = chunks;
         let idx = SymbolIndex::build(c.clone());
         let ranked = idx.rank_query("who calls LocateBinary", 10);
         assert_eq!(ranked[0].0, c[0].id);
@@ -339,18 +342,18 @@ mod tests {
         assert_eq!(ranked[1].0, c[1].id);
     }
 
-    #[test]
-    fn neighbours_follow_references_both_ways() {
-        let c = chunks();
+    #[rstest]
+    fn neighbours_follow_references_both_ways(chunks: Vec<Chunk>) {
+        let c = chunks;
         let idx = SymbolIndex::build(c.clone());
         // Start's chunk references LocateBinary and is referenced by main.
         let n = idx.neighbours(&c[1].id, 10);
         assert!(n.contains(&c[0].id) && n.contains(&c[2].id), "{n:?}");
     }
 
-    #[test]
-    fn pagerank_flows_along_references() {
-        let idx = SymbolIndex::build(chunks());
+    #[rstest]
+    fn pagerank_flows_along_references(chunks: Vec<Chunk>) {
+        let idx = SymbolIndex::build(chunks);
         let pr = idx.personalized_pagerank(&HashMap::from([("cmd/main.go".to_string(), 1.0)]));
         // main → client → locate: rank decays along the chain but reaches it.
         assert!(pr["pkg/sidecar/client.go"] > 0.0);

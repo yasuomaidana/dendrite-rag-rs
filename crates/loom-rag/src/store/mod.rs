@@ -311,6 +311,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn open_local_creates_store_and_roundtrips() {
@@ -338,11 +339,16 @@ mod tests {
         assert_eq!(store.vectors.len(), 0);
     }
 
+    #[rstest]
+    #[case(" SQLite ", Some(LedgerChoice::Sqlite))]
+    #[case("redb", Some(LedgerChoice::Redb))]
+    #[case("postgres", None)]
+    fn ledger_choice_parses_names(#[case] name: &str, #[case] expected: Option<LedgerChoice>) {
+        assert_eq!(LedgerChoice::parse(name), expected);
+    }
+
     #[test]
-    fn ledger_choice_parses_names() {
-        assert_eq!(LedgerChoice::parse(" SQLite "), Some(LedgerChoice::Sqlite));
-        assert_eq!(LedgerChoice::parse("redb"), Some(LedgerChoice::Redb));
-        assert_eq!(LedgerChoice::parse("postgres"), None);
+    fn ledger_choice_default_is_redb() {
         assert_eq!(LedgerChoice::default(), LedgerChoice::Redb);
     }
 

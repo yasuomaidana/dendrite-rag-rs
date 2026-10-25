@@ -1,11 +1,19 @@
 use super::*;
 use crate::chunk::{ChunkOptions, chunk_file};
 use crate::lang::Lang;
+use rstest::{fixture, rstest};
+use std::path::PathBuf;
 
-#[test]
-fn round_trips_files_chunks_embeddings_and_meta() {
+#[fixture]
+fn ledger_env() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.redb");
+    (dir, path)
+}
+
+#[rstest]
+fn round_trips_files_chunks_embeddings_and_meta(ledger_env: (tempfile::TempDir, PathBuf)) {
+    let (_dir, path) = ledger_env;
     let chunks = chunk_file(
         "a.go",
         Lang::Go,
@@ -43,10 +51,9 @@ fn round_trips_files_chunks_embeddings_and_meta() {
     assert_eq!(ledger.embedding_count().unwrap(), 1);
 }
 
-#[test]
-fn an_older_schema_is_cleared_but_keeps_embeddings() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ledger.redb");
+#[rstest]
+fn an_older_schema_is_cleared_but_keeps_embeddings(ledger_env: (tempfile::TempDir, PathBuf)) {
+    let (_dir, path) = ledger_env;
     {
         let ledger = Ledger::open(&path).unwrap();
         let mut b = ledger.batch().unwrap();
@@ -73,10 +80,9 @@ fn an_older_schema_is_cleared_but_keeps_embeddings() {
     assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
 }
 
-#[test]
-fn round_trips_llm_cache_and_concepts() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ledger.redb");
+#[rstest]
+fn round_trips_llm_cache_and_concepts(ledger_env: (tempfile::TempDir, PathBuf)) {
+    let (_dir, path) = ledger_env;
     {
         let ledger = Ledger::open(&path).unwrap();
         let mut b = ledger.batch().unwrap();
