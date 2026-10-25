@@ -21,13 +21,13 @@ The `symbols` boost also decides how code competes with documentation, which def
 
 `Embedder` trait: `model_id()`, `embed_documents(&[String])`, `embed_query(&str)`. Vectors are L2-normalized, so cosine similarity is a dot product.
 
-The backend and model are the project's choice: `openai` (LiteLLM gateway or any OpenAI-compatible server), `ollama`, `hf` (Hugging Face Inference or TEI), the in-process `model2vec`, or `none`. Each has a default model. Known model families get their task prefixes and pooling automatically. [embedders.md](embedders.md) covers configuration (`.dendrite/rag.toml` and `DENDRITE_RAG_EMBED_*`), wire formats and how to choose.
+The backend and model are the project's choice: `openai` (LiteLLM gateway or any OpenAI-compatible server), `ollama`, `hf` (Hugging Face Inference or TEI), the in-process `candle`, `oxillama` or `model2vec`, or `none`. Each has a default model. Known model families get their task prefixes and pooling automatically. [embedders.md](embedders.md) covers configuration (`.dendrite/rag.toml` and `DENDRITE_RAG_EMBED_*`), wire formats and how to choose.
 
 **Embedding phase.** It runs after the lexical index and ledger are committed, and is resumable:
 
 1. Drop vectors whose chunk no longer exists.
 2. For every chunk without a vector, look up the cache under `(model, content_hash)`.
-3. Embed only cache misses, in groups of 64 (8 under a budget), committing each group's cache entries. With `embed_budget_ms` the phase stops at the budget and reports `embed_pending`. Interactive callers therefore never wait for a first full embedding, and dense retrieval covers more chunks with each call.
+3. Embed only cache misses, in groups of 64 (8 under a budget), committing each group's cache entries. With an embedding budget (`embed_budget_ms` or `embed_budget_tokens`) the phase stops at the budget and reports `embed_pending`. Interactive callers therefore never wait for a first full embedding, and dense retrieval covers more chunks with each call.
 
 If the embedder fails, the run reports `embed_error`, the lexical index stays current, and the next run picks up the missing vectors. Changing the model invalidates the vector index but not other models' caches.
 
@@ -123,7 +123,7 @@ A hit whose text (trimmed) a better hit already holds is dropped, and its path i
 1. Take the 20 best fused hits of the corpus (§ Corpora).
 2. **Expand** (code pipeline): for each of the 8 best hits, add up to 4 chunks linked in the symbol graph (definitions of the symbols it references, callers of the symbols it defines), each scored with the parent's score × 0.5, × 0.5 again when it is in another community.
 3. **Remove overlap**: drop chunks fully contained in a higher-ranked chunk's line span.
-4. **Pack** greedily by score until the token budget is reached; a span that does not fit is skipped and smaller ones after it still go in. Tokens are estimated at ~4 characters per token with a 1.15 safety factor, plus 8 for the citation; callers that need exact counts pass a smaller budget.
+4. **Pack** greedily by score until the token budget is reached; a span whose text no longer fits is replaced by its outline when that fits (the outline fallback, DRAG-51), and skipped otherwise, while smaller ones after it still go in. Tokens are estimated at ~4 characters per token with a 1.15 safety factor, plus 8 for the citation; callers that need exact counts pass a smaller budget.
 5. **Merge** spans that touch within a file, so the prompt reads continuous text (outlines are never merged).
 
 Spans keep their fused order. The personalized PageRank re-weighting over the file graph (the repository-map technique) that used to follow step 2 moved central files above the answer: dropping it raised MRR on code questions from 0.65 to 0.83 and recall within 2,500 tokens from 0.92 to 1.00 (eval/RESULTS.md).
@@ -144,13 +144,14 @@ The result lists the spans in score order, each with `chunk_id`, `path`, `start_
 
 ## Embedding backlog
 
-An index run under an embedding budget (`embed_budget_ms`) stops embedding when the budget runs out; later runs continue. With `focus` (the question about to be asked), the chunks the question matches lexically (up to 64) are embedded first, so dense retrieval covers them on the first call. `status` reports `embed_coverage` (vectors ÷ chunks) and a warning under 0.9.
+An index run under an embedding budget (`embed_budget_ms` or `embed_budget_tokens`) stops embedding when the budget runs out; later runs continue. With `focus` (the question about to be asked), the chunks the question matches lexically (up to 64) are embedded first, so dense retrieval covers them on the first call. `status` reports `embed_coverage` (vectors ÷ chunks) and a warning under 0.9.
 
 ## Performance targets
 
 | Metric | Target |
 |---|---|
 | RSS at 50k chunks | < 200 MB (measured 96 MB lexical baseline at 49k; ~135 MB with 768-d vectors) |
+| Cold index footprint at 50k chunks | < 200 MB (measured 179–202 MB dirty memory after DRAG-44) |
 | p95 search latency, 8 concurrent readers | < 30 ms (embedding the query excluded) |
 | Quantized recall@10 vs exact | ≥ 0.95 |
 | Hybrid recall@10 on the golden set | ≥ lexical-only |
