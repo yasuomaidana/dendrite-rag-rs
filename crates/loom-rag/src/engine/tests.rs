@@ -45,6 +45,11 @@ fn embedding_failures_are_reported_and_retried() {
     let mut e = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(failing))).unwrap();
     let r = e.index(false).unwrap();
     assert!(r.embed_error.as_deref().unwrap().contains("gateway down"));
+    assert_eq!(
+        r.embed_pending as u64,
+        e.status().unwrap().chunks,
+        "a failed embed leaves every chunk pending"
+    );
     assert_eq!(e.search_lexical("LocateBinary", 1).unwrap().len(), 1);
     drop(e);
 

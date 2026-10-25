@@ -90,26 +90,52 @@ impl Engine {
 
         // Embed in groups, committing each group's cache entries so progress survives
         // interruptions.
-        // Under a budget, small groups keep the overshoot to a fraction of a second.
-        let group = if deadline.is_some() {
+        // Under a budget (time or tokens), small groups keep the overshoot small.
+        let budget_tokens = self.cfg.embed.budget_tokens;
+        if let Some(b) = budget_tokens {
+            report.budget_tokens_remaining = Some(b);
+        }
+        let group_size = if deadline.is_some() || budget_tokens.is_some() {
             EMBED_GROUP_BUDGETED
         } else {
             EMBED_GROUP
         };
-        for (n, ids) in todo.chunks(group).enumerate() {
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                report.embed_pending = todo.len() - n * group;
+        let mut tokens_spent = 0;
+        for (n, ids) in todo.chunks(group_size).enumerate() {
+            if deadline.is_some_and(|d| Instant::now() >= d)
+                || budget_tokens.is_some_and(|b| tokens_spent >= b)
+            {
+                report.embed_pending = todo.len() - n * group_size;
                 break;
             }
             let group = self.ledger.chunks(ids)?;
             let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
+            let estimated_tokens: usize = texts
+                .iter()
+                .map(|t| (t.chars().count() as f32 / 4.0 * 1.15).ceil() as usize + 8)
+                .sum();
+            if let Some(b) = budget_tokens
+                && n > 0
+                && tokens_spent + estimated_tokens > b
+            {
+                report.embed_pending = todo.len() - n * group_size;
+                break;
+            }
             let vectors = match embedder.embed_documents(&texts) {
                 Ok(v) => v,
                 Err(e) => {
+                    // Clients decide whether to report coverage from `embed_pending`, so a
+                    // failed group must count as pending, not as done.
                     report.embed_error = Some(e.to_string());
+                    report.embed_pending = todo.len() - n * group_size;
                     break;
                 }
             };
+            tokens_spent += estimated_tokens;
+            report.embed_tokens = tokens_spent;
+            if let Some(b) = budget_tokens {
+                report.budget_tokens_remaining = Some(b.saturating_sub(tokens_spent));
+            }
             let mut batch = self.ledger.batch()?;
             for (c, v) in group.iter().zip(&vectors) {
                 batch.put_embedding(&cache_key(&model, &c.content_hash), v)?;

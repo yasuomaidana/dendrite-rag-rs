@@ -311,3 +311,77 @@ fn a_budgeted_run_embeds_the_focus_question_first() {
         "the focus chunk is embedded first: {seen:?}"
     );
 }
+
+struct DimensionMockEmbedder {
+    model: String,
+    dim: usize,
+}
+
+impl Embedder for DimensionMockEmbedder {
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0; self.dim]).collect())
+    }
+
+    fn embed_query(&self, _text: &str) -> crate::embed::Result<Vec<f32>> {
+        Ok(vec![1.0; self.dim])
+    }
+}
+
+#[test]
+fn dimensions_cache_keys_do_not_collide() {
+    let hash = "abc123def456";
+    let key1024 = cache_key("text-embedding-3-large@1024", hash);
+    let key3072 = cache_key("text-embedding-3-large@3072", hash);
+    assert_ne!(key1024, key3072);
+
+    let dir = project();
+    let emb1024 = DimensionMockEmbedder {
+        model: "text-embedding-3-large@1024".into(),
+        dim: 1024,
+    };
+    let mut e1 = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(emb1024))).unwrap();
+    let r1 = e1.index(false).unwrap();
+    assert_eq!(r1.embedded, r1.chunks_added);
+    drop(e1);
+
+    let emb3072 = DimensionMockEmbedder {
+        model: "text-embedding-3-large@3072".into(),
+        dim: 3072,
+    };
+    let mut e2 = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(emb3072))).unwrap();
+    let r2 = e2.index(false).unwrap();
+    assert_eq!(
+        r2.embedded, r1.embedded,
+        "3072-d vectors must be re-embedded, not colliding with 1024-d cache"
+    );
+}
+
+#[test]
+fn budget_tokens_caps_embedding_run() {
+    let dir = project();
+    for i in 0..20 {
+        fs::write(
+            dir.path().join(format!("pkg/rag/token_filler{i}.go")),
+            format!("package rag\n\nfunc TokenFiller{i}() string {{ return \"long filler code to consume tokens\" }}\n"),
+        )
+        .unwrap();
+    }
+    let mut cfg = Config::default();
+    // Tiny token budget to embed only 1 group
+    cfg.embed.budget_tokens = Some(50);
+    let mut e = Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(HashEmbedder::new()))).unwrap();
+    let r = e.index(false).unwrap();
+    assert!(
+        r.embed_pending > 0,
+        "token budget must cap the embedding run: {r:?}"
+    );
+    assert!(r.embed_tokens > 0, "must report tokens used: {r:?}");
+    assert!(
+        r.budget_tokens_remaining.is_some(),
+        "must report remaining budget: {r:?}"
+    );
+}

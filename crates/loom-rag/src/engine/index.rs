@@ -50,6 +50,23 @@ impl Engine {
         self.index_focused(full, embed_budget, None)
     }
 
+    /// Like [`Engine::index_focused`], but accepts an explicit token budget override.
+    pub fn index_focused_budgeted(
+        &mut self,
+        full: bool,
+        embed_budget: Option<std::time::Duration>,
+        embed_budget_tokens: Option<usize>,
+        focus: Option<&str>,
+    ) -> Result<IndexReport> {
+        let prev_tokens = self.cfg.embed.budget_tokens;
+        if embed_budget_tokens.is_some() {
+            self.cfg.embed.budget_tokens = embed_budget_tokens;
+        }
+        let res = self.index_focused(full, embed_budget, focus);
+        self.cfg.embed.budget_tokens = prev_tokens;
+        res
+    }
+
     /// Like [`Engine::index_with`]; under a budget, the chunks `focus` (the question about to
     /// be asked) matches lexically are embedded before the rest of the backlog, so dense
     /// retrieval covers them first.

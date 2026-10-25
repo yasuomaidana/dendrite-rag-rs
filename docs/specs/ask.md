@@ -9,7 +9,8 @@
    - `hybrid`: a local draft, then the paid model (`paid_model`, else `[ask] paid_model`, else `gemini-2.5-pro`) verifies and refines it; when refinement fails the draft is returned.
    - `paid`: the paid model directly.
 4. **Escalation**: when the local model fails, the paid model is used only if `allow_paid` is set. Otherwise the result has `escalation_needed: true` and no answer: the decision to pay belongs to the person, so the client asks and calls again (`allow_paid` or mode `paid`).
-5. **Commands**: an answer that is canned or too short is replaced by the `dendrite …` commands the context documents, and a question asking for commands gets them appended when the answer names none.
+5. **Abstention** (protocol 1.8, off unless `[rerank] abstain` is set and a reranker is configured): when the reranker finds nothing likely to answer, no model is called, `answer` is empty and the result has `abstained: true` (not `escalation_needed`: asking a paid model about code the project does not contain would only invent an answer). The client should tell the person the project does not cover the question ([retrieval.md](retrieval.md) § Optional rerank).
+6. **Commands**: an answer that is canned or too short is replaced by the `dendrite …` commands the context documents, and a question asking for commands gets them appended when the answer names none.
 
 Answers are cached in the project's ledger by model and exact prompt: the same question about unchanged code returns without a model call (`cached: true`); a changed file changes the retrieved context, hence the prompt. `fresh: true` asks the model regardless.
 

@@ -37,6 +37,9 @@ enum Command {
         /// Stop embedding after this many milliseconds; later runs continue.
         #[arg(long)]
         embed_budget_ms: Option<u64>,
+        /// Stop embedding after this many tokens; later runs continue.
+        #[arg(long)]
+        embed_budget_tokens: Option<usize>,
         /// Under a budget, embed the chunks this question matches first.
         #[arg(long)]
         focus: Option<String>,
@@ -290,11 +293,12 @@ fn main() -> anyhow::Result<()> {
             root,
             full,
             embed_budget_ms,
+            embed_budget_tokens,
             focus,
         } => {
             let budget = embed_budget_ms.map(std::time::Duration::from_millis);
             print_value(
-                &open(&root)?.index_focused(full, budget, focus.as_deref())?,
+                &open(&root)?.index_focused_budgeted(full, budget, embed_budget_tokens, focus.as_deref())?,
                 cli.json,
             )?
         }

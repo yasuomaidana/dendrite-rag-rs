@@ -302,3 +302,16 @@ fn storage_ledger_from_file_and_environment() {
             .is_err()
     );
 }
+
+#[test]
+fn dimensions_need_a_backend_that_honours_them() {
+    let ok = Settings::parse("[embed]\nbackend = \"openai\"\ndimensions = 1024\n").unwrap();
+    assert!(ok.validate().is_ok());
+    let auto = Settings::parse("[embed]\ndimensions = 512\n").unwrap();
+    assert!(auto.validate().is_ok(), "auto may resolve to the gateway");
+    let ollama = Settings::parse("[embed]\nbackend = \"ollama\"\ndimensions = 512\n").unwrap();
+    let err = ollama.validate().unwrap_err().to_string();
+    assert!(err.contains("openai backend"), "{err}");
+    let zero = Settings::parse("[embed]\nbackend = \"openai\"\ndimensions = 0\n").unwrap();
+    assert!(zero.validate().is_err());
+}

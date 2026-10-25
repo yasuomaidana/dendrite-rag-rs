@@ -140,6 +140,12 @@ pub struct IndexReport {
     /// continues where this one stopped.
     #[serde(default)]
     pub embed_pending: usize,
+    /// Estimated tokens processed during embedding in this run.
+    #[serde(default)]
+    pub embed_tokens: usize,
+    /// Remaining token budget after this run, if a token budget was configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens_remaining: Option<usize>,
     /// Set when LLM enrichment (summaries or concepts) failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm_error: Option<String>,

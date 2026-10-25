@@ -35,6 +35,8 @@ struct IndexParams {
     full: bool,
     /// Stop embedding after this many milliseconds (the lexical index always completes).
     embed_budget_ms: Option<u64>,
+    /// Stop embedding after this many tokens (the lexical index always completes).
+    embed_budget_tokens: Option<usize>,
     /// Under a budget, embed the chunks this question matches first.
     focus: Option<String>,
 }
@@ -303,7 +305,7 @@ impl Handler for Server {
                 let budget = p.embed_budget_ms.map(std::time::Duration::from_millis);
                 to_value(
                     self.engine(&p.root)?
-                        .index_focused(p.full, budget, p.focus.as_deref())
+                        .index_focused_budgeted(p.full, budget, p.embed_budget_tokens, p.focus.as_deref())
                         .map_err(engine_error)?,
                 )
             }
