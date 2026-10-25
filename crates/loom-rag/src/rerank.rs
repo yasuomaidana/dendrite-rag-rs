@@ -374,18 +374,25 @@ mod tests {
         assert!(scores(bad, 3).is_err());
     }
 
-    #[test]
-    fn rerank_backend_parsing_and_aliases() {
-        assert_eq!(RerankBackend::parse("gateway"), Some(RerankBackend::Gateway));
-        assert_eq!(RerankBackend::parse("litellm"), Some(RerankBackend::Gateway));
-        assert_eq!(RerankBackend::parse("openai"), Some(RerankBackend::Gateway));
-        assert_eq!(RerankBackend::parse("candle"), Some(RerankBackend::Candle));
-        assert_eq!(RerankBackend::parse("none"), Some(RerankBackend::None));
-        assert_eq!(RerankBackend::parse("off"), Some(RerankBackend::None));
-        assert_eq!(RerankBackend::parse("word2vec"), None);
-        for b in RerankBackend::ALL {
-            assert_eq!(RerankBackend::parse(b.as_str()), Some(b));
-        }
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("gateway", Some(RerankBackend::Gateway))]
+    #[case("litellm", Some(RerankBackend::Gateway))]
+    #[case("openai", Some(RerankBackend::Gateway))]
+    #[case("candle", Some(RerankBackend::Candle))]
+    #[case("none", Some(RerankBackend::None))]
+    #[case("off", Some(RerankBackend::None))]
+    #[case("word2vec", None)]
+    fn rerank_backend_parsing_and_aliases(#[case] name: &str, #[case] expected: Option<RerankBackend>) {
+        assert_eq!(RerankBackend::parse(name), expected);
+    }
+
+    #[rstest]
+    fn rerank_backend_round_trips_as_str(
+        #[values(RerankBackend::Gateway, RerankBackend::Candle, RerankBackend::None)] b: RerankBackend,
+    ) {
+        assert_eq!(RerankBackend::parse(b.as_str()), Some(b));
     }
 
     #[test]

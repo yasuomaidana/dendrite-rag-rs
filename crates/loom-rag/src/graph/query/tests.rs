@@ -1,7 +1,9 @@
 use super::*;
 use crate::engine::Config;
+use rstest::{fixture, rstest};
 use std::fs;
 
+#[fixture]
 fn engine() -> (tempfile::TempDir, Engine) {
     let dir = tempfile::tempdir().unwrap();
     let files = [
@@ -29,9 +31,9 @@ fn engine() -> (tempfile::TempDir, Engine) {
     (dir, e)
 }
 
-#[test]
-fn path_follows_calls_forward_then_backward() {
-    let (_d, e) = engine();
+#[rstest]
+fn path_follows_calls_forward_then_backward(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let p = e.graph_path("Retrieve", "LocateBinary", &[], 6).unwrap();
     assert!(p.found && p.directed);
     let names: Vec<&str> = p.steps.iter().map(|s| s.node.as_str()).collect();
@@ -56,9 +58,9 @@ fn path_follows_calls_forward_then_backward() {
     );
 }
 
-#[test]
-fn explains_symbols_and_files() {
-    let (_d, e) = engine();
+#[rstest]
+fn explains_symbols_and_files(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let x = e.graph_explain("Start").unwrap();
     let Explanation::Symbol {
         users,
@@ -94,9 +96,9 @@ fn explains_symbols_and_files() {
     assert!(e.graph_explain("Nope").unwrap().is_empty());
 }
 
-#[test]
-fn communities_and_god_nodes() {
-    let (_d, e) = engine();
+#[rstest]
+fn communities_and_god_nodes(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let cs = e.graph_communities(10, 2).unwrap();
     assert!(!cs.is_empty());
     assert!(cs[0].summary.starts_with("Community "));

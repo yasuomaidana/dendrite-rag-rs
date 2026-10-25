@@ -187,22 +187,35 @@ fn compile_tags(lang: Lang) -> Option<Query> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn detects_languages_by_extension() {
-        assert_eq!(Lang::from_path(Path::new("a/b.go")), Some(Lang::Go));
-        assert_eq!(Lang::from_path(Path::new("x.TSX")), Some(Lang::Tsx));
-        assert_eq!(Lang::from_path(Path::new("README.md")), Some(Lang::Markdown));
-        assert_eq!(Lang::from_path(Path::new("Cargo.toml")), Some(Lang::Text));
-        assert_eq!(Lang::from_path(Path::new("logo.png")), None);
-        assert_eq!(Lang::from_path(Path::new("Makefile")), None);
+    #[rstest]
+    #[case("a/b.go", Some(Lang::Go))]
+    #[case("x.TSX", Some(Lang::Tsx))]
+    #[case("README.md", Some(Lang::Markdown))]
+    #[case("Cargo.toml", Some(Lang::Text))]
+    #[case("logo.png", None)]
+    #[case("Makefile", None)]
+    fn detects_languages_by_extension(#[case] path: &str, #[case] expected: Option<Lang>) {
+        assert_eq!(Lang::from_path(Path::new(path)), expected);
     }
 
-    #[test]
-    fn every_code_language_has_a_tag_query() {
-        for lang in ALL_CODE {
-            assert!(lang.tags().is_some(), "{lang:?} tag query does not compile");
-            assert!(lang.imports().is_some(), "{lang:?} import query does not compile");
-        }
+    #[rstest]
+    fn every_code_language_has_a_tag_query(
+        #[values(
+            Lang::Go,
+            Lang::Rust,
+            Lang::Python,
+            Lang::TypeScript,
+            Lang::Tsx,
+            Lang::JavaScript,
+            Lang::Java,
+            Lang::C,
+            Lang::Cpp
+        )]
+        lang: Lang,
+    ) {
+        assert!(lang.tags().is_some(), "{lang:?} tag query does not compile");
+        assert!(lang.imports().is_some(), "{lang:?} import query does not compile");
     }
 }

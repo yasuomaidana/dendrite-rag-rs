@@ -1,10 +1,12 @@
 use super::*;
+use rstest::{fixture, rstest};
 
 const SMALL: ChunkOptions = ChunkOptions {
     max_chars: 120,
     min_chars: 30,
 };
 
+#[fixture]
 fn go_src() -> String {
     let mut s = String::from("package demo\n\nimport \"fmt\"\n\n");
     s.push_str("// Locate finds the binary.\nfunc (l Locator) Locate(name string) string {\n\treturn fmt.Sprint(name)\n}\n\n");
@@ -18,9 +20,9 @@ fn go_src() -> String {
     s
 }
 
-#[test]
-fn chunks_tile_the_file_and_respect_the_budget() {
-    let src = go_src();
+#[rstest]
+fn chunks_tile_the_file_and_respect_the_budget(go_src: String) {
+    let src = go_src;
     let chunks = chunk_file("pkg/demo/demo.go", Lang::Go, &src, SMALL);
     assert!(chunks.len() > 3, "expected several chunks, got {}", chunks.len());
     for c in &chunks {
@@ -51,9 +53,9 @@ fn chunks_tile_the_file_and_respect_the_budget() {
     }
 }
 
-#[test]
-fn doc_comments_travel_with_their_function_and_symbols_are_tagged() {
-    let src = go_src();
+#[rstest]
+fn doc_comments_travel_with_their_function_and_symbols_are_tagged(go_src: String) {
+    let src = go_src;
     let chunks = chunk_file("demo.go", Lang::Go, &src, ChunkOptions::default());
     let locate = chunks
         .iter()
@@ -63,9 +65,9 @@ fn doc_comments_travel_with_their_function_and_symbols_are_tagged() {
     assert!(chunks.iter().any(|c| c.refs.contains(&"Sprint".to_string())));
 }
 
-#[test]
-fn large_functions_are_split_inside_and_keep_their_scope() {
-    let src = go_src();
+#[rstest]
+fn large_functions_are_split_inside_and_keep_their_scope(go_src: String) {
+    let src = go_src;
     let chunks = chunk_file("demo.go", Lang::Go, &src, SMALL);
     let inner: Vec<_> = chunks
         .iter()
@@ -108,68 +110,70 @@ fn python_and_typescript_parse() {
     assert!(syms.contains(&"search".into()), "{syms:?}");
 }
 
-#[test]
-fn calls_and_imports_are_extracted_per_language() {
-    let cases: [(&str, Lang, &str, &[&str], &str); 7] = [
-        (
-            "a.go",
-            Lang::Go,
-            "package a\n\nimport (\n\t\"fmt\"\n\tx \"example.com/m/pkg/x\"\n)\n\nfunc F() { fmt.Println(x.Run()) }\n",
-            &["fmt", "example.com/m/pkg/x"],
-            "Run",
-        ),
-        (
-            "src/lib.rs",
-            Lang::Rust,
-            "mod engine;\nuse crate::ledger::{Ledger, FileEntry};\n\nfn f() { open(); }\n",
-            &["mod:engine", "crate::ledger::{Ledger, FileEntry}"],
-            "open",
-        ),
-        (
-            "a.py",
-            Lang::Python,
-            "import os.path\nfrom .util import helper\n\ndef f():\n    return helper(1)\n",
-            &["os.path", ".util"],
-            "helper",
-        ),
-        (
-            "a.ts",
-            Lang::TypeScript,
-            "import { b } from './b';\nconst c = require('./c');\nexport function f() { return b(); }\n",
-            &["./b", "./c"],
-            "b",
-        ),
-        (
-            "A.java",
-            Lang::Java,
-            "import com.acme.util.Strings;\nclass A { void f() { Strings.trim(\"x\"); } }\n",
-            &["com.acme.util.Strings"],
-            "trim",
-        ),
-        (
-            "a.c",
-            Lang::C,
-            "#include \"util.h\"\n#include <stdio.h>\nint f(void) { return helper(1); }\n",
-            &["util.h", "stdio.h"],
-            "helper",
-        ),
-        (
-            "a.cpp",
-            Lang::Cpp,
-            "#include \"util.hpp\"\nint f() { return ns::helper(1); }\n",
-            &["util.hpp"],
-            "helper",
-        ),
-    ];
-    for (path, lang, src, want, call) in cases {
-        let (chunks, imports) = analyze_file(path, lang, src, ChunkOptions::default());
-        assert_eq!(imports, want, "{path}");
-        assert!(
-            chunks.iter().any(|c| c.calls.iter().any(|n| n == call)),
-            "{path}: no call to {call} in {:?}",
-            chunks.iter().map(|c| &c.calls).collect::<Vec<_>>()
-        );
-    }
+#[rstest]
+#[case(
+    "a.go",
+    Lang::Go,
+    "package a\n\nimport (\n\t\"fmt\"\n\tx \"example.com/m/pkg/x\"\n)\n\nfunc F() { fmt.Println(x.Run()) }\n",
+    &["fmt", "example.com/m/pkg/x"][..],
+    "Run"
+)]
+#[case(
+    "src/lib.rs",
+    Lang::Rust,
+    "mod engine;\nuse crate::ledger::{Ledger, FileEntry};\n\nfn f() { open(); }\n",
+    &["mod:engine", "crate::ledger::{Ledger, FileEntry}"][..],
+    "open"
+)]
+#[case(
+    "a.py",
+    Lang::Python,
+    "import os.path\nfrom .util import helper\n\ndef f():\n    return helper(1)\n",
+    &["os.path", ".util"][..],
+    "helper"
+)]
+#[case(
+    "a.ts",
+    Lang::TypeScript,
+    "import { b } from './b';\nconst c = require('./c');\nexport function f() { return b(); }\n",
+    &["./b", "./c"][..],
+    "b"
+)]
+#[case(
+    "A.java",
+    Lang::Java,
+    "import com.acme.util.Strings;\nclass A { void f() { Strings.trim(\"x\"); } }\n",
+    &["com.acme.util.Strings"][..],
+    "trim"
+)]
+#[case(
+    "a.c",
+    Lang::C,
+    "#include \"util.h\"\n#include <stdio.h>\nint f(void) { return helper(1); }\n",
+    &["util.h", "stdio.h"][..],
+    "helper"
+)]
+#[case(
+    "a.cpp",
+    Lang::Cpp,
+    "#include \"util.hpp\"\nint f() { return ns::helper(1); }\n",
+    &["util.hpp"][..],
+    "helper"
+)]
+fn calls_and_imports_are_extracted_per_language(
+    #[case] path: &str,
+    #[case] lang: Lang,
+    #[case] src: &str,
+    #[case] want: &[&str],
+    #[case] call: &str,
+) {
+    let (chunks, imports) = analyze_file(path, lang, src, ChunkOptions::default());
+    assert_eq!(imports, want, "{path}");
+    assert!(
+        chunks.iter().any(|c| c.calls.iter().any(|n| n == call)),
+        "{path}: no call to {call} in {:?}",
+        chunks.iter().map(|c| &c.calls).collect::<Vec<_>>()
+    );
 }
 
 #[test]

@@ -143,6 +143,7 @@ mod tests {
     use crate::bm25::Bm25Params;
     use crate::chunk::{ChunkOptions, chunk_file};
     use crate::lang::Lang;
+    use rstest::{fixture, rstest};
 
     fn index(files: &[(&str, &str)]) -> (tempfile::TempDir, LexicalIndex) {
         let dir = tempfile::tempdir().unwrap();
@@ -157,6 +158,7 @@ mod tests {
         (dir, idx)
     }
 
+    #[fixture]
     fn corpus() -> (tempfile::TempDir, LexicalIndex) {
         let long = format!(
             "package a\n\n// ledger ledger ledger\nfunc Long() {{\n{}}}\n",
@@ -169,9 +171,9 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn matches_tantivy_scores_at_its_parameters() {
-        let (_d, idx) = corpus();
+    #[rstest]
+    fn matches_tantivy_scores_at_its_parameters(corpus: (tempfile::TempDir, LexicalIndex)) {
+        let (_d, idx) = corpus;
         let tantivy = idx.search("ledger", 10, &Bm25Params::default()).unwrap();
         // Off the defaults by a rounding error: the bag-of-terms scorer runs instead.
         let ours = Bm25Params {
@@ -189,9 +191,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn length_normalization_follows_b() {
-        let (_d, idx) = corpus();
+    #[rstest]
+    fn length_normalization_follows_b(corpus: (tempfile::TempDir, LexicalIndex)) {
+        let (_d, idx) = corpus;
         let top = |b: f32| {
             let p = Bm25Params {
                 b,
@@ -210,9 +212,9 @@ mod tests {
         assert_eq!(top(1.0), short, "full normalization favours the short chunk");
     }
 
-    #[test]
-    fn small_q_weights_rare_terms_more() {
-        let (_d, idx) = corpus();
+    #[rstest]
+    fn small_q_weights_rare_terms_more(corpus: (tempfile::TempDir, LexicalIndex)) {
+        let (_d, idx) = corpus;
         // `ledger` is in 2 of 3 chunks, `unrelated` in 1: a smaller q widens the gap.
         let gap = |q: f32| {
             let p = Bm25Params {

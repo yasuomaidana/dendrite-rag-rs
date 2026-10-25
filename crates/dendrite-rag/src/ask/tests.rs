@@ -5,6 +5,7 @@ use super::*;
 use crate::settings::AskSettings;
 use loom_rag::engine::Config;
 use loom_rag::testutil::project;
+use rstest::{fixture, rstest};
 
 /// Answers by model name and records every call as `(model, system, prompt)`.
 struct ScriptedGateway {
@@ -48,6 +49,7 @@ impl Gateway for ScriptedGateway {
     }
 }
 
+#[fixture]
 fn engine() -> (tempfile::TempDir, Engine) {
     let dir = project();
     std::fs::write(
@@ -76,9 +78,9 @@ fn request(mode: AskMode, allow_paid: bool) -> AskRequest {
 const LOCAL: &str = "LocateBinary is defined in pkg/sidecar/sidecar.go.";
 const PAID: &str = "LocateBinary lives in pkg/sidecar/sidecar.go and finds the sidecar.";
 
-#[test]
-fn local_answers_with_numbered_sources() {
-    let (_d, e) = engine();
+#[rstest]
+fn local_answers_with_numbered_sources(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("local", Ok(LOCAL))]);
     let a = ask(&e, &AskSettings::default(), &request(AskMode::Local, false), &g).unwrap();
     assert_eq!((a.source_tier.as_str(), a.answer.as_str()), ("local-rag", LOCAL));
@@ -91,9 +93,9 @@ fn local_answers_with_numbered_sources() {
     );
 }
 
-#[test]
-fn a_failed_local_model_asks_before_paying() {
-    let (_d, e) = engine();
+#[rstest]
+fn a_failed_local_model_asks_before_paying(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("local", Err("down")), ("paid", Ok(PAID))]);
     let a = ask(&e, &AskSettings::default(), &request(AskMode::Local, false), &g).unwrap();
     assert!(a.escalation_needed && a.answer.is_empty());
@@ -104,9 +106,9 @@ fn a_failed_local_model_asks_before_paying() {
     assert_eq!(a.local_error.as_deref(), Some("down"));
 }
 
-#[test]
-fn canned_local_replies_count_as_failures() {
-    let (_d, e) = engine();
+#[rstest]
+fn canned_local_replies_count_as_failures(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let canned = "I processed your request safely with zero cloud tokens consumed.";
     let g = ScriptedGateway::new(&[("local", Ok(canned))]);
     assert!(
@@ -116,9 +118,9 @@ fn canned_local_replies_count_as_failures() {
     );
 }
 
-#[test]
-fn hybrid_refines_the_local_draft() {
-    let (_d, e) = engine();
+#[rstest]
+fn hybrid_refines_the_local_draft(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("local", Ok(LOCAL)), ("paid", Ok(PAID))]);
     let a = ask(&e, &AskSettings::default(), &request(AskMode::Hybrid, false), &g).unwrap();
     assert_eq!(a.source_tier, "hybrid");
@@ -134,9 +136,9 @@ fn hybrid_refines_the_local_draft() {
     assert_eq!((a.source_tier.as_str(), a.answer.as_str()), ("local-rag", LOCAL));
 }
 
-#[test]
-fn paths_restrict_retrieval() {
-    let (_d, e) = engine();
+#[rstest]
+fn paths_restrict_retrieval(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("local", Ok(LOCAL))]);
     let req = AskRequest {
         question: "how do I check the sidecar status".into(),
@@ -151,9 +153,9 @@ fn paths_restrict_retrieval() {
     );
 }
 
-#[test]
-fn paid_mode_skips_the_local_model() {
-    let (_d, e) = engine();
+#[rstest]
+fn paid_mode_skips_the_local_model(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("paid", Ok(PAID))]);
     let a = ask(&e, &AskSettings::default(), &request(AskMode::Paid, false), &g).unwrap();
     assert_eq!(a.source_tier, "paid-cloud");
@@ -170,9 +172,9 @@ fn paid_mode_skips_the_local_model() {
     );
 }
 
-#[test]
-fn command_questions_get_the_documented_commands() {
-    let (_d, e) = engine();
+#[rstest]
+fn command_questions_get_the_documented_commands(engine: (tempfile::TempDir, Engine)) {
+    let (_d, e) = engine;
     let g = ScriptedGateway::new(&[("local", Ok("Check the sidecar status from the CLI."))]);
     let req = AskRequest {
         question: "how to check the sidecar status".into(),
@@ -182,9 +184,9 @@ fn command_questions_get_the_documented_commands() {
     assert!(a.answer.contains("$ dendrite rag status"), "{}", a.answer);
 }
 
-#[test]
-fn code_corpus_keeps_documentation_out_of_the_prompt() {
-    let (_dir, e) = engine();
+#[rstest]
+fn code_corpus_keeps_documentation_out_of_the_prompt(engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = engine;
     let gateway = ScriptedGateway::new(&[(
         DEFAULT_LOCAL_MODEL,
         Ok("Call LocateBinary with the sidecar name."),

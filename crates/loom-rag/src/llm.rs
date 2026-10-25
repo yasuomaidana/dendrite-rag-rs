@@ -310,25 +310,18 @@ pub fn parse_concepts(text: &str) -> Option<Vec<Concept>> {
 mod tests {
     use super::*;
     use crate::testutil::HttpStub;
+    use rstest::rstest;
 
-    #[test]
-    fn resolves_urls_correctly() {
-        assert_eq!(
-            resolve_url(Some("http://my-host:8080")),
-            "http://my-host:8080/v1/chat/completions"
-        );
-        assert_eq!(
-            resolve_url(Some("http://my-host:8080/v1")),
-            "http://my-host:8080/v1/chat/completions"
-        );
-        assert_eq!(
-            resolve_url(Some("http://my-host:8080/v1/chat/completions")),
-            "http://my-host:8080/v1/chat/completions"
-        );
-        assert_eq!(
-            resolve_url(Some("http://my-host:8080/")),
-            "http://my-host:8080/v1/chat/completions"
-        );
+    #[rstest]
+    #[case("http://my-host:8080", "http://my-host:8080/v1/chat/completions")]
+    #[case("http://my-host:8080/v1", "http://my-host:8080/v1/chat/completions")]
+    #[case(
+        "http://my-host:8080/v1/chat/completions",
+        "http://my-host:8080/v1/chat/completions"
+    )]
+    #[case("http://my-host:8080/", "http://my-host:8080/v1/chat/completions")]
+    fn resolves_urls_correctly(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(resolve_url(Some(input)), expected);
     }
 
     #[test]

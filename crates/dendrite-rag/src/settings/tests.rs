@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use rstest::rstest;
 
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let m: HashMap<String, String> = pairs
@@ -34,10 +35,15 @@ fn reads_the_project_file() {
     assert_eq!(cfg.rerank.model.as_deref(), Some("bge-reranker-v2-m3"));
 }
 
+#[rstest]
+#[case("[embed]\nbakend = \"ollama\"\n")]
+#[case("[embed]\nbackend = \"word2vec\"\n")]
+fn rejects_unknown_keys_and_backends_parse(#[case] toml: &str) {
+    assert!(Settings::parse(toml).is_err());
+}
+
 #[test]
-fn rejects_unknown_keys_and_backends() {
-    assert!(Settings::parse("[embed]\nbakend = \"ollama\"\n").is_err());
-    assert!(Settings::parse("[embed]\nbackend = \"word2vec\"\n").is_err());
+fn rejects_unknown_backend_env() {
     let mut s = Settings::default();
     assert!(
         s.apply_env(env(&[("DENDRITE_RAG_EMBED_BACKEND", "word2vec")]))
@@ -303,15 +309,18 @@ fn storage_ledger_from_file_and_environment() {
     );
 }
 
+#[rstest]
+#[case("[embed]\nbackend = \"openai\"\ndimensions = 1024\n", true)]
+#[case("[embed]\ndimensions = 512\n", true)]
+#[case("[embed]\nbackend = \"openai\"\ndimensions = 0\n", false)]
+fn dimensions_validation(#[case] toml: &str, #[case] should_be_ok: bool) {
+    let s = Settings::parse(toml).unwrap();
+    assert_eq!(s.validate().is_ok(), should_be_ok);
+}
+
 #[test]
 fn dimensions_need_a_backend_that_honours_them() {
-    let ok = Settings::parse("[embed]\nbackend = \"openai\"\ndimensions = 1024\n").unwrap();
-    assert!(ok.validate().is_ok());
-    let auto = Settings::parse("[embed]\ndimensions = 512\n").unwrap();
-    assert!(auto.validate().is_ok(), "auto may resolve to the gateway");
     let ollama = Settings::parse("[embed]\nbackend = \"ollama\"\ndimensions = 512\n").unwrap();
     let err = ollama.validate().unwrap_err().to_string();
     assert!(err.contains("openai backend"), "{err}");
-    let zero = Settings::parse("[embed]\nbackend = \"openai\"\ndimensions = 0\n").unwrap();
-    assert!(zero.validate().is_err());
 }

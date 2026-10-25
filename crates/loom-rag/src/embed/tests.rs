@@ -1,5 +1,6 @@
 use super::auto::resolve_auto_in;
 use super::*;
+use rstest::rstest;
 
 #[test]
 fn normalizes_and_truncates() {
@@ -10,18 +11,33 @@ fn normalizes_and_truncates() {
     assert!(truncate(&long).len() <= MAX_INPUT_BYTES);
 }
 
-#[test]
-fn backend_names_and_aliases_parse() {
-    assert_eq!(Backend::parse("gateway"), Some(Backend::Openai));
-    assert_eq!(Backend::parse(" OpenAI "), Some(Backend::Openai));
-    assert_eq!(Backend::parse("tei"), Some(Backend::Hf));
-    assert_eq!(Backend::parse("huggingface"), Some(Backend::Hf));
-    assert_eq!(Backend::parse("off"), Some(Backend::None));
-    assert_eq!(Backend::parse("oxillama"), Some(Backend::Oxillama));
-    assert_eq!(Backend::parse("word2vec"), None);
-    for b in Backend::ALL {
-        assert_eq!(Backend::parse(b.as_str()), Some(b));
-    }
+#[rstest]
+#[case("gateway", Some(Backend::Openai))]
+#[case(" OpenAI ", Some(Backend::Openai))]
+#[case("tei", Some(Backend::Hf))]
+#[case("huggingface", Some(Backend::Hf))]
+#[case("off", Some(Backend::None))]
+#[case("oxillama", Some(Backend::Oxillama))]
+#[case("word2vec", None)]
+fn backend_names_and_aliases_parse(#[case] name: &str, #[case] expected: Option<Backend>) {
+    assert_eq!(Backend::parse(name), expected);
+}
+
+#[rstest]
+fn backend_round_trips_as_str(
+    #[values(
+        Backend::Openai,
+        Backend::Ollama,
+        Backend::Hf,
+        Backend::Oxillama,
+        Backend::Candle,
+        Backend::Model2vec,
+        Backend::None,
+        Backend::Auto
+    )]
+    b: Backend,
+) {
+    assert_eq!(Backend::parse(b.as_str()), Some(b));
 }
 
 #[test]
@@ -92,12 +108,13 @@ fn auto_prefers_gpu_then_tei_then_ollama() {
     }
 }
 
-#[test]
-fn pools_token_states() {
+#[rstest]
+#[case(Pooling::Mean, vec![2.0, 1.0])]
+#[case(Pooling::Cls, vec![1.0, 0.0])]
+#[case(Pooling::Last, vec![3.0, 2.0])]
+fn pools_token_states(#[case] pooling: Pooling, #[case] expected: Vec<f32>) {
     let t = vec![vec![1.0, 0.0], vec![3.0, 2.0]];
-    assert_eq!(pool(&t, Pooling::Mean), vec![2.0, 1.0]);
-    assert_eq!(pool(&t, Pooling::Cls), vec![1.0, 0.0]);
-    assert_eq!(pool(&t, Pooling::Last), vec![3.0, 2.0]);
+    assert_eq!(pool(&t, pooling), expected);
     assert!(pool(&[], Pooling::Mean).is_empty());
 }
 
