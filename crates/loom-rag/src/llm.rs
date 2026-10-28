@@ -30,6 +30,9 @@ struct ChatRequest<'a> {
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    /// Cap on the reply, so a local model cannot ramble up to the gateway's per-model ceiling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,18 +159,20 @@ impl Client {
     }
 
     fn chat(&self, prompt: &str, json_mode: bool) -> Result<String> {
-        Ok(self.send(&self.model, None, prompt, 0.0, json_mode)?.text)
+        Ok(self.send(&self.model, None, prompt, 0.0, json_mode, None)?.text)
     }
 
-    /// One chat completion with `model`, an optional system prompt and a temperature.
+    /// One chat completion with `model`, an optional system prompt, a temperature and an optional
+    /// cap on the reply length.
     pub fn chat_with(
         &self,
         model: &str,
         system: Option<&str>,
         prompt: &str,
         temperature: f32,
+        max_tokens: Option<u32>,
     ) -> Result<Completion> {
-        self.send(model, system, prompt, temperature, false)
+        self.send(model, system, prompt, temperature, false, max_tokens)
     }
 
     fn send(
@@ -177,6 +182,7 @@ impl Client {
         prompt: &str,
         temperature: f32,
         json_mode: bool,
+        max_tokens: Option<u32>,
     ) -> Result<Completion> {
         let mut messages = Vec::with_capacity(2);
         if let Some(system) = system {
@@ -198,6 +204,7 @@ impl Client {
             } else {
                 None
             },
+            max_tokens,
         };
 
         let mut req = self.agent.post(&self.url);
@@ -389,5 +396,25 @@ mod tests {
 
         let req = stub.request();
         assert_eq!(req.body["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn max_tokens_is_sent_only_when_asked_for() {
+        let reply = r#"{"choices":[{"message":{"content":"ok"}}]}"#;
+
+        let capped = HttpStub::serve(reply);
+        let client = Client::new(Some(capped.url.clone()), None, "m".into());
+        client
+            .chat_with("m", Some("system"), "question", 0.0, Some(512))
+            .unwrap();
+        assert_eq!(capped.request().body["max_tokens"], 512);
+
+        let uncapped = HttpStub::serve(reply);
+        let client = Client::new(Some(uncapped.url.clone()), None, "m".into());
+        client.complete("question").unwrap();
+        assert!(
+            uncapped.request().body.get("max_tokens").is_none(),
+            "calls that did not ask for a cap must not send one"
+        );
     }
 }

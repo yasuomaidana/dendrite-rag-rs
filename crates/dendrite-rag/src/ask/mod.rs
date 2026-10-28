@@ -121,9 +121,28 @@ impl Gateway for loom_rag::llm::Client {
         prompt: &str,
         temperature: f32,
     ) -> std::result::Result<Completion, String> {
-        self.chat_with(model, Some(system), prompt, temperature)
-            .map_err(|e| e.to_string())
+        self.chat_with(
+            model,
+            Some(system),
+            prompt,
+            temperature,
+            Some(answer_max_tokens()),
+        )
+        .map_err(|e| e.to_string())
     }
+}
+
+/// Longest answer `ask` requests from a model. Answers grounded in a few retrieved spans fit well
+/// inside it; a local model that is allowed to run to the gateway's ceiling mostly generates filler,
+/// and generation is nearly all of `ask`'s wall time. `DENDRITE_RAG_ASK_MAX_TOKENS` overrides it.
+const DEFAULT_ANSWER_MAX_TOKENS: u32 = 1024;
+
+fn answer_max_tokens() -> u32 {
+    std::env::var("DENDRITE_RAG_ASK_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_ANSWER_MAX_TOKENS)
 }
 
 /// A usable local answer: non-empty and not an engine's canned placeholder.
@@ -281,4 +300,23 @@ fn timed<T>(acc: &Cell<u64>, f: impl FnOnce() -> T) -> T {
 
 fn ask_error(model: &str, e: String) -> loom_rag::engine::Error {
     loom_rag::engine::Error::Other(anyhow::anyhow!("paid model {model} failed: {e}"))
+}
+
+#[cfg(test)]
+mod max_tokens_tests {
+    use super::*;
+
+    #[test]
+    fn the_answer_cap_has_a_default_and_an_override() {
+        // SAFETY: this is the only test in the crate that touches this variable.
+        unsafe { std::env::remove_var("DENDRITE_RAG_ASK_MAX_TOKENS") };
+        assert_eq!(answer_max_tokens(), DEFAULT_ANSWER_MAX_TOKENS);
+        unsafe { std::env::set_var("DENDRITE_RAG_ASK_MAX_TOKENS", "300") };
+        assert_eq!(answer_max_tokens(), 300);
+        unsafe { std::env::set_var("DENDRITE_RAG_ASK_MAX_TOKENS", "0") };
+        assert_eq!(answer_max_tokens(), DEFAULT_ANSWER_MAX_TOKENS, "zero means unset");
+        unsafe { std::env::set_var("DENDRITE_RAG_ASK_MAX_TOKENS", "lots") };
+        assert_eq!(answer_max_tokens(), DEFAULT_ANSWER_MAX_TOKENS);
+        unsafe { std::env::remove_var("DENDRITE_RAG_ASK_MAX_TOKENS") };
+    }
 }
