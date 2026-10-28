@@ -132,10 +132,10 @@ impl Gateway for loom_rag::llm::Client {
     }
 }
 
-/// Longest answer `ask` requests from a model. Answers grounded in a few retrieved spans fit well
-/// inside it; a local model that is allowed to run to the gateway's ceiling mostly generates filler,
-/// and generation is nearly all of `ask`'s wall time. `DENDRITE_RAG_ASK_MAX_TOKENS` overrides it.
-const DEFAULT_ANSWER_MAX_TOKENS: u32 = 1024;
+/// Longest answer `ask` requests from a model. Answers grounded in a few retrieved spans fit inside
+/// it; generation is nearly all of `ask`'s wall time (a local 8B model writes about 16 tokens a second
+/// here), and without a cap the gateway's ceiling of thousands of tokens applies. `DENDRITE_RAG_ASK_MAX_TOKENS` overrides it.
+const DEFAULT_ANSWER_MAX_TOKENS: u32 = 600;
 
 fn answer_max_tokens() -> u32 {
     std::env::var("DENDRITE_RAG_ASK_MAX_TOKENS")
