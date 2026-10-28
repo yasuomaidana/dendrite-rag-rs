@@ -367,6 +367,53 @@ pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
     })
 }
 
+/// Loaded embedders by configuration; `None` is a configuration without dense retrieval.
+type LoadedEmbedders =
+    std::sync::Mutex<std::collections::HashMap<String, Option<std::sync::Arc<dyn Embedder>>>>;
+
+/// Embedders already loaded in this process, by configuration.
+static LOADED: std::sync::OnceLock<LoadedEmbedders> = std::sync::OnceLock::new();
+
+/// A loaded embedder shared by every engine the process opens with the same configuration.
+struct Shared(std::sync::Arc<dyn Embedder>);
+
+impl Embedder for Shared {
+    fn model_id(&self) -> &str {
+        self.0.model_id()
+    }
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.0.embed_documents(texts)
+    }
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.0.embed_query(text)
+    }
+}
+
+/// [`from_config`], loading each configuration once per process. A server that closes idle
+/// projects and reopens them later keeps the model it already loaded instead of reading the
+/// weights and starting the GPU again for every reopen. Failures are not remembered.
+pub fn shared_from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
+    shared_with(cfg, from_config)
+}
+
+fn shared_with(
+    cfg: &EmbedConfig,
+    load: impl FnOnce(&EmbedConfig) -> Result<Option<Box<dyn Embedder>>>,
+) -> Result<Option<Box<dyn Embedder>>> {
+    let key = format!("{cfg:?}");
+    let mut loaded = LOADED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !loaded.contains_key(&key) {
+        let embedder = load(cfg)?.map(std::sync::Arc::<dyn Embedder>::from);
+        loaded.insert(key.clone(), embedder);
+    }
+    Ok(loaded[&key]
+        .clone()
+        .map(|e| Box::new(Shared(e)) as Box<dyn Embedder>))
+}
+
 /// Longest text sent to a model, in bytes; longer chunks are truncated at a char boundary.
 pub(crate) const MAX_INPUT_BYTES: usize = 8000;
 
@@ -418,3 +465,57 @@ pub fn pool(tokens: &[Vec<f32>], pooling: Pooling) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fixed;
+    impl Embedder for Fixed {
+        fn model_id(&self) -> &str {
+            "fixed"
+        }
+        fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![1.0]).collect())
+        }
+        fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+            Ok(vec![1.0])
+        }
+    }
+
+    #[test]
+    fn each_configuration_is_loaded_once_and_failures_are_retried() {
+        let loads = AtomicUsize::new(0);
+        let cfg = EmbedConfig {
+            model: Some("shared-test-model-a".into()),
+            ..EmbedConfig::default()
+        };
+        let load = |_: &EmbedConfig| {
+            loads.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(Box::new(Fixed) as Box<dyn Embedder>))
+        };
+        let first = shared_with(&cfg, load).unwrap().unwrap();
+        let second = shared_with(&cfg, load).unwrap().unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 1, "the model was loaded twice");
+        assert_eq!(first.model_id(), second.model_id());
+
+        let mut other = cfg.clone();
+        other.model = Some("shared-test-model-b".into());
+        shared_with(&other, load).unwrap();
+        assert_eq!(
+            loads.load(Ordering::SeqCst),
+            2,
+            "a different configuration must load its own model"
+        );
+
+        // A failed load is not cached: the next call tries again.
+        let mut broken = cfg.clone();
+        broken.model = Some("shared-test-model-broken".into());
+        let failing = |_: &EmbedConfig| -> Result<Option<Box<dyn Embedder>>> {
+            Err(EmbedError::Model("no weights".into()))
+        };
+        assert!(shared_with(&broken, failing).is_err());
+        assert!(shared_with(&broken, load).unwrap().is_some());
+    }
+}

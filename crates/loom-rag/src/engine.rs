@@ -255,7 +255,7 @@ impl Engine {
     /// Opens (or creates) the index of the project at `root`, with the embedder from `cfg.embed`.
     pub fn open(root: &Path, cfg: Config) -> Result<Self> {
         let started = Instant::now();
-        let embedder = crate::embed::from_config(&cfg.embed)?;
+        let embedder = crate::embed::shared_from_config(&cfg.embed)?;
         let mut engine = Self::open_with_embedder(root, cfg, embedder)?;
         engine.open_ms = started.elapsed().as_millis() as u64;
         Ok(engine)

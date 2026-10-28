@@ -286,7 +286,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => rpc::serve(
             &mut Server::per_project(),
-            io::stdin().lock(),
+            io::BufReader::new(io::stdin()),
             io::stdout().lock(),
         )?,
         Command::Index {

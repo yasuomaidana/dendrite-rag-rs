@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +22,42 @@ pub struct Server {
     engines: HashMap<PathBuf, Engine>,
     /// `[ask]` of each project opened with its own settings.
     asks: HashMap<PathBuf, AskSettings>,
+    /// When each open engine was last used (end of the last request that touched it).
+    last_used: HashMap<PathBuf, Instant>,
+    /// Roots the current request used; stamped into `last_used` when it finishes.
+    touched: Vec<PathBuf>,
+    /// An engine idle for this long is closed, releasing the project's exclusive index lock so
+    /// another process can open it. `None` keeps engines open for the life of the process.
+    engine_idle: Option<Duration>,
+    /// How long opening a project retries while another process holds its lock.
+    open_wait: Duration,
+}
+
+/// Default idle time before a project's engine is closed (`DENDRITE_RAG_ENGINE_IDLE_SECS`, 0 = never).
+const DEFAULT_ENGINE_IDLE: Duration = Duration::from_secs(5);
+/// Default time to wait for another process's lock (`DENDRITE_RAG_OPEN_WAIT_SECS`).
+const DEFAULT_OPEN_WAIT: Duration = Duration::from_secs(12);
+
+fn engine_idle_from_env() -> Option<Duration> {
+    match env_secs("DENDRITE_RAG_ENGINE_IDLE_SECS") {
+        Some(0) => None,
+        Some(n) => Some(Duration::from_secs(n)),
+        None => Some(DEFAULT_ENGINE_IDLE),
+    }
+}
+
+fn open_wait_from_env() -> Duration {
+    env_secs("DENDRITE_RAG_OPEN_WAIT_SECS").map_or(DEFAULT_OPEN_WAIT, Duration::from_secs)
+}
+
+fn env_secs(name: &str) -> Option<u64> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+}
+
+/// True for the error a project's index lock produces while another process has it open.
+fn is_locked(e: &Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("already open") || msg.contains("Cannot acquire lock")
 }
 
 #[derive(Deserialize)]
@@ -207,6 +244,10 @@ impl Server {
             config: Some(config),
             engines: HashMap::new(),
             asks: HashMap::new(),
+            last_used: HashMap::new(),
+            touched: Vec::new(),
+            engine_idle: engine_idle_from_env(),
+            open_wait: open_wait_from_env(),
         }
     }
 
@@ -216,6 +257,33 @@ impl Server {
             config: None,
             engines: HashMap::new(),
             asks: HashMap::new(),
+            last_used: HashMap::new(),
+            touched: Vec::new(),
+            engine_idle: engine_idle_from_env(),
+            open_wait: open_wait_from_env(),
+        }
+    }
+
+    /// Overrides the idle-close and lock-wait times (tests, embedding hosts).
+    pub fn with_timing(mut self, engine_idle: Option<Duration>, open_wait: Duration) -> Self {
+        self.engine_idle = engine_idle;
+        self.open_wait = open_wait;
+        self
+    }
+
+    /// Closes engines unused for `engine_idle`, releasing their projects' index locks.
+    fn close_idle_engines(&mut self) {
+        let Some(max) = self.engine_idle else { return };
+        let now = Instant::now();
+        let stale: Vec<PathBuf> = self
+            .last_used
+            .iter()
+            .filter(|(_, at)| now.duration_since(**at) >= max)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for path in stale {
+            self.engines.remove(&path);
+            self.last_used.remove(&path);
         }
     }
 
@@ -238,9 +306,21 @@ impl Server {
                     settings.config_at(&path)
                 }
             };
-            let engine = Engine::open(&path, cfg).map_err(engine_error)?;
+            // Another process may hold the project's lock; it closes idle engines on its own, so
+            // wait for it for a while instead of failing.
+            let deadline = Instant::now() + self.open_wait;
+            let engine = loop {
+                match Engine::open(&path, cfg.clone()) {
+                    Ok(engine) => break engine,
+                    Err(e) if is_locked(&e) && Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(150));
+                    }
+                    Err(e) => return Err(engine_error(e)),
+                }
+            };
             self.engines.insert(path.clone(), engine);
         }
+        self.touched.push(path.clone());
         Ok(self.engines.get_mut(&path).expect("just inserted"))
     }
 
@@ -285,6 +365,24 @@ fn to_value<T: serde::Serialize>(v: T) -> Result<Value, RpcError> {
 
 impl Handler for Server {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
+        self.touched.clear();
+        let result = self.dispatch(method, params);
+        let now = Instant::now();
+        for path in std::mem::take(&mut self.touched) {
+            if self.engines.contains_key(&path) {
+                self.last_used.insert(path, now);
+            }
+        }
+        result
+    }
+
+    fn idle(&mut self) {
+        self.close_idle_engines();
+    }
+}
+
+impl Server {
+    fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
             "health" => Ok(rpc::health()),
             "embedders" => Ok(json!({ "backends": loom_rag::embed::backends() })),

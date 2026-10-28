@@ -113,3 +113,85 @@ fn full_method_table() {
     let r = call(&mut s, "status", json!({}));
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
 }
+
+fn lexical_server() -> Server {
+    let mut cfg = Config::default();
+    cfg.embed.backend = Backend::None;
+    Server::new(cfg)
+}
+
+#[test]
+fn an_idle_engine_is_closed_and_releases_the_project_for_another_process() {
+    let dir = project();
+    let root = dir.path().to_str().unwrap();
+    let mut holder = lexical_server().with_timing(Some(Duration::from_millis(30)), Duration::ZERO);
+    assert_eq!(
+        call(&mut holder, "index", json!({"root": root}))["result"]["files_scanned"],
+        3
+    );
+
+    // While the holder keeps the engine open, a second process cannot take the project.
+    let mut other = lexical_server().with_timing(None, Duration::ZERO);
+    let r = call(&mut other, "status", json!({"root": root}));
+    assert!(r["error"].is_object(), "the project was not locked: {r}");
+
+    // Not idle long enough yet: the engine stays.
+    holder.idle();
+    assert!(!holder.engines.is_empty());
+
+    std::thread::sleep(Duration::from_millis(60));
+    holder.idle();
+    assert!(holder.engines.is_empty(), "the idle engine was not closed");
+    let r = call(&mut other, "status", json!({"root": root}));
+    assert!(
+        r["result"]["files"].as_u64().unwrap() >= 3,
+        "the released project could not be opened: {r}"
+    );
+
+    // The holder reopens on demand and keeps the index it built.
+    drop(other);
+    assert_eq!(
+        call(&mut holder, "status", json!({"root": root}))["result"]["files"],
+        3
+    );
+}
+
+#[test]
+fn opening_a_locked_project_waits_for_the_holder_to_release_it() {
+    let dir = project();
+    let root = dir.path().to_str().unwrap().to_string();
+    let mut holder = lexical_server().with_timing(Some(Duration::from_millis(20)), Duration::ZERO);
+    call(&mut holder, "index", json!({"root": root}));
+
+    let waiter_root = root.clone();
+    let waiter = std::thread::spawn(move || {
+        let mut other = lexical_server().with_timing(None, Duration::from_secs(10));
+        let started = Instant::now();
+        let r = call(&mut other, "status", json!({"root": waiter_root}));
+        (r, started.elapsed())
+    });
+
+    // The holder's idle tick (as the serve loop would run it) lets the waiter in.
+    std::thread::sleep(Duration::from_millis(400));
+    holder.idle();
+    let (r, waited) = waiter.join().unwrap();
+    assert!(
+        r["result"].is_object(),
+        "the waiter failed instead of waiting: {r}"
+    );
+    assert!(
+        waited >= Duration::from_millis(300),
+        "the waiter did not wait ({waited:?})"
+    );
+}
+
+#[test]
+fn engines_are_kept_when_idle_closing_is_disabled() {
+    let dir = project();
+    let root = dir.path().to_str().unwrap();
+    let mut s = lexical_server().with_timing(None, Duration::ZERO);
+    call(&mut s, "index", json!({"root": root}));
+    std::thread::sleep(Duration::from_millis(20));
+    s.idle();
+    assert_eq!(s.engines.len(), 1);
+}

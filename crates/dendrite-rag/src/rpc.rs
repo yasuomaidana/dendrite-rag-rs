@@ -70,6 +70,10 @@ struct Response {
 /// Dispatches one method call. `params` is `Value::Null` when the request had none.
 pub trait Handler {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError>;
+
+    /// Called about once a second while no request is waiting. A server that holds resources
+    /// between requests (open project indexes) releases the ones nobody is using.
+    fn idle(&mut self) {}
 }
 
 /// Decodes params into `T`, treating absent params as an empty object.
@@ -114,23 +118,51 @@ fn encode(id: Value, result: Result<Value, RpcError>) -> String {
     .expect("responses always serialize")
 }
 
+/// How often [`Handler::idle`] runs while the server waits for the next request.
+pub const IDLE_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Serves requests from `input` until EOF, writing one response line per request.
 pub fn serve<H: Handler>(
     handler: &mut H,
-    input: impl BufRead,
-    mut output: impl Write,
+    input: impl BufRead + Send + 'static,
+    output: impl Write,
 ) -> std::io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    serve_with_tick(handler, input, output, IDLE_TICK)
+}
+
+/// [`serve`] with an explicit idle interval. Input is read on a helper thread so the handler can
+/// run [`Handler::idle`] while no request arrives.
+pub fn serve_with_tick<H: Handler>(
+    handler: &mut H,
+    input: impl BufRead + Send + 'static,
+    mut output: impl Write,
+    tick: std::time::Duration,
+) -> std::io::Result<()> {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    let (tx, rx) = channel::<std::io::Result<String>>();
+    std::thread::spawn(move || {
+        for line in input.lines() {
+            if tx.send(line).is_err() {
+                break;
+            }
         }
-        if let Some(resp) = handle_line(handler, &line) {
-            writeln!(output, "{resp}")?;
-            output.flush()?;
+    });
+    loop {
+        match rx.recv_timeout(tick) {
+            Ok(line) => {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Some(resp) = handle_line(handler, &line) {
+                    writeln!(output, "{resp}")?;
+                    output.flush()?;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => handler.idle(),
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
     }
-    Ok(())
 }
 
 /// The `health` result.
@@ -209,5 +241,39 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["result"], json!([1]));
         assert_eq!(lines[1]["id"], 2);
+    }
+
+    #[test]
+    fn idle_runs_while_no_request_arrives() {
+        struct Counting(u32);
+        impl Handler for Counting {
+            fn call(&mut self, _: &str, _: Value) -> Result<Value, RpcError> {
+                Ok(json!(null))
+            }
+            fn idle(&mut self) {
+                self.0 += 1;
+            }
+        }
+        /// A reader that stays silent for a while, then reports end of input.
+        struct Silent(bool);
+        impl std::io::Read for Silent {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                if !self.0 {
+                    self.0 = true;
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Ok(0)
+            }
+        }
+        let mut h = Counting(0);
+        let mut out = Vec::new();
+        serve_with_tick(
+            &mut h,
+            std::io::BufReader::new(Silent(false)),
+            &mut out,
+            std::time::Duration::from_millis(20),
+        )
+        .unwrap();
+        assert!(h.0 >= 3, "idle ran {} times in 200ms at a 20ms tick", h.0);
     }
 }
