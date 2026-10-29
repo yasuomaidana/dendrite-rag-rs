@@ -94,8 +94,10 @@ pub fn append_llm_description(chunk: &mut Chunk, description: &str) {
 mod tests {
     use super::*;
     use crate::graph::communities::TopSymbol;
+    use rstest::{fixture, rstest};
 
-    fn community(files: &[&str]) -> Community {
+    #[fixture]
+    fn community(#[default(&["pkg/sync/sync.go", "pkg/sync/heal.go"])] files: &[&str]) -> Community {
         Community {
             id: 7,
             label: "pkg/sync · Sync".into(),
@@ -114,19 +116,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn summary_chunks_describe_communities() {
+    #[rstest]
+    fn summary_chunks_describe_communities(#[from(community)] comm: Community) {
         assert!(summary_chunk(&community(&["a.go"])).is_none());
-        let c = summary_chunk(&community(&["pkg/sync/sync.go", "pkg/sync/heal.go"])).unwrap();
+        let c = summary_chunk(&comm).unwrap();
         assert!(is_summary(&c.id) && is_summary(&c.path));
         assert_eq!(community_of(&c.id), Some(7));
         assert!(c.content.contains("pkg/sync · Sync") && c.content.contains("pkg/sync/heal.go"));
         assert!(!is_summary("pkg/sync/sync.go"));
     }
 
-    #[test]
-    fn appends_llm_description_and_updates_id() {
-        let mut c = summary_chunk(&community(&["pkg/sync/sync.go", "pkg/sync/heal.go"])).unwrap();
+    #[rstest]
+    fn appends_llm_description_and_updates_id(#[from(community)] comm: Community) {
+        let mut c = summary_chunk(&comm).unwrap();
         let orig_id = c.id.clone();
         let orig_hash = c.content_hash.clone();
         append_llm_description(&mut c, "This community coordinates synchronization and healing.");

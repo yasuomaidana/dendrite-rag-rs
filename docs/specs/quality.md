@@ -91,7 +91,7 @@ The JSON report has `schema`, the limits used, `totals` (`files`, `lines`, `dupl
 Fails when plain `#[test]` functions of the same module:
 
 - **`repeated_test`**: two or more have bodies that are the same up to literals (and are at least 3 lines): they are one `#[rstest]` with a `#[case]` each;
-- **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper with the same arguments (`let store = open();`, `let store = open(dir.path());`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument; a fixture can take other fixtures, and `#[with(..)]` sets constant arguments. A helper that the tests call with different arguments is a builder and is left alone.
+- **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper with the same arguments (`let store = open();`, `let store = open(dir.path());`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument; a fixture can take other fixtures, and `#[with(..)]` sets constant arguments. A helper that the tests call with different arguments, or with something the test built itself (`open(dir.path())` after `let dir = ...`), is a builder: a fixture cannot see test locals, so the call is left alone.
 
 - **`missing_rstest`**: a crate with plain `#[test]` functions has no `rstest` in its `[dev-dependencies]`: add `rstest = "0.28.0"`. A `{ workspace = true }` dependency is read from `[workspace.dependencies]`;
 - **`outdated_rstest`**: the declared version is older than 0.28, so the current `#[case]`, `#[values]`, `#[files]`, `#[once]`, `#[future]` and `#[timeout]` options are not available. A path or git dependency has no version to compare and passes.

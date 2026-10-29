@@ -129,3 +129,11 @@ fn a_directory_check_counts_rust_files_and_orders_the_findings() {
 fn a_helper_with_parameters_is_setup_only_when_the_calls_repeat(#[case] src: &str, #[case] expected: usize) {
     assert_eq!(kinds(src).len(), expected);
 }
+
+#[rstest]
+#[case::argument_built_by_the_test(
+    "mod tests {\n    fn open(dir: &Path) -> Store {\n        Store::new(dir)\n    }\n    #[test]\n    fn writes() {\n        let dir = make();\n        let store = open(dir.path());\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let dir = make();\n        let store = open(dir.path());\n        store.get(1);\n    }\n}\n"
+)]
+fn a_call_that_uses_what_the_test_built_is_a_builder(#[case] src: &str) {
+    assert!(kinds(src).is_empty());
+}

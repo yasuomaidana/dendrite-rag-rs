@@ -271,8 +271,10 @@ pub fn summarize_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
 
-    fn instance(expected: &[&str]) -> SweInstance {
+    #[fixture]
+    fn instance(#[default(&["a.py", "b.py"])] expected: &[&str]) -> SweInstance {
         SweInstance {
             instance_id: "a__b-1".into(),
             repo: "a/b".into(),
@@ -311,9 +313,8 @@ mod tests {
         assert!(score.recall1);
     }
 
-    #[test]
-    fn gold_recall_and_all_gold_use_distinct_files() {
-        let inst = instance(&["a.py", "b.py"]);
+    #[rstest]
+    fn gold_recall_and_all_gold_use_distinct_files(#[from(instance)] inst: SweInstance) {
         let score = InstanceScore::compute(&inst, &ranked(&["a.py", "a.py", "c.py"]), None);
         assert_eq!(score.all_gold10, Some(false));
         assert!((score.gold_recall10 - 0.5).abs() < 1e-9);
@@ -336,9 +337,8 @@ mod tests {
         assert!(!is_gold(&expected, "a.py"));
     }
 
-    #[test]
-    fn ndcg_is_one_for_perfect_ranking_and_discounts_later_hits() {
-        let inst = instance(&["a.py", "b.py"]);
+    #[rstest]
+    fn ndcg_is_one_for_perfect_ranking_and_discounts_later_hits(#[from(instance)] inst: SweInstance) {
         let perfect = InstanceScore::compute(&inst, &ranked(&["a.py", "b.py"]), None);
         assert!((perfect.ndcg10 - 1.0).abs() < 1e-9);
         let late = InstanceScore::compute(&inst, &ranked(&["a.py", "x.py", "b.py"]), None);

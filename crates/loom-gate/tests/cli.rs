@@ -23,7 +23,8 @@ fn production(n: usize) -> String {
 }
 
 /// A tree whose only file has `lines` production lines plus 300 lines of tests.
-fn project(lines: usize) -> tempfile::TempDir {
+#[fixture]
+fn project(#[default(501)] lines: usize) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let tests: String = (0..300).map(|i| format!("    fn t{i}() {{}}\n")).collect();
     write(
@@ -40,8 +41,10 @@ fn run_loc(root: &Path, extra: &[&str]) -> Output {
     gate(&args)
 }
 
-#[test]
-fn passes_at_the_limit_and_fails_one_line_over_whatever_the_tests_add() {
+#[rstest]
+fn passes_at_the_limit_and_fails_one_line_over_whatever_the_tests_add(
+    #[from(project)] over_project: tempfile::TempDir,
+) {
     let ok = run_loc(project(500).path(), &[]);
     assert_eq!(
         ok.status.code(),
@@ -49,14 +52,13 @@ fn passes_at_the_limit_and_fails_one_line_over_whatever_the_tests_add() {
         "{}",
         String::from_utf8_lossy(&ok.stdout)
     );
-    let over = run_loc(project(501).path(), &[]);
+    let over = run_loc(over_project.path(), &[]);
     assert_eq!(over.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&over.stdout).contains("FAIL    501 production lines  src/lib.rs"));
 }
 
-#[test]
-fn json_and_github_formats() {
-    let dir = project(501);
+#[rstest]
+fn json_and_github_formats(#[from(project)] dir: tempfile::TempDir) {
     let json = run_loc(dir.path(), &["--format", "json"]);
     let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(

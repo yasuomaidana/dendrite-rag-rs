@@ -300,12 +300,45 @@ fn repeated_tests(path: &str, tests: &[TestFn], src: &[u8]) -> Vec<Violation> {
         .collect()
 }
 
+/// Names a test declares itself: `let` bindings and parameters. A call whose arguments use one of them
+/// depends on state the test built, which a fixture cannot see, so it is a builder.
+fn local_names(body: Node, src: &[u8]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        let pattern = (n.kind() == "let_declaration")
+            .then(|| n.child_by_field_name("pattern"))
+            .flatten();
+        if let Some(pat) = pattern {
+            let mut inner = vec![pat];
+            while let Some(p) = inner.pop() {
+                if p.kind() == "identifier" {
+                    names.insert(String::from_utf8_lossy(&src[p.byte_range()]).into_owned());
+                }
+                let mut c = p.walk();
+                inner.extend(p.children(&mut c));
+            }
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.children(&mut cursor));
+    }
+    names
+}
+
+fn uses_local(args: &str, locals: &std::collections::HashSet<String>) -> bool {
+    args.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|word| locals.contains(word))
+}
+
 /// The tests that repeat the same setup through `helper`: every test that binds it when it takes no
 /// parameters, and those that bind it with the same arguments when it does (`open(dir.path())`).
 fn repeated_users<'a>(helper: &TestFn, tests: &'a [TestFn], src: &[u8]) -> Vec<&'a str> {
     let mut by_args: HashMap<String, Vec<&str>> = HashMap::new();
     for t in tests {
         if let Some(args) = binding_args(t.body, &helper.name, src) {
+            if uses_local(&args, &local_names(t.body, src)) {
+                continue;
+            }
             let key = if helper.params == 0 { String::new() } else { args };
             by_args.entry(key).or_default().push(t.name.as_str());
         }
