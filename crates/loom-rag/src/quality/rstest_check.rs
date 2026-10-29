@@ -195,13 +195,12 @@ fn scan<'a>(container: Node<'a>, src: &[u8], out: &mut Vec<(Vec<TestFn<'a>>, Vec
 fn binding_args(body: Node, helper: &str, src: &[u8]) -> Option<String> {
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
-        if n.kind() == "let_declaration" {
-            if let Some(args) = n
-                .child_by_field_name("value")
-                .and_then(|v| call_args(v, helper, src))
-            {
-                return Some(args);
-            }
+        if let Some(args) = (n.kind() == "let_declaration")
+            .then(|| n.child_by_field_name("value"))
+            .flatten()
+            .and_then(|v| call_args(v, helper, src))
+        {
+            return Some(args);
         }
         let mut cursor = n.walk();
         stack.extend(n.children(&mut cursor));
