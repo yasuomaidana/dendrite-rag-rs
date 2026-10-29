@@ -4,15 +4,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
+use self::params::*;
 use crate::rpc::{self, Handler, RpcError, code};
 use crate::settings::{AskSettings, Settings, valid_docs_share};
-use loom_rag::corpus::CorpusFilter;
 use loom_rag::engine::{Config, Engine, Error};
-use loom_rag::graph::EdgeKind;
-use loom_rag::retrieve::{Detail, Mode, SearchOpts, Timings};
+use loom_rag::retrieve::{SearchOpts, Timings};
 
 /// Serves every method, keeping one open engine per project root.
 pub struct Server {
@@ -58,183 +56,6 @@ fn env_secs(name: &str) -> Option<u64> {
 fn is_locked(e: &Error) -> bool {
     let msg = e.to_string();
     msg.contains("already open") || msg.contains("Cannot acquire lock")
-}
-
-#[derive(Deserialize)]
-struct RootParams {
-    root: String,
-}
-
-#[derive(Deserialize)]
-struct IndexParams {
-    root: String,
-    #[serde(default)]
-    full: bool,
-    /// Stop embedding after this many milliseconds (the lexical index always completes).
-    embed_budget_ms: Option<u64>,
-    /// Stop embedding after this many tokens (the lexical index always completes).
-    embed_budget_tokens: Option<usize>,
-    /// Under a budget, embed the chunks this question matches first.
-    focus: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SearchParams {
-    root: String,
-    query: String,
-    #[serde(default = "default_top_k")]
-    top_k: usize,
-    #[serde(default)]
-    mode: Mode,
-    #[serde(default)]
-    corpus: CorpusFilter,
-    #[serde(default)]
-    paths: Vec<String>,
-    min_score: Option<f32>,
-    #[serde(default)]
-    offset: usize,
-}
-
-#[derive(Deserialize)]
-struct ContextParams {
-    root: String,
-    query: String,
-    #[serde(default = "default_budget")]
-    token_budget: usize,
-    #[serde(default)]
-    corpus: CorpusFilter,
-    #[serde(default)]
-    detail: Detail,
-    /// Share of an `all` pack kept for documentation (default: the project's `[ask]`).
-    docs_share: Option<f32>,
-}
-
-#[derive(Deserialize)]
-struct ChunksParams {
-    root: String,
-    ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SymbolParams {
-    root: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct HistoryIndexParams {
-    root: String,
-    #[serde(default = "default_max_commits")]
-    max_commits: usize,
-}
-
-#[derive(Deserialize)]
-struct HistorySearchParams {
-    root: String,
-    query: String,
-    #[serde(default = "default_top_k")]
-    top_k: usize,
-}
-
-fn default_max_commits() -> usize {
-    loom_rag::history::DEFAULT_MAX_COMMITS
-}
-
-#[derive(Deserialize)]
-struct GrepParams {
-    root: String,
-    pattern: String,
-    #[serde(default)]
-    paths: Vec<String>,
-    #[serde(default = "default_max_results")]
-    max_results: usize,
-}
-
-#[derive(Deserialize)]
-struct CommunitiesParams {
-    root: String,
-    #[serde(default = "default_communities")]
-    limit: usize,
-    #[serde(default = "default_min_size")]
-    min_size: usize,
-}
-
-#[derive(Deserialize)]
-struct GodNodesParams {
-    root: String,
-    #[serde(default = "default_god_in_degree")]
-    min_in_degree: usize,
-    #[serde(default = "default_communities")]
-    limit: usize,
-}
-
-#[derive(Deserialize)]
-struct PathParams {
-    root: String,
-    from: String,
-    to: String,
-    #[serde(default)]
-    kinds: Vec<EdgeKind>,
-    #[serde(default = "default_max_hops")]
-    max_hops: usize,
-}
-
-#[cfg(feature = "postgres")]
-#[derive(Deserialize)]
-struct PushParams {
-    root: String,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-#[derive(Deserialize)]
-struct AskParams {
-    root: String,
-    #[serde(flatten)]
-    request: crate::ask::AskRequest,
-}
-
-#[derive(Deserialize)]
-struct RankParams {
-    root: String,
-    query: String,
-    documents: Vec<loom_rag::rank::Document>,
-    #[serde(default)]
-    top_k: usize,
-}
-
-#[derive(Deserialize)]
-struct ExplainParams {
-    root: String,
-    target: String,
-}
-
-fn default_communities() -> usize {
-    50
-}
-
-fn default_min_size() -> usize {
-    2
-}
-
-fn default_god_in_degree() -> usize {
-    loom_rag::graph::query::GOD_NODE_IN_DEGREE
-}
-
-fn default_max_hops() -> usize {
-    6
-}
-
-fn default_top_k() -> usize {
-    10
-}
-
-fn default_budget() -> usize {
-    4000
-}
-
-fn default_max_results() -> usize {
-    200
 }
 
 impl Server {
@@ -521,6 +342,7 @@ impl Server {
                     .map_err(engine_error)?;
                 Ok(json!({ "ranked": ranked }))
             }
+            "quality.loc" => quality::loc(params),
             "graph.communities" => {
                 let p: CommunitiesParams = rpc::params(params)?;
                 let communities = self
@@ -572,6 +394,8 @@ impl Server {
     }
 }
 
+mod params;
+mod quality;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]

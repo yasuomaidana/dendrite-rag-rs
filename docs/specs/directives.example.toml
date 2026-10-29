@@ -1,0 +1,34 @@
+# managed by dendrite — edit with `dendrite directive "<rule>"`
+# The shape of .github/dendrite/directives.toml. Dendrite (Go, pkg/directive) writes it; loom-gate reads [loc].
+# Both sides parse this same file in their tests, so the schema cannot drift.
+schema = 1
+
+[loc]
+max_production_lines = 500
+warn_at = 450
+exclude = ["**/generated/**"]
+
+[coverage]
+min_percent = 100.0
+scope = "line"
+exclude = []
+
+[duplication]
+max_percent = 0.0
+min_tokens = 50
+min_lines = 5
+include_tests = true
+
+[lint]
+strictness = "strict"
+
+[security]
+fail_on = "high"
+secrets = true
+
+[done]
+auto_done = true
+human_review_labels = ["needs-human-review"]
+
+[languages]
+preference = ["rust", "python", "typescript", "go", "kotlin", "c", "cpp"]

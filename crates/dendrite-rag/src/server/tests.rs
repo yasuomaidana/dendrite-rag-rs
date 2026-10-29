@@ -195,3 +195,49 @@ fn engines_are_kept_when_idle_closing_is_disabled() {
     s.idle();
     assert_eq!(s.engines.len(), 1);
 }
+
+#[test]
+fn quality_loc_reports_production_lines_against_the_directives() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let body: String = (0..12).map(|i| format!("fn f{i}() {{}}\n")).collect();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/lib.rs"),
+        format!("{body}#[cfg(test)]\nmod tests {{ fn t() {{}} }}\n"),
+    )
+    .unwrap();
+    let mut s = Server::new(Config::default());
+
+    let r = call(&mut s, "quality.loc", json!({"root": root}));
+    assert_eq!(r["result"]["totals"]["failures"], 0);
+    assert_eq!(r["result"]["files"][0]["production"], 12);
+
+    let r = call(
+        &mut s,
+        "quality.loc",
+        json!({"root": root, "max_production_lines": 10, "warn_at": 8}),
+    );
+    assert_eq!(r["result"]["totals"]["failures"], 1);
+    assert_eq!(r["result"]["files"][0]["status"], "fail");
+
+    let r = call(
+        &mut s,
+        "quality.loc",
+        json!({"root": root, "exclude": ["src/**"], "max_production_lines": 10, "warn_at": 8}),
+    );
+    assert_eq!(r["result"]["totals"]["files"], 0);
+
+    let r = call(&mut s, "quality.loc", json!({"root": root, "warn_at": 900}));
+    assert_eq!(
+        r["error"]["code"],
+        code::INVALID_PARAMS,
+        "warn_at above the maximum"
+    );
+    std::fs::create_dir_all(dir.path().join(".github/dendrite")).unwrap();
+    std::fs::write(dir.path().join(".github/dendrite/directives.toml"), "[loc\n").unwrap();
+    let r = call(&mut s, "quality.loc", json!({"root": root}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    let r = call(&mut s, "quality.loc", json!({"nothing": 1}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
+}

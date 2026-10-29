@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod lexical;
 pub mod llm;
 pub mod lookup;
+pub mod quality;
 pub mod rank;
 pub mod rerank;
 pub mod retrieve;

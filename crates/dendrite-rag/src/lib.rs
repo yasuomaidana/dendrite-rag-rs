@@ -12,7 +12,7 @@ pub const NAME: &str = "dendrite-rag";
 /// Crate version reported by the `health` handshake.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// JSON-RPC protocol version; clients refuse a server with a different major version.
-pub const PROTOCOL: &str = "1.9.0";
+pub const PROTOCOL: &str = "1.10.0";
 
 /// The cargo features this binary was built with, so a client can tell, before any
 /// project is opened, what `[embed]`, `[storage]` and `[rerank]` settings it can honour.

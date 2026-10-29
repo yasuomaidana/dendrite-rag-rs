@@ -13,10 +13,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - name: No Rust file over 500 lines
-        run: |
-          long=$(find crates -name '*.rs' -exec wc -l {} + | awk '$2 != "total" && $1 > 500')
-          if [ -n "$long" ]; then echo "$long"; exit 1; fi
+      - name: No file over its production-line limit
+        run: cargo run -q -p loom-gate -- loc --format github
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
   memory:

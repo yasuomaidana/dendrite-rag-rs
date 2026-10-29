@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/loom-rag", "crates/dendrite-rag", "crates/loom-eval"]
-default-members = ["crates/loom-rag", "crates/dendrite-rag"]
+members = ["crates/loom-rag", "crates/dendrite-rag", "crates/loom-eval", "crates/loom-gate"]
+default-members = ["crates/loom-rag", "crates/dendrite-rag", "crates/loom-gate"]
 
 [workspace.package]
 version = "0.1.0"

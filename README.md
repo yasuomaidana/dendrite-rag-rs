@@ -221,6 +221,7 @@ Comprehensive architectural documentation and specifications are maintained in t
 - [Embedders](docs/specs/embedders.md): Embedding backend options, model conventions, and auto-detection rules.
 - [Storage & Incremental Ledger](docs/specs/store.md): redb schema, Merkle diffing, SQLite ledger, and PostgreSQL tier.
 - [Symbol Graph & Communities](docs/specs/graph.md): Typed code graph, Leiden clustering, and graph queries.
+- [Quality gates](docs/specs/quality.md): `loom-gate loc`, production lines per file with test code stripped, and the `quality.loc` method.
 - [Git History Search](docs/specs/history.md): Commit messages and per-file diff indexing.
 - [JSON-RPC 2.0 Protocol](docs/specs/protocol.md): Stdio method catalog, parameters, and error codes.
 - [Memory Synchronization](docs/specs/memory-sync.md): Local-only, edge, and push synchronization topologies.

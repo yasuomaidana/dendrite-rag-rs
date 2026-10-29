@@ -3289,6 +3289,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-gate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "loom-rag",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "loom-rag"
 version = "0.1.0"
 dependencies = [
@@ -3322,6 +3333,7 @@ dependencies = [
  "testcontainers",
  "thiserror 2.0.21",
  "tokenizers 1.0.0-rc.3",
+ "toml",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-cpp",
