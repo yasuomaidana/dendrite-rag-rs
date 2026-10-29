@@ -1,6 +1,6 @@
 # Quality gates (`loom-gate`, `quality.loc`)
 
-`loom-gate` checks a source tree against the quality directives of a project. Today it has one gate, production lines per file; clone detection follows (DRAG-65).
+`loom-gate` checks a source tree against the quality directives of a project. It has three gates: production lines per file (`loc`), repeated code (`clones`) and Rust test structure (`rstest`).
 
     loom-gate loc [--root .] [--config <directives.toml>] [--format text|json|github] [--max N] [--warn-at N] [--exclude GLOB]…
 
@@ -10,7 +10,7 @@
 | 1 | a file has more production lines than `max_production_lines` |
 | 2 | the tool could not run: bad flags, an unreadable or invalid directives file, a limit that contradicts another |
 
-The same check is the JSON-RPC method `quality.loc` of `dendrite-rag serve` ([protocol.md](protocol.md)), which `dendrite allostasis gate` calls.
+Each gate is also a JSON-RPC method (`quality.loc`, `quality.clones`, `quality.rstest`) of `dendrite-rag serve` ([protocol.md](protocol.md)), which `dendrite allostasis gate` calls.
 
 ## What counts
 
@@ -64,3 +64,33 @@ A missing file or table means the defaults. `max_production_lines` must be above
 
 `--format github` prints one workflow command per file that warns or fails, for annotations in a pull request:
 `::error file=src/lib.rs,line=1,title=Production lines::501 production lines, over 500`. `--format text` lists the files that warn or fail, worst first, and a summary line.
+
+## Duplication (`loom-gate clones`)
+
+    loom-gate clones [--root .] [--config <directives.toml>] [--format text|json|github] [--max-percent P] [--min-lines N] [--min-tokens N] [--include-tests true|false] [--exclude GLOB]…
+
+Finds blocks of code that repeat: two syntax subtrees are the same when they match after every identifier and every literal is replaced by a wildcard, so renamed copy-paste and copies with other constants are found, and comments and layout do not matter. A block counts when it has at least `min_lines` lines and `min_tokens` leaves of the syntax tree. Only the largest repeated block is reported: a repeated function is not also reported as the loop and the `if` inside it. It works in every language with a grammar (Go, Rust, Python, TypeScript, TSX, JavaScript, Java, C, C++).
+
+The check passes when the share of code lines that sit in a repeated block is at most `max_percent` (0 by default: no duplication). Exit codes are those of `loc`.
+
+`[duplication]` of the directives file:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_percent` | 0.0 | share of the counted lines that may be duplicated, 0 to 100 |
+| `min_tokens` | 50 | leaves of the syntax tree a repeated block needs, at least 10 |
+| `min_lines` | 5 | lines a repeated block needs, at least 2 |
+| `include_tests` | true | whether test code (files and inline test modules, see above) is checked too |
+
+The JSON report has `schema`, the limits used, `totals` (`files`, `lines`, `duplicated_lines`, `percent`, `groups`) and `groups`, each with its `tokens` and every `location` (`path`, `start_line`, `end_line`). `--format github` prints an annotation on every location, an error when the check fails and a warning when the duplication is within the allowance.
+
+## Rust test structure (`loom-gate rstest`)
+
+    loom-gate rstest [--root .] [--format text|json|github] [--exclude GLOB]…
+
+Fails when plain `#[test]` functions of the same module:
+
+- **`repeated_test`**: two or more have bodies that are the same up to literals (and are at least 3 lines): they are one `#[rstest]` with a `#[case]` each;
+- **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper (`let store = open();`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument.
+
+Tests that are already `#[rstest]`, `#[case]` or `#[fixture]` are not looked at. Exit 1 when there is a violation.

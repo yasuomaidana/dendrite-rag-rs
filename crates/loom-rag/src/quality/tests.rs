@@ -321,3 +321,44 @@ fn reads_the_shared_directives_example() {
         }
     );
 }
+
+#[test]
+fn duplication_config_defaults_overrides_and_errors() {
+    use crate::quality::DupConfig;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DIRECTIVES_PATH);
+    assert_eq!(
+        DupConfig::load(&path).unwrap(),
+        DupConfig::default(),
+        "a missing file means the defaults"
+    );
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "[duplication]\nmax_percent = 2.5\nmin_tokens = 30\nmin_lines = 4\ninclude_tests = false\n",
+    )
+    .unwrap();
+    let cfg = DupConfig::load(&path).unwrap();
+    assert_eq!(
+        (cfg.max_percent, cfg.min_tokens, cfg.min_lines, cfg.include_tests),
+        (2.5, 30, 4, false)
+    );
+    for (body, want) in [
+        ("[duplication]\nmax_percent = 120.0\n", "max_percent"),
+        ("[duplication]\nmin_tokens = 3\n", "min_tokens"),
+        ("[duplication]\nmin_lines = 1\n", "min_lines"),
+        ("[duplication\n", "not a valid directives file"),
+    ] {
+        fs::write(&path, body).unwrap();
+        assert!(
+            DupConfig::load(&path).unwrap_err().to_string().contains(want),
+            "{body}"
+        );
+    }
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specs/directives.example.toml");
+    assert_eq!(
+        DupConfig::load(&example).unwrap(),
+        DupConfig::default(),
+        "the example is the Go side's defaults"
+    );
+}

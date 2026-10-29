@@ -241,3 +241,54 @@ fn quality_loc_reports_production_lines_against_the_directives() {
     let r = call(&mut s, "quality.loc", json!({"nothing": 1}));
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
 }
+
+#[test]
+fn quality_clones_and_rstest_report_through_the_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let fun = |name: &str, k: i32| {
+        format!(
+            "fn {name}(items: &[i32]) -> i32 {{\n    let mut total = {k};\n    for item in items {{\n        if *item > {k} {{\n            total += item * 2;\n        }}\n    }}\n    total\n}}\n"
+        )
+    };
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), fun("alpha", 1)).unwrap();
+    std::fs::write(dir.path().join("src/b.rs"), fun("beta", 2)).unwrap();
+    let mut s = Server::new(Config::default());
+
+    let r = call(&mut s, "quality.clones", json!({"root": root, "min_tokens": 10}));
+    assert_eq!(r["result"]["totals"]["groups"], 1);
+    assert_eq!(r["result"]["groups"][0]["locations"][0]["path"], "src/a.rs");
+    let r = call(
+        &mut s,
+        "quality.clones",
+        json!({"root": root, "min_tokens": 10, "max_percent": 100.0, "include_tests": false, "min_lines": 5, "exclude": ["src/b.rs"]}),
+    );
+    assert_eq!(r["result"]["totals"]["groups"], 0);
+    let r = call(&mut s, "quality.clones", json!({"root": root, "min_tokens": 1}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    std::fs::create_dir_all(dir.path().join(".github/dendrite")).unwrap();
+    std::fs::write(
+        dir.path().join(".github/dendrite/directives.toml"),
+        "[duplication\n",
+    )
+    .unwrap();
+    assert_eq!(
+        call(&mut s, "quality.clones", json!({"root": root}))["error"]["code"],
+        code::INVALID_PARAMS
+    );
+
+    let r = call(&mut s, "quality.rstest", json!({"root": root}));
+    assert_eq!(r["result"]["files"], 2);
+    assert_eq!(r["result"]["violations"].as_array().unwrap().len(), 0);
+    let r = call(
+        &mut s,
+        "quality.rstest",
+        json!({"root": root, "exclude": ["src/a.rs"]}),
+    );
+    assert_eq!(r["result"]["files"], 1);
+    assert_eq!(
+        call(&mut s, "quality.rstest", json!({"nothing": 1}))["error"]["code"],
+        code::INVALID_PARAMS
+    );
+}

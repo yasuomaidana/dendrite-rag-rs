@@ -343,6 +343,8 @@ impl Server {
                 Ok(json!({ "ranked": ranked }))
             }
             "quality.loc" => quality::loc(params),
+            "quality.clones" => quality::clones(params),
+            "quality.rstest" => quality::rstest(params),
             "graph.communities" => {
                 let p: CommunitiesParams = rpc::params(params)?;
                 let communities = self
