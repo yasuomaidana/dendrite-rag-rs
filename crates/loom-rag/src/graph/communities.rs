@@ -133,7 +133,9 @@ fn common_dir(paths: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::graph::tests::graph_of;
+    use rstest::{fixture, rstest};
 
+    #[fixture]
     fn sources() -> Vec<(&'static str, &'static str)> {
         vec![
             ("pkg/a/a1.go", "package a\n\nfunc A1() { A2(); A3() }\n"),
@@ -146,9 +148,9 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn groups_packages_and_labels_them() {
-        let g = graph_of(&sources(), Some("example.com/m"));
+    #[rstest]
+    fn groups_packages_and_labels_them(sources: Vec<(&'static str, &'static str)>) {
+        let g = graph_of(&sources, Some("example.com/m"));
         let cs = detect(&g, &BTreeMap::new(), 1.0);
         let a = cs
             .iter()
@@ -160,16 +162,16 @@ mod tests {
         assert!(cs.iter().any(|c| c.files == ["README.md"]));
     }
 
-    #[test]
-    fn ids_survive_a_rerun() {
-        let g = graph_of(&sources(), Some("example.com/m"));
+    #[rstest]
+    fn ids_survive_a_rerun(sources: Vec<(&'static str, &'static str)>) {
+        let g = graph_of(&sources, Some("example.com/m"));
         let first = detect(&g, &BTreeMap::new(), 1.0);
         let previous: BTreeMap<String, u32> = first
             .iter()
             .flat_map(|c| c.files.iter().map(move |f| (f.clone(), c.id)))
             .collect();
         // Rename-free change: package b gains a file; a keeps its id.
-        let mut more = sources();
+        let mut more = sources;
         more.push(("pkg/b/b4.go", "package b\n\nfunc B4() { B1() }\n"));
         let second = detect(&graph_of(&more, Some("example.com/m")), &previous, 1.0);
         let id_of = |cs: &[Community], f: &str| cs.iter().find(|c| c.files.contains(&f.into())).unwrap().id;

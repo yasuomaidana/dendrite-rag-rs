@@ -116,3 +116,11 @@ fn a_directory_check_counts_rust_files_and_orders_the_findings() {
     let excluded = check_rstest(dir.path(), &["src/*.rs".to_string()]).unwrap();
     assert!(excluded.passed() && excluded.files == 0);
 }
+
+#[rstest]
+#[case::builder_with_arguments(
+    "mod tests {\n    fn open(dir: &Path) -> Store {\n        Store::new(dir)\n    }\n    #[test]\n    fn writes() {\n        let store = open(&a);\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let store = open(&a);\n        store.get(1);\n    }\n}\n"
+)]
+fn a_helper_that_takes_arguments_is_a_builder(#[case] src: &str) {
+    assert!(kinds(src).is_empty());
+}

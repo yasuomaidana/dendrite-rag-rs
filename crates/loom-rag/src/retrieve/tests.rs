@@ -13,6 +13,7 @@ fn engine(root: &std::path::Path) -> Engine {
     e
 }
 
+#[fixture]
 fn calls_project() -> tempfile::TempDir {
     let dir = project();
     fs::write(
@@ -127,10 +128,9 @@ fn adjacent_spans_merge() {
     assert_eq!((first.end_line, first.content.as_str()), (9, "a\nb"));
 }
 
-#[test]
-fn hybrid_degrades_to_lexical_when_query_embedding_fails() {
+#[rstest]
+fn hybrid_degrades_to_lexical_when_query_embedding_fails(#[from(calls_project)] dir: tempfile::TempDir) {
     use std::sync::atomic::Ordering;
-    let dir = calls_project();
     let embedder = HashEmbedder::new();
     embedder.fail_queries.store(true, Ordering::SeqCst);
     let mut e = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder))).unwrap();
@@ -145,10 +145,9 @@ fn hybrid_degrades_to_lexical_when_query_embedding_fails() {
     assert!(matches!(e.search("LocateBinary", &dense), Err(Error::Embed(_))));
 }
 
-#[test]
-fn community_summaries_rank_and_expand_to_code() {
+#[rstest]
+fn community_summaries_rank_and_expand_to_code(#[from(calls_project)] dir: tempfile::TempDir) {
     use crate::graph::summary::is_summary;
-    let dir = calls_project();
     let mut e = engine(dir.path());
     let summaries = |e: &Engine| {
         let mut n = 0;
@@ -268,9 +267,8 @@ fn context_packs_follow_the_corpus(calls_engine: (tempfile::TempDir, Engine)) {
     assert_eq!(all, plain, "context() searches both corpora");
 }
 
-#[test]
-fn mixed_packs_keep_room_for_documentation() {
-    let dir = calls_project();
+#[rstest]
+fn mixed_packs_keep_room_for_documentation(#[from(calls_project)] dir: tempfile::TempDir) {
     for i in 0..12 {
         fs::write(
             dir.path().join(format!("pkg/sidecar/start{i}.go")),
@@ -358,9 +356,8 @@ fn mixed_packs_without_code_are_documentation_packs() {
     assert_eq!(all, docs);
 }
 
-#[test]
-fn identical_text_is_returned_once_with_its_copies() {
-    let dir = calls_project();
+#[rstest]
+fn identical_text_is_returned_once_with_its_copies(#[from(calls_project)] dir: tempfile::TempDir) {
     let body = "package vendored\n\n// LocateBinary finds a sidecar executable.\nfunc LocateBinary(name string) string { return name }\n";
     fs::create_dir_all(dir.path().join("third_party")).unwrap();
     fs::write(dir.path().join("pkg/sidecar/copy.go"), body).unwrap();
@@ -417,9 +414,8 @@ impl crate::rerank::Reranker for KeywordReranker {
     }
 }
 
-#[test]
-fn abstains_when_the_reranker_finds_nothing_relevant() {
-    let dir = calls_project();
+#[rstest]
+fn abstains_when_the_reranker_finds_nothing_relevant(#[from(calls_project)] dir: tempfile::TempDir) {
     let mut cfg = Config::default();
     cfg.rerank.abstain = Some(0.5);
     let mut e = Engine::open_with_embedder(dir.path(), cfg, Some(Box::new(HashEmbedder::new()))).unwrap();

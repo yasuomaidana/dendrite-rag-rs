@@ -1,6 +1,7 @@
 //! The ledger choice end to end: the store and an engine on the SQLite ledger.
 
 use super::*;
+use rstest::{fixture, rstest};
 
 #[test]
 fn the_store_opens_the_sqlite_ledger_when_asked() {
@@ -12,6 +13,7 @@ fn the_store_opens_the_sqlite_ledger_when_asked() {
     assert!(!dir.path().join("ledger.redb").exists());
 }
 
+#[fixture]
 fn sqlite_config() -> Config {
     Config {
         storage: StorageConfig {
@@ -22,12 +24,12 @@ fn sqlite_config() -> Config {
     }
 }
 
-#[test]
-fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one() {
+#[rstest]
+fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one(sqlite_config: Config) {
     let sqlite_dir = project();
     let redb_dir = project();
     let embedder = || Some(Box::new(HashEmbedder::new()) as Box<dyn crate::embed::Embedder>);
-    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), sqlite_config(), embedder()).unwrap();
+    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), sqlite_config, embedder()).unwrap();
     let mut redb = Engine::open_with_embedder(redb_dir.path(), Config::default(), embedder()).unwrap();
 
     let a = sqlite.index(false).unwrap();
@@ -59,15 +61,15 @@ fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one() {
     );
 
     drop(sqlite);
-    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), sqlite_config(), embedder()).unwrap();
+    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), sqlite_config, embedder()).unwrap();
     let r = sqlite.index(false).unwrap();
     assert_eq!((r.files_changed, r.chunks_added, r.chunks_removed), (0, 0, 0));
     assert_eq!(sqlite.status().unwrap().chunks, st.chunks);
     assert_eq!(paths(&sqlite, "locate binary")[0], "pkg/sidecar/sidecar.go");
 }
 
-#[test]
-fn switching_from_redb_to_sqlite_does_not_re_embed() {
+#[rstest]
+fn switching_from_redb_to_sqlite_does_not_re_embed(sqlite_config: Config) {
     let dir = project();
     let embedder = HashEmbedder::new();
     let calls = embedder.calls.clone();
@@ -78,7 +80,7 @@ fn switching_from_redb_to_sqlite_does_not_re_embed() {
 
     let embedder = HashEmbedder::new();
     let calls = embedder.calls.clone();
-    let mut e = Engine::open_with_embedder(dir.path(), sqlite_config(), Some(Box::new(embedder))).unwrap();
+    let mut e = Engine::open_with_embedder(dir.path(), sqlite_config, Some(Box::new(embedder))).unwrap();
     let r = e.index(false).unwrap();
     assert_eq!(r.files_changed, 3, "the new ledger starts without files");
     assert_eq!(

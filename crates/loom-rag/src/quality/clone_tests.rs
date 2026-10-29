@@ -10,6 +10,7 @@ const ALPHA: &str = "fn alpha(items: &[i32]) -> i32 {\n    let mut total = 0;\n 
 const BETA: &str = "fn beta(values: &[i32]) -> i32 {\n    let mut sum = 5;\n    for v in values {\n        if *v > 99 {\n            sum += v * 3;\n        }\n    }\n    sum\n}\n";
 const DIFFERENT: &str = "fn gamma(items: &[i32]) -> usize {\n    let mut count = 0;\n    for item in items {\n        while *item > 10 {\n            count += 1;\n            break;\n        }\n    }\n    count\n}\n";
 
+#[fixture]
 fn small() -> DupConfig {
     DupConfig {
         min_lines: 5,
@@ -32,10 +33,10 @@ fn run(dir: &Path, cfg: &DupConfig) -> CloneReport {
     check_clones(dir, cfg, &[]).unwrap()
 }
 
-#[test]
-fn finds_blocks_that_differ_only_in_names_and_constants() {
+#[rstest]
+fn finds_blocks_that_differ_only_in_names_and_constants(small: DupConfig) {
     let dir = project(&[("src/a.rs", ALPHA), ("src/b.rs", BETA)]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     assert_eq!(report.groups.len(), 1, "{}", report.to_text());
     let places: Vec<(&str, usize, usize)> = report.groups[0]
         .locations
@@ -49,36 +50,36 @@ fn finds_blocks_that_differ_only_in_names_and_constants() {
     assert!(!report.passed());
 }
 
-#[test]
-fn different_logic_is_not_a_clone() {
+#[rstest]
+fn different_logic_is_not_a_clone(small: DupConfig) {
     let dir = project(&[("src/a.rs", ALPHA), ("src/c.rs", DIFFERENT)]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     assert!(report.groups.is_empty(), "{}", report.to_text());
     assert!(report.passed());
     assert_eq!(report.totals.percent, 0.0);
 }
 
-#[test]
-fn finds_copies_inside_one_file_and_ignores_comments() {
+#[rstest]
+fn finds_copies_inside_one_file_and_ignores_comments(small: DupConfig) {
     let commented = BETA.replace(
         "let mut sum = 5;",
         "// start from five\n    let mut sum = 5; // five",
     );
     let dir = project(&[("src/a.rs", &format!("{ALPHA}\n{commented}"))]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     assert_eq!(report.groups.len(), 1);
     assert_eq!(report.groups[0].locations.len(), 2);
     assert!(report.groups[0].locations.iter().all(|l| l.path == "src/a.rs"));
 }
 
-#[test]
-fn reports_the_largest_repeated_block_not_the_blocks_inside_it() {
+#[rstest]
+fn reports_the_largest_repeated_block_not_the_blocks_inside_it(small: DupConfig) {
     let dir = project(&[
         ("src/a.rs", ALPHA),
         ("src/b.rs", BETA),
         ("src/c.rs", &ALPHA.replace("alpha", "again")),
     ]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     assert_eq!(
         report.groups.len(),
         1,
@@ -109,14 +110,14 @@ fn only_blocks_over_the_thresholds_count(
     assert_eq!(report.groups.len(), groups);
 }
 
-#[test]
-fn the_allowance_decides_whether_duplication_fails() {
+#[rstest]
+fn the_allowance_decides_whether_duplication_fails(small: DupConfig) {
     let dir = project(&[("src/a.rs", ALPHA), ("src/b.rs", BETA), ("src/c.rs", DIFFERENT)]);
     let report = run(
         dir.path(),
         &DupConfig {
             max_percent: 0.0,
-            ..small()
+            ..small
         },
     );
     assert!(!report.passed());
@@ -124,7 +125,7 @@ fn the_allowance_decides_whether_duplication_fails() {
         dir.path(),
         &DupConfig {
             max_percent: 80.0,
-            ..small()
+            ..small
         },
     );
     assert!(lenient.passed(), "{:.1}% is within 80%", lenient.totals.percent);
@@ -167,8 +168,8 @@ fn test_code_is_checked_only_when_asked(tests_only_copies: tempfile::TempDir) {
     assert!(without.passed());
 }
 
-#[test]
-fn works_across_languages() {
+#[rstest]
+fn works_across_languages(small: DupConfig) {
     let py = "def alpha(items):\n    total = 0\n    for item in items:\n        if item > 10:\n            total += item * 2\n    return total\n";
     let go = "package a\n\nfunc Alpha(items []int) int {\n\ttotal := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\ttotal += item * 2\n\t\t}\n\t}\n\treturn total\n}\n";
     let dir = project(&[
@@ -177,7 +178,7 @@ fn works_across_languages() {
         ("a.go", go),
         ("b.go", &go.replace("Alpha", "Beta").replace("10", "99")),
     ]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     let mut kinds: Vec<&str> = report
         .groups
         .iter()
@@ -187,10 +188,10 @@ fn works_across_languages() {
     assert_eq!(kinds, vec!["go", "py"], "{}", report.to_text());
 }
 
-#[test]
-fn renders_text_json_and_github_annotations() {
+#[rstest]
+fn renders_text_json_and_github_annotations(small: DupConfig) {
     let dir = project(&[("src/a.rs", ALPHA), ("src/b.rs", BETA)]);
-    let report = run(dir.path(), &small());
+    let report = run(dir.path(), &small);
     let text = report.to_text();
     assert!(
         text.contains("clone #1") && text.contains("src/a.rs:1-9") && text.contains("src/b.rs:1-9"),
@@ -204,7 +205,7 @@ fn renders_text_json_and_github_annotations() {
         dir.path(),
         &DupConfig {
             max_percent: 100.0,
-            ..small()
+            ..small
         },
     );
     assert!(
@@ -217,24 +218,24 @@ fn renders_text_json_and_github_annotations() {
     assert_eq!(json["groups"][0]["locations"][1]["path"], "src/b.rs");
 }
 
-#[test]
-fn skips_build_output_and_honours_excludes() {
+#[rstest]
+fn skips_build_output_and_honours_excludes(small: DupConfig) {
     let dir = project(&[
         ("src/a.rs", ALPHA),
         ("target/b.rs", BETA),
         ("vendor_copy/c.rs", BETA),
     ]);
     assert!(
-        run(dir.path(), &small()).groups.len() == 1,
+        run(dir.path(), &small).groups.len() == 1,
         "target/ is never read, vendor_copy/ is"
     );
-    let excluded = check_clones(dir.path(), &small(), &["vendor_copy/**".to_string()]).unwrap();
+    let excluded = check_clones(dir.path(), &small, &["vendor_copy/**".to_string()]).unwrap();
     assert!(excluded.groups.is_empty());
 }
 
-#[test]
-fn an_empty_project_has_nothing_duplicated() {
-    let report = run(project(&[("README.md", "# nothing\n")]).path(), &small());
+#[rstest]
+fn an_empty_project_has_nothing_duplicated(small: DupConfig) {
+    let report = run(project(&[("README.md", "# nothing\n")]).path(), &small);
     assert_eq!(
         (report.totals.files, report.totals.lines, report.totals.percent),
         (0, 0, 0.0)

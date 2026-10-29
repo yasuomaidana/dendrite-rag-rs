@@ -2,6 +2,7 @@ use super::*;
 use crate::rpc::handle_line;
 use loom_rag::embed::Backend;
 use loom_rag::testutil::project;
+use rstest::{fixture, rstest};
 
 fn call(s: &mut Server, method: &str, params: Value) -> Value {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
@@ -114,24 +115,28 @@ fn full_method_table() {
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
 }
 
+#[fixture]
 fn lexical_server() -> Server {
     let mut cfg = Config::default();
     cfg.embed.backend = Backend::None;
     Server::new(cfg)
 }
 
-#[test]
-fn an_idle_engine_is_closed_and_releases_the_project_for_another_process() {
+#[rstest]
+fn an_idle_engine_is_closed_and_releases_the_project_for_another_process(
+    lexical_server: Server,
+    #[from(lexical_server)] second_process: Server,
+) {
     let dir = project();
     let root = dir.path().to_str().unwrap();
-    let mut holder = lexical_server().with_timing(Some(Duration::from_millis(30)), Duration::ZERO);
+    let mut holder = lexical_server.with_timing(Some(Duration::from_millis(30)), Duration::ZERO);
     assert_eq!(
         call(&mut holder, "index", json!({"root": root}))["result"]["files_scanned"],
         3
     );
 
     // While the holder keeps the engine open, a second process cannot take the project.
-    let mut other = lexical_server().with_timing(None, Duration::ZERO);
+    let mut other = second_process.with_timing(None, Duration::ZERO);
     let r = call(&mut other, "status", json!({"root": root}));
     assert!(r["error"].is_object(), "the project was not locked: {r}");
 
@@ -156,16 +161,19 @@ fn an_idle_engine_is_closed_and_releases_the_project_for_another_process() {
     );
 }
 
-#[test]
-fn opening_a_locked_project_waits_for_the_holder_to_release_it() {
+#[rstest]
+fn opening_a_locked_project_waits_for_the_holder_to_release_it(
+    lexical_server: Server,
+    #[from(lexical_server)] waiting_process: Server,
+) {
     let dir = project();
     let root = dir.path().to_str().unwrap().to_string();
-    let mut holder = lexical_server().with_timing(Some(Duration::from_millis(20)), Duration::ZERO);
+    let mut holder = lexical_server.with_timing(Some(Duration::from_millis(20)), Duration::ZERO);
     call(&mut holder, "index", json!({"root": root}));
 
     let waiter_root = root.clone();
     let waiter = std::thread::spawn(move || {
-        let mut other = lexical_server().with_timing(None, Duration::from_secs(10));
+        let mut other = waiting_process.with_timing(None, Duration::from_secs(10));
         let started = Instant::now();
         let r = call(&mut other, "status", json!({"root": waiter_root}));
         (r, started.elapsed())
@@ -185,11 +193,11 @@ fn opening_a_locked_project_waits_for_the_holder_to_release_it() {
     );
 }
 
-#[test]
-fn engines_are_kept_when_idle_closing_is_disabled() {
+#[rstest]
+fn engines_are_kept_when_idle_closing_is_disabled(lexical_server: Server) {
     let dir = project();
     let root = dir.path().to_str().unwrap();
-    let mut s = lexical_server().with_timing(None, Duration::ZERO);
+    let mut s = lexical_server.with_timing(None, Duration::ZERO);
     call(&mut s, "index", json!({"root": root}));
     std::thread::sleep(Duration::from_millis(20));
     s.idle();

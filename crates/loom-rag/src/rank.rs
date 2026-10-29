@@ -155,7 +155,9 @@ mod tests {
     use super::*;
     use crate::engine::Config;
     use crate::testutil::HashEmbedder;
+    use rstest::{fixture, rstest};
 
+    #[fixture]
     fn catalogue() -> Vec<Document> {
         [
             (
@@ -179,33 +181,31 @@ mod tests {
         .collect()
     }
 
-    #[test]
-    fn ranks_supplied_documents_and_caches_their_embeddings() {
+    #[rstest]
+    fn ranks_supplied_documents_and_caches_their_embeddings(catalogue: Vec<Document>) {
         let dir = tempfile::tempdir().unwrap();
         let embedder = HashEmbedder::new();
         let calls = embedder.calls.clone();
         let e = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder))).unwrap();
-        let r = e
-            .rank(&catalogue(), "design the security architecture", 0)
-            .unwrap();
+        let r = e.rank(&catalogue, "design the security architecture", 0).unwrap();
         assert_eq!(r[0].id, "agy");
         assert_eq!(r.len(), 3);
         assert!(r[0].lexical > 0.0 && r[0].dense.is_some());
         let after_first = calls.load(Ordering::SeqCst);
-        e.rank(&catalogue(), "refactoring with git commits", 1).unwrap();
+        e.rank(&catalogue, "refactoring with git commits", 1).unwrap();
         // Only the new query is embedded: the catalogue comes from the cache.
         assert_eq!(calls.load(Ordering::SeqCst), after_first + 1);
         assert_eq!(
-            e.rank(&catalogue(), "refactoring with git commits", 1).unwrap()[0].id,
+            e.rank(&catalogue, "refactoring with git commits", 1).unwrap()[0].id,
             "aider"
         );
     }
 
-    #[test]
-    fn falls_back_to_lexical_without_an_embedder() {
+    #[rstest]
+    fn falls_back_to_lexical_without_an_embedder(catalogue: Vec<Document>) {
         let dir = tempfile::tempdir().unwrap();
         let e = Engine::open_with_embedder(dir.path(), Config::default(), None).unwrap();
-        let r = e.rank(&catalogue(), "browser sandbox", 2).unwrap();
+        let r = e.rank(&catalogue, "browser sandbox", 2).unwrap();
         assert_eq!(r[0].id, "openhands");
         assert!(r[0].dense.is_none());
         assert_eq!(r.len(), 2);

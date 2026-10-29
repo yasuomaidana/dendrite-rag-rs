@@ -1,5 +1,6 @@
 //! The `loom-gate` binary end to end: exit codes and output formats.
 
+use rstest::{fixture, rstest};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -137,6 +138,7 @@ fn run_cmd(command: &str, root: &Path, extra: &[&str]) -> Output {
     gate(&args)
 }
 
+#[fixture]
 fn cloned_project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "src/a.rs", ALPHA);
@@ -144,9 +146,8 @@ fn cloned_project() -> tempfile::TempDir {
     dir
 }
 
-#[test]
-fn clones_fail_over_the_allowance_and_pass_within_it() {
-    let dir = cloned_project();
+#[rstest]
+fn clones_fail_over_the_allowance_and_pass_within_it(#[from(cloned_project)] dir: tempfile::TempDir) {
     let out = run_cmd("clones", dir.path(), &["--min-tokens", "10"]);
     assert_eq!(out.status.code(), Some(1));
     let text = String::from_utf8_lossy(&out.stdout);
@@ -173,9 +174,8 @@ fn clones_fail_over_the_allowance_and_pass_within_it() {
     );
 }
 
-#[test]
-fn clones_read_the_directives_and_print_json_and_annotations() {
-    let dir = cloned_project();
+#[rstest]
+fn clones_read_the_directives_and_print_json_and_annotations(#[from(cloned_project)] dir: tempfile::TempDir) {
     write(
         dir.path(),
         ".github/dendrite/directives.toml",
@@ -212,8 +212,8 @@ fn clones_read_the_directives_and_print_json_and_annotations() {
     );
 }
 
-#[test]
-fn clones_can_leave_out_tests_and_files() {
+#[rstest]
+fn clones_can_leave_out_tests_and_files(#[from(cloned_project)] src: tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "tests/a.rs", ALPHA);
     write(dir.path(), "tests/b.rs", BETA);
@@ -233,7 +233,6 @@ fn clones_can_leave_out_tests_and_files() {
         .code(),
         Some(0)
     );
-    let src = cloned_project();
     assert_eq!(
         run_cmd(
             "clones",

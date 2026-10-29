@@ -91,7 +91,7 @@ The JSON report has `schema`, the limits used, `totals` (`files`, `lines`, `dupl
 Fails when plain `#[test]` functions of the same module:
 
 - **`repeated_test`**: two or more have bodies that are the same up to literals (and are at least 3 lines): they are one `#[rstest]` with a `#[case]` each;
-- **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper (`let store = open();`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument.
+- **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper that takes no parameters (`let store = open();`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument. A helper with parameters is a builder each test calls with what it needs, and is left alone.
 
 - **`missing_rstest`**: a crate with plain `#[test]` functions has no `rstest` in its `[dev-dependencies]`: add `rstest = "0.28.0"`. A `{ workspace = true }` dependency is read from `[workspace.dependencies]`;
 - **`outdated_rstest`**: the declared version is older than 0.28, so the current `#[case]`, `#[values]`, `#[files]`, `#[once]`, `#[future]` and `#[timeout]` options are not available. A path or git dependency has no version to compare and passes.

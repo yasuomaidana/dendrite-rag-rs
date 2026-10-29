@@ -3283,6 +3283,7 @@ dependencies = [
  "clap",
  "dendrite-rag",
  "loom-rag",
+ "rstest",
  "serde",
  "serde_json",
  "tempfile",
@@ -3295,6 +3296,7 @@ dependencies = [
  "anyhow",
  "clap",
  "loom-rag",
+ "rstest",
  "serde_json",
  "tempfile",
 ]

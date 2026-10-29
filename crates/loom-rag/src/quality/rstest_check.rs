@@ -145,6 +145,7 @@ struct TestFn<'a> {
     name: String,
     line: usize,
     body: Node<'a>,
+    params: usize,
 }
 
 fn function_name(node: Node, src: &[u8]) -> String {
@@ -169,6 +170,9 @@ fn scan<'a>(container: Node<'a>, src: &[u8], out: &mut Vec<(Vec<TestFn<'a>>, Vec
                     name: function_name(*child, src),
                     line: child.start_position().row + 1,
                     body,
+                    params: child
+                        .child_by_field_name("parameters")
+                        .map_or(0, |p| p.named_child_count()),
                 };
                 if r.plain_test {
                     tests.push(f);
@@ -293,10 +297,13 @@ fn repeated_tests(path: &str, tests: &[TestFn], src: &[u8]) -> Vec<Violation> {
         .collect()
 }
 
-/// Undecorated functions whose result two or more tests bind with `let`: setup that should be a `#[fixture]`.
+/// Undecorated functions without parameters whose result two or more tests bind with `let`: setup that
+/// should be a `#[fixture]`. A helper that takes arguments is a builder, which the tests call with what each
+/// one needs, so it is left alone.
 fn helpers_to_fixtures(path: &str, tests: &[TestFn], helpers: &[TestFn], src: &[u8]) -> Vec<Violation> {
     helpers
         .iter()
+        .filter(|h| h.params == 0)
         .filter_map(|h| {
             let users: Vec<&str> = tests
                 .iter()
