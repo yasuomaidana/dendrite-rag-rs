@@ -11,6 +11,7 @@ pub mod loc;
 pub mod regions;
 pub mod report;
 pub mod rstest_check;
+pub mod rstest_dep;
 pub mod syntax;
 
 pub use check::{Status, check_loc};
@@ -22,6 +23,8 @@ pub use rstest_check::{RstestReport, check_rstest};
 
 #[cfg(test)]
 mod clone_tests;
+#[cfg(test)]
+mod rstest_dep_tests;
 #[cfg(test)]
 mod rstest_tests;
 #[cfg(test)]

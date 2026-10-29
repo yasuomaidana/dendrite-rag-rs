@@ -93,4 +93,9 @@ Fails when plain `#[test]` functions of the same module:
 - **`repeated_test`**: two or more have bodies that are the same up to literals (and are at least 3 lines): they are one `#[rstest]` with a `#[case]` each;
 - **`helper_should_be_fixture`**: two or more bind the result of the same undecorated helper (`let store = open();`): the helper is a `#[fixture]` that `#[rstest]` tests take as an argument.
 
+- **`missing_rstest`**: a crate with plain `#[test]` functions has no `rstest` in its `[dev-dependencies]`: add `rstest = "0.28.0"`. A `{ workspace = true }` dependency is read from `[workspace.dependencies]`;
+- **`outdated_rstest`**: the declared version is older than 0.28, so the current `#[case]`, `#[values]`, `#[files]`, `#[once]`, `#[future]` and `#[timeout]` options are not available. A path or git dependency has no version to compare and passes.
+
+The rule is to use the crate, not to write functions that imitate it: `#[case]` (`#[case::name]` to name a case) for tests that differ in constants, `#[values]` for a matrix of lists, `#[fixture]` (with `#[once]` to share one value, `#[with(..)]` to vary it) for setup, `#[files]` for a table of files, `#[future]` with `#[awt]` and `#[timeout]` for async tests. These violations point at the `Cargo.toml`, once per crate.
+
 Tests that are already `#[rstest]`, `#[case]` or `#[fixture]` are not looked at. Exit 1 when there is a violation.

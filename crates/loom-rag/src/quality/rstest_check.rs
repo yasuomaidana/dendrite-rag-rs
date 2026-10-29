@@ -10,13 +10,14 @@ use serde::Serialize;
 use tree_sitter::{Node, Parser};
 
 use crate::lang::Lang;
+use crate::quality::rstest_dep::check_manifest;
 use crate::quality::syntax::{Limits, Normalize, walk};
 use crate::walk::{WalkOptions, walk as walk_tree};
 
 /// A test that should be restructured.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Violation {
-    /// `repeated_test` or `helper_should_be_fixture`.
+    /// `repeated_test`, `helper_should_be_fixture`, `missing_rstest` or `outdated_rstest`.
     pub kind: String,
     pub path: String,
     pub line: usize,
@@ -81,14 +82,24 @@ pub fn check_rstest(root: &Path, exclude: &[String]) -> anyhow::Result<RstestRep
         },
     )?;
     let rust: Vec<_> = files.iter().filter(|f| f.lang == Lang::Rust).collect();
-    let mut violations: Vec<Violation> = rust
+    let checked: Vec<(Vec<Violation>, Option<Violation>)> = rust
         .par_iter()
         .filter_map(|f| {
             let bytes = std::fs::read(&f.abs).ok()?;
-            Some(check_source(&f.path, &String::from_utf8_lossy(&bytes)))
+            let text = String::from_utf8_lossy(&bytes);
+            let dependency = has_plain_test(&text)
+                .then(|| check_manifest(root, &f.abs))
+                .flatten();
+            Some((check_source(&f.path, &text), dependency))
         })
-        .flatten()
         .collect();
+    let mut violations: Vec<Violation> = Vec::new();
+    for (found, dependency) in checked {
+        violations.extend(found);
+        if let Some(d) = dependency.filter(|d| !violations.contains(d)) {
+            violations.push(d);
+        }
+    }
     violations.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
     Ok(RstestReport {
         schema: 1,
@@ -207,6 +218,23 @@ fn calls(value: Node, helper: &str, src: &[u8]) -> bool {
     false
 }
 
+/// Does the file hold a plain `#[test]` function? Those are the tests the rstest crate should replace.
+fn has_plain_test(text: &str) -> bool {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&Lang::Rust.grammar().expect("Rust has a grammar"))
+        .is_err()
+    {
+        return false;
+    }
+    let Some(tree) = parser.parse(text, None) else {
+        return false;
+    };
+    let mut containers = Vec::new();
+    scan(tree.root_node(), text.as_bytes(), &mut containers);
+    containers.iter().any(|(tests, _)| !tests.is_empty())
+}
+
 /// Checks one Rust source file.
 pub fn check_source(path: &str, text: &str) -> Vec<Violation> {
     let mut parser = Parser::new();
@@ -257,7 +285,7 @@ fn repeated_tests(path: &str, tests: &[TestFn], src: &[u8]) -> Vec<Violation> {
                 path: path.to_string(),
                 line: g.iter().map(|t| t.line).min().unwrap_or(1),
                 message: format!(
-                    "{} differ only in constants; make one #[rstest] with a #[case] each",
+                    "{} differ only in constants; make one #[rstest] with a #[case] each (#[case::name] to name them, #[values] when they cross several lists)",
                     names.join(", ")
                 ),
             }
@@ -280,7 +308,7 @@ fn helpers_to_fixtures(path: &str, tests: &[TestFn], helpers: &[TestFn], src: &[
                 path: path.to_string(),
                 line: h.line,
                 message: format!(
-                    "{}() sets up {}; make it a #[fixture] and take it as an argument of #[rstest]",
+                    "{}() sets up {}; make it a #[fixture] and take it as an argument of #[rstest] (#[once] to share one value, #[with(..)] to vary it)",
                     h.name,
                     users.join(", ")
                 ),
