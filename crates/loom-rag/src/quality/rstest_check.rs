@@ -191,35 +191,39 @@ fn scan<'a>(container: Node<'a>, src: &[u8], out: &mut Vec<(Vec<TestFn<'a>>, Vec
     out.push((tests, helpers));
 }
 
-/// Does the function `body` bind the result of calling `helper` (`let x = helper(...)`)?
-fn binds_result_of(body: Node, helper: &str, src: &[u8]) -> bool {
+/// The arguments (whitespace removed) of the first `let x = helper(...)` in `body`, if there is one.
+fn binding_args(body: Node, helper: &str, src: &[u8]) -> Option<String> {
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
-        if n.kind() == "let_declaration"
-            && n.child_by_field_name("value")
-                .is_some_and(|v| calls(v, helper, src))
-        {
-            return true;
+        if n.kind() == "let_declaration" {
+            if let Some(args) = n
+                .child_by_field_name("value")
+                .and_then(|v| call_args(v, helper, src))
+            {
+                return Some(args);
+            }
         }
         let mut cursor = n.walk();
         stack.extend(n.children(&mut cursor));
     }
-    false
+    None
 }
 
-fn calls(value: Node, helper: &str, src: &[u8]) -> bool {
+fn call_args(value: Node, helper: &str, src: &[u8]) -> Option<String> {
     let mut stack = vec![value];
     while let Some(n) = stack.pop() {
         if n.kind() == "call_expression"
             && n.child_by_field_name("function")
                 .is_some_and(|f| &src[f.byte_range()] == helper.as_bytes())
         {
-            return true;
+            let args = n.child_by_field_name("arguments")?;
+            let text = std::str::from_utf8(&src[args.byte_range()]).unwrap_or("");
+            return Some(text.split_whitespace().collect());
         }
         let mut cursor = n.walk();
         stack.extend(n.children(&mut cursor));
     }
-    false
+    None
 }
 
 /// Does the file hold a plain `#[test]` function? Those are the tests the rstest crate should replace.
@@ -297,25 +301,32 @@ fn repeated_tests(path: &str, tests: &[TestFn], src: &[u8]) -> Vec<Violation> {
         .collect()
 }
 
-/// Undecorated functions without parameters whose result two or more tests bind with `let`: setup that
-/// should be a `#[fixture]`. A helper that takes arguments is a builder, which the tests call with what each
-/// one needs, so it is left alone.
+/// The tests that repeat the same setup through `helper`: every test that binds it when it takes no
+/// parameters, and those that bind it with the same arguments when it does (`open(dir.path())`).
+fn repeated_users<'a>(helper: &TestFn, tests: &'a [TestFn], src: &[u8]) -> Vec<&'a str> {
+    let mut by_args: HashMap<String, Vec<&str>> = HashMap::new();
+    for t in tests {
+        if let Some(args) = binding_args(t.body, &helper.name, src) {
+            let key = if helper.params == 0 { String::new() } else { args };
+            by_args.entry(key).or_default().push(t.name.as_str());
+        }
+    }
+    by_args.into_values().max_by_key(Vec::len).unwrap_or_default()
+}
+
+/// Undecorated functions whose result two or more tests bind with `let`, with the same arguments: setup that
+/// should be a `#[fixture]` (a fixture of fixtures, or `#[with(..)]` for constant arguments).
 fn helpers_to_fixtures(path: &str, tests: &[TestFn], helpers: &[TestFn], src: &[u8]) -> Vec<Violation> {
     helpers
         .iter()
-        .filter(|h| h.params == 0)
         .filter_map(|h| {
-            let users: Vec<&str> = tests
-                .iter()
-                .filter(|t| binds_result_of(t.body, &h.name, src))
-                .map(|t| t.name.as_str())
-                .collect();
+            let users = repeated_users(h, tests, src);
             (users.len() >= 2).then(|| Violation {
                 kind: "helper_should_be_fixture".into(),
                 path: path.to_string(),
                 line: h.line,
                 message: format!(
-                    "{}() sets up {}; make it a #[fixture] and take it as an argument of #[rstest] (#[once] to share one value, #[with(..)] to vary it)",
+                    "{}() sets up {}; make it a #[fixture] and take it as an argument of #[rstest] (a fixture can take other fixtures; #[with(..)] sets constant arguments, #[once] shares one value)",
                     h.name,
                     users.join(", ")
                 ),

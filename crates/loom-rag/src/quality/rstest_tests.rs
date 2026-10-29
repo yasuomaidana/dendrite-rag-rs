@@ -118,9 +118,14 @@ fn a_directory_check_counts_rust_files_and_orders_the_findings() {
 }
 
 #[rstest]
-#[case::builder_with_arguments(
-    "mod tests {\n    fn open(dir: &Path) -> Store {\n        Store::new(dir)\n    }\n    #[test]\n    fn writes() {\n        let store = open(&a);\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let store = open(&a);\n        store.get(1);\n    }\n}\n"
+#[case::same_arguments_are_setup(
+    "mod tests {\n    fn open(dir: &Path) -> Store {\n        Store::new(dir)\n    }\n    #[test]\n    fn writes() {\n        let store = open(&a);\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let store = open(&a);\n        store.get(1);\n    }\n}\n",
+    1
 )]
-fn a_helper_that_takes_arguments_is_a_builder(#[case] src: &str) {
-    assert!(kinds(src).is_empty());
+#[case::different_arguments_are_a_builder(
+    "mod tests {\n    fn open(dir: &Path) -> Store {\n        Store::new(dir)\n    }\n    #[test]\n    fn writes() {\n        let store = open(&a);\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let store = open(&b);\n        store.get(1);\n    }\n}\n",
+    0
+)]
+fn a_helper_with_parameters_is_setup_only_when_the_calls_repeat(#[case] src: &str, #[case] expected: usize) {
+    assert_eq!(kinds(src).len(), expected);
 }
