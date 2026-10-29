@@ -25,7 +25,10 @@ fn sqlite_config() -> Config {
 }
 
 #[rstest]
-fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one(sqlite_config: Config) {
+fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one(
+    sqlite_config: Config,
+    #[from(sqlite_config)] reopened_config: Config,
+) {
     let sqlite_dir = project();
     let redb_dir = project();
     let embedder = || Some(Box::new(HashEmbedder::new()) as Box<dyn crate::embed::Embedder>);
@@ -61,7 +64,7 @@ fn an_engine_on_the_sqlite_ledger_indexes_and_searches_like_the_redb_one(sqlite_
     );
 
     drop(sqlite);
-    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), sqlite_config, embedder()).unwrap();
+    let mut sqlite = Engine::open_with_embedder(sqlite_dir.path(), reopened_config, embedder()).unwrap();
     let r = sqlite.index(false).unwrap();
     assert_eq!((r.files_changed, r.chunks_added, r.chunks_removed), (0, 0, 0));
     assert_eq!(sqlite.status().unwrap().chunks, st.chunks);
