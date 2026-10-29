@@ -15,6 +15,8 @@ jobs:
       - run: cargo fmt --check
       - name: No file over its production-line limit
         run: cargo run -q -p loom-gate -- loc --format github
+      - name: Tests use the rstest crate
+        run: cargo run -q -p loom-gate -- rstest --format github
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
   memory:
