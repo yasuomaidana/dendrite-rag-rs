@@ -273,8 +273,10 @@ fn the_same_question_twice_is_served_from_warm_caches() {
         second.timings.retrieval.total_ms,
     );
     eprintln!("retrieval: first {t1} ms, second {t2} ms");
+    // Millisecond timers jitter on a busy runner: the warm pass must not be materially slower than
+    // the cold one. That the caches are used is asserted above, by the embed and model call counts.
     assert!(
-        t2 <= t1.max(1) && t2 < 100,
+        t2 <= t1 * 2 + 5 && t2 < 100,
         "warm retrieval: first {t1} ms, second {t2} ms"
     );
 }
