@@ -289,17 +289,18 @@ fn a_budgeted_run_embeds_the_focus_question_first() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let embedder = SlowEmbedder {
         inner: HashEmbedder::new(),
-        delay: std::time::Duration::from_millis(400),
+        delay: std::time::Duration::from_millis(1500),
         seen: seen.clone(),
     };
     let mut e = Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder))).unwrap();
     // The first run indexes lexically; the second has nothing else to do, so its budget
-    // leaves time for exactly one embedding group.
+    // leaves time for exactly one embedding group (a delay well above the budget keeps a slow runner,
+    // which spends part of the budget walking the tree, from running none).
     e.index_with(false, Some(std::time::Duration::ZERO)).unwrap();
     let r = e
         .index_focused(
             false,
-            Some(std::time::Duration::from_millis(200)),
+            Some(std::time::Duration::from_millis(800)),
             Some("LocateBinary sidecar"),
         )
         .unwrap();
