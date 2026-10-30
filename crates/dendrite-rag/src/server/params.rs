@@ -95,22 +95,16 @@ pub(super) struct GrepParams {
     pub(super) max_results: usize,
 }
 
+/// What `graph.communities` (`limit`, `min_size`) and `graph.god_nodes` (`min_in_degree`, `limit`) read.
 #[derive(Deserialize)]
-pub(super) struct CommunitiesParams {
+pub(super) struct GraphListParams {
     pub(super) root: String,
     #[serde(default = "default_communities")]
     pub(super) limit: usize,
     #[serde(default = "default_min_size")]
     pub(super) min_size: usize,
-}
-
-#[derive(Deserialize)]
-pub(super) struct GodNodesParams {
-    pub(super) root: String,
     #[serde(default = "default_god_in_degree")]
     pub(super) min_in_degree: usize,
-    #[serde(default = "default_communities")]
-    pub(super) limit: usize,
 }
 
 #[derive(Deserialize)]

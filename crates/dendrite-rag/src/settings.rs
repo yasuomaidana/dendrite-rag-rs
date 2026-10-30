@@ -168,20 +168,17 @@ impl Settings {
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
         let e = &mut self.embed;
-        if let Some(b) = var("DENDRITE_RAG_EMBED_BACKEND") {
-            let Some(backend) = Backend::parse(&b) else {
-                let names: Vec<_> = Backend::ALL.iter().map(|b| b.as_str()).collect();
-                bail!(
-                    "DENDRITE_RAG_EMBED_BACKEND={b:?}: expected one of {}",
-                    names.join(", ")
-                );
+        if let Some(backend) = changed_backend(
+            &var,
+            "DENDRITE_RAG_EMBED_BACKEND",
+            Backend::parse,
+            Backend::ALL.iter().map(|b| b.as_str()).collect(),
+            e.backend,
+        )? {
+            *e = EmbedConfig {
+                backend,
+                ..Default::default()
             };
-            if backend != e.backend {
-                *e = EmbedConfig {
-                    backend,
-                    ..Default::default()
-                };
-            }
         }
         let set = |field: &mut Option<String>, key: &str| {
             if let Some(v) = var(key) {
@@ -201,72 +198,38 @@ impl Settings {
                     })?,
             );
         }
-        if let Some(n) = var("DENDRITE_RAG_EMBED_BATCH") {
-            e.batch = Some(
-                n.parse()
-                    .with_context(|| format!("DENDRITE_RAG_EMBED_BATCH={n:?}"))?,
-            );
-        }
-        if let Some(d) = var("DENDRITE_RAG_EMBED_DIMENSIONS") {
-            e.dimensions = Some(
-                d.parse()
-                    .with_context(|| format!("DENDRITE_RAG_EMBED_DIMENSIONS={d:?}"))?,
-            );
-        }
-        if let Some(t) = var("DENDRITE_RAG_EMBED_BUDGET_TOKENS") {
-            e.budget_tokens = Some(
-                t.parse()
-                    .with_context(|| format!("DENDRITE_RAG_EMBED_BUDGET_TOKENS={t:?}"))?,
-            );
-        }
+        env_parse(&var, &mut e.batch, "DENDRITE_RAG_EMBED_BATCH")?;
+        env_parse(&var, &mut e.dimensions, "DENDRITE_RAG_EMBED_DIMENSIONS")?;
+        env_parse(&var, &mut e.budget_tokens, "DENDRITE_RAG_EMBED_BUDGET_TOKENS")?;
         let r = &mut self.rerank;
-        if let Some(b) = var("DENDRITE_RAG_RERANK_BACKEND") {
-            let Some(backend) = RerankBackend::parse(&b) else {
-                let names: Vec<_> = RerankBackend::ALL.iter().map(|b| b.as_str()).collect();
-                bail!(
-                    "DENDRITE_RAG_RERANK_BACKEND={b:?}: expected one of {}",
-                    names.join(", ")
-                );
+        if let Some(backend) = changed_backend(
+            &var,
+            "DENDRITE_RAG_RERANK_BACKEND",
+            RerankBackend::parse,
+            RerankBackend::ALL.iter().map(|b| b.as_str()).collect(),
+            r.backend,
+        )? {
+            *r = RerankConfig {
+                backend,
+                ..Default::default()
             };
-            if backend != r.backend {
-                *r = RerankConfig {
-                    backend,
-                    ..Default::default()
-                };
-            }
         }
         set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
         set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
         set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
-        if let Some(v) = var("DENDRITE_RAG_RERANK_ABSTAIN") {
-            self.rerank.abstain = Some(
-                v.parse()
-                    .with_context(|| format!("DENDRITE_RAG_RERANK_ABSTAIN={v:?}"))?,
-            );
-        }
+        env_parse(&var, &mut self.rerank.abstain, "DENDRITE_RAG_RERANK_ABSTAIN")?;
         if let Some(a) = self.rerank.abstain
             && !(0.0..=1.0).contains(&a)
         {
             bail!("rerank.abstain must be within 0..=1, got {a}");
         }
-        if let Some(n) = var("DENDRITE_RAG_RERANK_BATCH") {
-            self.rerank.batch = Some(
-                n.parse()
-                    .with_context(|| format!("DENDRITE_RAG_RERANK_BATCH={n:?}"))?,
-            );
-        }
-        if let Some(n) = var("DENDRITE_RAG_MAX_FILE_BYTES") {
-            self.index.max_file_bytes = Some(
-                n.parse()
-                    .with_context(|| format!("DENDRITE_RAG_MAX_FILE_BYTES={n:?}"))?,
-            );
-        }
-        if let Some(n) = var("DENDRITE_RAG_QUERY_CACHE") {
-            self.index.query_cache = Some(
-                n.parse()
-                    .with_context(|| format!("DENDRITE_RAG_QUERY_CACHE={n:?}"))?,
-            );
-        }
+        env_parse(&var, &mut self.rerank.batch, "DENDRITE_RAG_RERANK_BATCH")?;
+        env_parse(
+            &var,
+            &mut self.index.max_file_bytes,
+            "DENDRITE_RAG_MAX_FILE_BYTES",
+        )?;
+        env_parse(&var, &mut self.index.query_cache, "DENDRITE_RAG_QUERY_CACHE")?;
         for (key, field) in [
             ("DENDRITE_RAG_FUSION_LEXICAL", &mut self.fusion.lexical),
             ("DENDRITE_RAG_FUSION_DENSE", &mut self.fusion.dense),
@@ -302,34 +265,26 @@ impl Settings {
         if let Err(e) = self.lexical.validate() {
             bail!("lexical: {e}");
         }
-        if let Some(m) = var("DENDRITE_RAG_STORAGE_MODE") {
-            let Some(mode) = loom_rag::store::StorageMode::parse(&m) else {
-                bail!("DENDRITE_RAG_STORAGE_MODE={m:?}: expected local, remote or edge");
-            };
-            self.storage.mode = Some(mode);
-        }
-        if let Some(l) = var("DENDRITE_RAG_STORAGE_LEDGER") {
-            let Some(ledger) = loom_rag::store::LedgerChoice::parse(&l) else {
-                bail!("DENDRITE_RAG_STORAGE_LEDGER={l:?}: expected redb or sqlite");
-            };
-            self.storage.ledger = Some(ledger);
-        }
+        env_choice(
+            &var,
+            &mut self.storage.mode,
+            "DENDRITE_RAG_STORAGE_MODE",
+            loom_rag::store::StorageMode::parse,
+            "local, remote or edge",
+        )?;
+        env_choice(
+            &var,
+            &mut self.storage.ledger,
+            "DENDRITE_RAG_STORAGE_LEDGER",
+            loom_rag::store::LedgerChoice::parse,
+            "redb or sqlite",
+        )?;
         set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
         set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
         set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
-        if let Some(v) = var("DENDRITE_RAG_ASK_DOCS_SHARE") {
-            self.ask.docs_share = Some(
-                v.parse()
-                    .with_context(|| format!("DENDRITE_RAG_ASK_DOCS_SHARE={v:?}"))?,
-            );
-        }
+        env_parse(&var, &mut self.ask.docs_share, "DENDRITE_RAG_ASK_DOCS_SHARE")?;
         set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
-        if let Some(r) = var("DENDRITE_RAG_GRAPH_RESOLUTION") {
-            self.graph.resolution = Some(
-                r.parse()
-                    .with_context(|| format!("DENDRITE_RAG_GRAPH_RESOLUTION={r:?}"))?,
-            );
-        }
+        env_parse(&var, &mut self.graph.resolution, "DENDRITE_RAG_GRAPH_RESOLUTION")?;
         let parse_bool = |v: &str, name: &str| -> anyhow::Result<bool> {
             match v.trim().to_ascii_lowercase().as_str() {
                 "true" | "1" | "yes" | "on" => Ok(true),
@@ -359,12 +314,11 @@ impl Settings {
             };
             self.index.vector_index = Some(choice);
         }
-        if let Some(n) = var("DENDRITE_RAG_HNSW_EF_SEARCH") {
-            self.index.hnsw_ef_search = Some(
-                n.parse()
-                    .with_context(|| format!("DENDRITE_RAG_HNSW_EF_SEARCH={n:?}"))?,
-            );
-        }
+        env_parse(
+            &var,
+            &mut self.index.hnsw_ef_search,
+            "DENDRITE_RAG_HNSW_EF_SEARCH",
+        )?;
         self.validate()?;
         Ok(())
     }
@@ -457,6 +411,52 @@ pub const INDEX_DIR: &str = ".dendrite/rag";
 /// then the environment, with the index in [`INDEX_DIR`].
 pub fn resolve(root: &Path) -> anyhow::Result<Config> {
     Ok(Settings::load(root)?.config_at(root))
+}
+
+/// Reads `key` from the environment into `field` when it is set.
+fn env_parse<T: std::str::FromStr>(
+    var: &impl Fn(&str) -> Option<String>,
+    field: &mut Option<T>,
+    key: &str,
+) -> anyhow::Result<()>
+where
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    if let Some(v) = var(key) {
+        *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
+    }
+    Ok(())
+}
+
+/// The backend `key` names when it is set and differs from `current`; an error lists the `names`
+/// it accepts.
+fn changed_backend<B: PartialEq>(
+    var: &impl Fn(&str) -> Option<String>,
+    key: &str,
+    parse: fn(&str) -> Option<B>,
+    names: Vec<&str>,
+    current: B,
+) -> anyhow::Result<Option<B>> {
+    let Some(raw) = var(key) else {
+        return Ok(None);
+    };
+    let backend =
+        parse(&raw).ok_or_else(|| anyhow::anyhow!("{key}={raw:?}: expected one of {}", names.join(", ")))?;
+    Ok((backend != current).then_some(backend))
+}
+
+/// Reads `key` into `field` through `parse` when it is set; `expected` names the accepted values.
+fn env_choice<T>(
+    var: &impl Fn(&str) -> Option<String>,
+    field: &mut Option<T>,
+    key: &str,
+    parse: fn(&str) -> Option<T>,
+    expected: &str,
+) -> anyhow::Result<()> {
+    if let Some(raw) = var(key) {
+        *field = Some(parse(&raw).ok_or_else(|| anyhow::anyhow!("{key}={raw:?}: expected {expected}"))?);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

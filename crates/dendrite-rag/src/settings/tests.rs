@@ -224,25 +224,18 @@ hnsw_ef_search = 128
             .is_err()
     );
 
-    #[cfg(not(feature = "hnsw"))]
-    {
-        let mut s3 = Settings::default();
-        assert!(
-            s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
-                .is_err()
-        );
-        assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_err());
-    }
-
-    #[cfg(feature = "hnsw")]
-    {
-        let mut s3 = Settings::default();
-        assert!(
-            s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
-                .is_ok()
-        );
-        assert!(Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_ok());
-    }
+    // 'hnsw' is accepted only when the feature is compiled in.
+    let hnsw = cfg!(feature = "hnsw");
+    let mut s3 = Settings::default();
+    assert_eq!(
+        s3.apply_env(env(&[("DENDRITE_RAG_VECTOR_INDEX", "hnsw")]))
+            .is_ok(),
+        hnsw
+    );
+    assert_eq!(
+        Settings::parse("[index]\nvector_index = \"hnsw\"\n").is_ok(),
+        hnsw
+    );
 }
 
 #[test]

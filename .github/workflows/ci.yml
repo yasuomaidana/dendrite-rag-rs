@@ -17,6 +17,8 @@ jobs:
         run: cargo run -q -p loom-gate -- loc --format github
       - name: Tests use the rstest crate
         run: cargo run -q -p loom-gate -- rstest --format github
+      - name: No repeated code
+        run: cargo run -q -p loom-gate -- clones --format github
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
   memory:

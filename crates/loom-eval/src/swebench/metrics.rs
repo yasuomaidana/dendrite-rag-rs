@@ -231,22 +231,8 @@ pub fn summarize_report(
             recall1: repo_summaries.values().map(|s| s.recall1).sum::<f64>() / num_repos,
             recall5: repo_summaries.values().map(|s| s.recall5).sum::<f64>() / num_repos,
             recall10: repo_summaries.values().map(|s| s.recall10).sum::<f64>() / num_repos,
-            all_gold5: {
-                let with_multi: Vec<_> = repo_summaries.values().filter_map(|s| s.all_gold5).collect();
-                if with_multi.is_empty() {
-                    None
-                } else {
-                    Some(with_multi.iter().sum::<f64>() / with_multi.len() as f64)
-                }
-            },
-            all_gold10: {
-                let with_multi: Vec<_> = repo_summaries.values().filter_map(|s| s.all_gold10).collect();
-                if with_multi.is_empty() {
-                    None
-                } else {
-                    Some(with_multi.iter().sum::<f64>() / with_multi.len() as f64)
-                }
-            },
+            all_gold5: mean_defined(repo_summaries.values().filter_map(|s| s.all_gold5)),
+            all_gold10: mean_defined(repo_summaries.values().filter_map(|s| s.all_gold10)),
             gold_recall10: repo_summaries.values().map(|s| s.gold_recall10).sum::<f64>() / num_repos,
             mrr10: repo_summaries.values().map(|s| s.mrr10).sum::<f64>() / num_repos,
             median_tokens_to_gold: micro.median_tokens_to_gold,
@@ -266,6 +252,12 @@ pub fn summarize_report(
         .collect();
 
     (micro, repo_macro, repo_summaries, leakage_summaries)
+}
+
+/// The mean of `values`, or `None` when there are none.
+fn mean_defined(values: impl Iterator<Item = f64>) -> Option<f64> {
+    let all: Vec<f64> = values.collect();
+    (!all.is_empty()).then(|| all.iter().sum::<f64>() / all.len() as f64)
 }
 
 #[cfg(test)]

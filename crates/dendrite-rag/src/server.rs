@@ -184,6 +184,15 @@ fn to_value<T: serde::Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(|e| RpcError::new(code::ENGINE_ERROR, e.to_string()))
 }
 
+/// `{ key: value }` for an engine result, or its error.
+fn keyed<T: serde::Serialize>(key: &str, result: Result<T, RpcError>) -> Result<Value, RpcError> {
+    let value = to_value(result?)?;
+    Ok(Value::Object(serde_json::Map::from_iter([(
+        key.to_string(),
+        value,
+    )])))
+}
+
 impl Handler for Server {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
         self.touched.clear();
@@ -266,13 +275,14 @@ impl Server {
             }
             "chunks.get" => {
                 let p: ChunksParams = rpc::params(params)?;
-                let hits = self.indexed(&p.root)?.chunks(&p.ids).map_err(engine_error)?;
-                Ok(json!({ "hits": hits }))
+                keyed(
+                    "hits",
+                    self.indexed(&p.root)?.chunks(&p.ids).map_err(engine_error),
+                )
             }
             "sync" => {
                 let p: RootParams = rpc::params(params)?;
-                let pending = self.engine(&p.root)?.sync().map_err(engine_error)?;
-                Ok(json!({ "pending": pending }))
+                keyed("pending", self.engine(&p.root)?.sync().map_err(engine_error))
             }
             #[cfg(feature = "postgres")]
             "push" => {
@@ -336,30 +346,33 @@ impl Server {
             }
             "rank" => {
                 let p: RankParams = rpc::params(params)?;
-                let ranked = self
-                    .engine(&p.root)?
-                    .rank(&p.documents, &p.query, p.top_k)
-                    .map_err(engine_error)?;
-                Ok(json!({ "ranked": ranked }))
+                keyed(
+                    "ranked",
+                    self.engine(&p.root)?
+                        .rank(&p.documents, &p.query, p.top_k)
+                        .map_err(engine_error),
+                )
             }
             "quality.loc" => quality::loc(params),
             "quality.clones" => quality::clones(params),
             "quality.rstest" => quality::rstest(params),
             "graph.communities" => {
-                let p: CommunitiesParams = rpc::params(params)?;
-                let communities = self
-                    .indexed(&p.root)?
-                    .graph_communities(p.limit, p.min_size)
-                    .map_err(engine_error)?;
-                Ok(json!({ "communities": communities }))
+                let p: GraphListParams = rpc::params(params)?;
+                keyed(
+                    "communities",
+                    self.indexed(&p.root)?
+                        .graph_communities(p.limit, p.min_size)
+                        .map_err(engine_error),
+                )
             }
             "graph.god_nodes" => {
-                let p: GodNodesParams = rpc::params(params)?;
-                let nodes = self
-                    .indexed(&p.root)?
-                    .graph_god_nodes(p.min_in_degree, p.limit)
-                    .map_err(engine_error)?;
-                Ok(json!({ "nodes": nodes }))
+                let p: GraphListParams = rpc::params(params)?;
+                keyed(
+                    "nodes",
+                    self.indexed(&p.root)?
+                        .graph_god_nodes(p.min_in_degree, p.limit)
+                        .map_err(engine_error),
+                )
             }
             "graph.path" => {
                 let p: PathParams = rpc::params(params)?;
@@ -371,22 +384,24 @@ impl Server {
             }
             "graph.explain" => {
                 let p: ExplainParams = rpc::params(params)?;
-                let matches = self
-                    .indexed(&p.root)?
-                    .graph_explain(&p.target)
-                    .map_err(engine_error)?;
-                Ok(json!({ "matches": matches }))
+                keyed(
+                    "matches",
+                    self.indexed(&p.root)?
+                        .graph_explain(&p.target)
+                        .map_err(engine_error),
+                )
             }
             "grep" => {
                 let p: GrepParams = rpc::params(params)?;
-                let matches = self
-                    .engine(&p.root)?
-                    .grep(&p.pattern, &p.paths, p.max_results)
-                    .map_err(|e| match e {
-                        Error::Other(e) => RpcError::invalid_params(e.to_string()),
-                        e => engine_error(e),
-                    })?;
-                Ok(json!({ "matches": matches }))
+                keyed(
+                    "matches",
+                    self.engine(&p.root)?
+                        .grep(&p.pattern, &p.paths, p.max_results)
+                        .map_err(|e| match e {
+                            Error::Other(e) => RpcError::invalid_params(e.to_string()),
+                            e => engine_error(e),
+                        }),
+                )
             }
             _ => Err(RpcError::new(
                 code::METHOD_NOT_FOUND,

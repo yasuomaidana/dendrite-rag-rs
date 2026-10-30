@@ -136,54 +136,34 @@ fn norm(x: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// A query scored `value` on both rank metrics, found (`hit`) or not.
+    fn score(q: &str, value: f64, hit: bool) -> QueryScore {
+        QueryScore {
+            q: q.into(),
+            rr: value,
+            ndcg: value,
+            recall: vec![hit],
+        }
+    }
+
+    /// A run of the `dendrite` set whose `search` method scored `per_query`.
+    fn run_of(per_query: Vec<QueryScore>) -> RunFile {
+        RunFile {
+            root: "root".into(),
+            sets: vec![SetRun {
+                name: "dendrite".into(),
+                methods: vec![MethodRun {
+                    label: "search".into(),
+                    per_query,
+                }],
+            }],
+        }
+    }
+
     #[test]
     fn compare_matching_ignores_queries_missing_from_one_side() {
-        let a = RunFile {
-            root: "root".into(),
-            sets: vec![SetRun {
-                name: "dendrite".into(),
-                methods: vec![MethodRun {
-                    label: "search".into(),
-                    per_query: vec![
-                        QueryScore {
-                            q: "q1".into(),
-                            rr: 0.5,
-                            ndcg: 0.5,
-                            recall: vec![true],
-                        },
-                        QueryScore {
-                            q: "q2".into(),
-                            rr: 1.0,
-                            ndcg: 1.0,
-                            recall: vec![true],
-                        },
-                    ],
-                }],
-            }],
-        };
-        let b = RunFile {
-            root: "root".into(),
-            sets: vec![SetRun {
-                name: "dendrite".into(),
-                methods: vec![MethodRun {
-                    label: "search".into(),
-                    per_query: vec![
-                        QueryScore {
-                            q: "q2".into(),
-                            rr: 1.0,
-                            ndcg: 1.0,
-                            recall: vec![true],
-                        },
-                        QueryScore {
-                            q: "q3".into(),
-                            rr: 0.2,
-                            ndcg: 0.2,
-                            recall: vec![false],
-                        },
-                    ],
-                }],
-            }],
-        };
+        let a = run_of(vec![score("q1", 0.5, true), score("q2", 1.0, true)]);
+        let b = run_of(vec![score("q2", 1.0, true), score("q3", 0.2, false)]);
 
         let rows = compare_runs(&a, &b);
         assert_eq!(rows.len(), 1);
@@ -201,52 +181,8 @@ mod tests {
 
     #[test]
     fn compare_reports_significance_when_ci_excludes_zero() {
-        let a = RunFile {
-            root: "root".into(),
-            sets: vec![SetRun {
-                name: "dendrite".into(),
-                methods: vec![MethodRun {
-                    label: "search".into(),
-                    per_query: vec![
-                        QueryScore {
-                            q: "q1".into(),
-                            rr: 0.0,
-                            ndcg: 0.0,
-                            recall: vec![false],
-                        },
-                        QueryScore {
-                            q: "q2".into(),
-                            rr: 0.1,
-                            ndcg: 0.1,
-                            recall: vec![false],
-                        },
-                    ],
-                }],
-            }],
-        };
-        let b = RunFile {
-            root: "root".into(),
-            sets: vec![SetRun {
-                name: "dendrite".into(),
-                methods: vec![MethodRun {
-                    label: "search".into(),
-                    per_query: vec![
-                        QueryScore {
-                            q: "q1".into(),
-                            rr: 1.0,
-                            ndcg: 1.0,
-                            recall: vec![true],
-                        },
-                        QueryScore {
-                            q: "q2".into(),
-                            rr: 1.0,
-                            ndcg: 1.0,
-                            recall: vec![true],
-                        },
-                    ],
-                }],
-            }],
-        };
+        let a = run_of(vec![score("q1", 0.0, false), score("q2", 0.1, false)]);
+        let b = run_of(vec![score("q1", 1.0, true), score("q2", 1.0, true)]);
 
         let rows = compare_runs(&a, &b);
         assert_eq!(rows.len(), 1);
