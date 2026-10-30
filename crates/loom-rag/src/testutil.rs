@@ -284,3 +284,33 @@ pub fn test_pg() -> Option<TestPg> {
         _container: Some(container),
     })
 }
+
+/// `n` pseudo-random unit vectors of `dim` components, reproducible from `seed`.
+pub fn rand_vecs(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
+    let mut s = seed;
+    (0..n)
+        .map(|_| {
+            normalize(
+                (0..dim)
+                    .map(|_| {
+                        s = s
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        ((s >> 33) as f32 / u32::MAX as f32) - 0.25
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The indexes of the `k` vectors closest to `q` by exact dot product.
+pub fn exact(vs: &[Vec<f32>], q: &[f32], k: usize) -> Vec<usize> {
+    let mut s: Vec<(usize, f32)> = vs
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i, v.iter().zip(q).map(|(a, b)| a * b).sum()))
+        .collect();
+    s.sort_by(|a, b| b.1.total_cmp(&a.1));
+    s.into_iter().take(k).map(|(i, _)| i).collect()
+}

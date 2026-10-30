@@ -126,21 +126,8 @@ impl FlatIndex {
     /// Writes the index atomically (temporary file, then rename).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         for (row, id) in self.ids.iter().enumerate() {
-            if id.len() > u16::MAX as usize {
-                let len = id.len();
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("id length {len} exceeds u16::MAX (65535)"),
-                ));
-            }
-            let tag = &self.tags[row];
-            if tag.len() > u16::MAX as usize {
-                let len = tag.len();
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("tag length {len} exceeds u16::MAX (65535)"),
-                ));
-            }
+            check_u16_len("id", id)?;
+            check_u16_len("tag", &self.tags[row])?;
         }
         let tmp = path.with_extension("tmp");
         {
@@ -245,31 +232,9 @@ impl FlatIndex {
         idx.tags.reserve(count);
         idx.scales.reserve(count);
         for row in 0..count {
-            let id_len = if is_v3 {
-                let mut b = [0u8; 2];
-                r.read_exact(&mut b).map_err(|_| bad())?;
-                u16::from_le_bytes(b) as usize
-            } else {
-                let mut b = [0u8; 1];
-                r.read_exact(&mut b).map_err(|_| bad())?;
-                b[0] as usize
-            };
-            let mut id = vec![0u8; id_len];
-            r.read_exact(&mut id).map_err(|_| bad())?;
-            let id = String::from_utf8(id).map_err(|_| bad())?;
+            let id = read_prefixed_string(&mut r, is_v3).ok_or_else(bad)?;
 
-            let tag_len = if is_v3 {
-                let mut b = [0u8; 2];
-                r.read_exact(&mut b).map_err(|_| bad())?;
-                u16::from_le_bytes(b) as usize
-            } else {
-                let mut b = [0u8; 1];
-                r.read_exact(&mut b).map_err(|_| bad())?;
-                b[0] as usize
-            };
-            let mut tag = vec![0u8; tag_len];
-            r.read_exact(&mut tag).map_err(|_| bad())?;
-            let tag = String::from_utf8(tag).map_err(|_| bad())?;
+            let tag = read_prefixed_string(&mut r, is_v3).ok_or_else(bad)?;
 
             let mut f = [0u8; 4];
             r.read_exact(&mut f).map_err(|_| bad())?;
@@ -416,3 +381,30 @@ impl VectorIndex for FlatIndex {
 
 #[cfg(test)]
 mod tests;
+
+/// Fails when `value` is too long for the u16 length prefix of the v3 format.
+fn check_u16_len(what: &str, value: &str) -> std::io::Result<()> {
+    if value.len() > u16::MAX as usize {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{what} length {} exceeds u16::MAX (65535)", value.len()),
+        ));
+    }
+    Ok(())
+}
+
+/// Reads a length-prefixed UTF-8 string: a u16 length in v3 files, a u8 length before.
+fn read_prefixed_string(r: &mut &[u8], is_v3: bool) -> Option<String> {
+    let len = if is_v3 {
+        let mut b = [0u8; 2];
+        r.read_exact(&mut b).ok()?;
+        u16::from_le_bytes(b) as usize
+    } else {
+        let mut b = [0u8; 1];
+        r.read_exact(&mut b).ok()?;
+        b[0] as usize
+    };
+    let mut bytes = vec![0u8; len];
+    r.read_exact(&mut bytes).ok()?;
+    String::from_utf8(bytes).ok()
+}

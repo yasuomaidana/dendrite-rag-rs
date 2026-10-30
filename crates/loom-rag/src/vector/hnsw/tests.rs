@@ -1,32 +1,19 @@
 use super::*;
 use crate::embed::normalize;
+use crate::testutil::{exact, rand_vecs};
 
-fn rand_vecs(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
-    let mut s = seed;
-    (0..n)
-        .map(|_| {
-            normalize(
-                (0..dim)
-                    .map(|_| {
-                        s = s
-                            .wrapping_mul(6364136223846793005)
-                            .wrapping_add(1442695040888963407);
-                        ((s >> 33) as f32 / u32::MAX as f32) - 0.25
-                    })
-                    .collect(),
-            )
+/// The shortlist an index returns for `q` (`size` candidates), rescored with the exact vectors and best first.
+fn rescored_shortlist(idx: &HnswIndex, vs: &[Vec<f32>], q: &[f32], size: usize) -> Vec<(String, f32)> {
+    let mut short: Vec<(String, f32)> = idx
+        .search(q, size)
+        .into_iter()
+        .map(|(id, _)| {
+            let i: usize = id[1..].parse().unwrap();
+            (id, vs[i].iter().zip(q).map(|(a, b)| a * b).sum())
         })
-        .collect()
-}
-
-fn exact(vs: &[Vec<f32>], q: &[f32], k: usize) -> Vec<usize> {
-    let mut s: Vec<(usize, f32)> = vs
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i, v.iter().zip(q).map(|(a, b)| a * b).sum()))
         .collect();
-    s.sort_by(|a, b| b.1.total_cmp(&a.1));
-    s.into_iter().take(k).map(|(i, _)| i).collect()
+    short.sort_by(|a, b| b.1.total_cmp(&a.1));
+    short
 }
 
 /// The engine asks for a 40-candidate shortlist and rescores it with exact vectors;
@@ -35,15 +22,7 @@ fn shortlist_recall(idx: &HnswIndex, vs: &[Vec<f32>], queries: &[Vec<f32>]) -> f
     let mut hits = 0;
     for q in queries {
         let truth: Vec<String> = exact(vs, q, 10).into_iter().map(|i| format!("c{i}")).collect();
-        let mut short: Vec<(String, f32)> = idx
-            .search(q, 40)
-            .into_iter()
-            .map(|(id, _)| {
-                let i: usize = id[1..].parse().unwrap();
-                (id, vs[i].iter().zip(q).map(|(a, b)| a * b).sum())
-            })
-            .collect();
-        short.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let short = rescored_shortlist(idx, vs, q, 40);
         hits += short.iter().take(10).filter(|(id, _)| truth.contains(id)).count();
     }
     hits as f32 / (queries.len() * 10) as f32
@@ -201,15 +180,7 @@ fn recall_report() {
                 let truth: Vec<String> = exact(&vs, q, 10).into_iter().map(|i| format!("c{i}")).collect();
                 let got: Vec<String> = idx.search(q, 10).into_iter().map(|(id, _)| id).collect();
                 raw += got.iter().filter(|id| truth.contains(id)).count();
-                let mut short: Vec<(String, f32)> = idx
-                    .search(q, 40)
-                    .into_iter()
-                    .map(|(id, _)| {
-                        let i: usize = id[1..].parse().unwrap();
-                        (id, vs[i].iter().zip(q).map(|(a, b)| a * b).sum())
-                    })
-                    .collect();
-                short.sort_by(|a, b| b.1.total_cmp(&a.1));
+                let short = rescored_shortlist(&idx, &vs, q, 40);
                 rescored += short.iter().take(10).filter(|(id, _)| truth.contains(id)).count();
             }
             let n = (queries.len() * 10) as f32;

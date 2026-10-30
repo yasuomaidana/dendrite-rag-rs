@@ -432,6 +432,59 @@ pub(crate) fn truncate_to(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// The `Embedder` implementation shared by the HTTP embedders: documents go out in batches with the
+/// document prefix, a query goes out alone with the query prefix. The type needs a `request(Vec<String>)`
+/// method, the fields `batch`, `document_prefix` and `query_prefix`, and the field `$id` holding its model id.
+macro_rules! impl_batched_http_embedder {
+    ($ty:ty, $id:ident) => {
+        impl Embedder for $ty {
+            fn model_id(&self) -> &str {
+                &self.$id
+            }
+
+            fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+                let mut out = Vec::with_capacity(texts.len());
+                for batch in texts.chunks(self.batch) {
+                    out.extend(self.request(prepare(&self.document_prefix, batch))?);
+                }
+                Ok(out)
+            }
+
+            fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+                Ok(self
+                    .request(prepare(&self.query_prefix, &[text.to_string()]))?
+                    .remove(0))
+            }
+        }
+    };
+}
+pub(crate) use impl_batched_http_embedder;
+
+/// The `Embedder` implementation of the embedders that embed in process: both prefixes go to their `embed`
+/// method, a query alone. The type needs `embed(&str, &[String])`, the prefix fields and the field `$id`.
+#[cfg(any(feature = "candle", feature = "oxillama"))]
+macro_rules! impl_prefixed_embedder {
+    ($ty:ty, $id:ident) => {
+        impl Embedder for $ty {
+            fn model_id(&self) -> &str {
+                &self.$id
+            }
+
+            fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+                self.embed(&self.document_prefix, texts)
+            }
+
+            fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+                Ok(self
+                    .embed(&self.query_prefix, &[text.to_string()])?
+                    .remove(0))
+            }
+        }
+    };
+}
+#[cfg(any(feature = "candle", feature = "oxillama"))]
+pub(crate) use impl_prefixed_embedder;
+
 /// Prefixed and truncated inputs, ready for a model.
 pub(crate) fn prepare(prefix: &str, texts: &[String]) -> Vec<String> {
     texts.iter().map(|t| format!("{prefix}{}", truncate(t))).collect()

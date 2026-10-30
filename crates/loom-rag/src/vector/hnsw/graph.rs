@@ -147,6 +147,41 @@ impl HnswIndex {
         result
     }
 
+    /// Walks down the given layers, at each moving to the closest neighbour of the current node until none is
+    /// closer, and returns the node and its distance to the query where the walk ends.
+    fn greedy_descend(
+        &self,
+        q_i8: &[i8],
+        q_scale: f32,
+        start: (u32, f32),
+        levels: impl Iterator<Item = usize>,
+    ) -> (u32, f32) {
+        let (mut curr, mut curr_dist) = start;
+        for lc in levels {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                if let Some(neighbors) = self.nodes[curr as usize].neighbors.get(lc) {
+                    let mut best_neighbor = curr;
+                    let mut best_dist = curr_dist;
+                    for &neighbor in neighbors {
+                        let d = self.dist_to_q(q_i8, q_scale, neighbor);
+                        if d < best_dist {
+                            best_neighbor = neighbor;
+                            best_dist = d;
+                        }
+                    }
+                    if best_neighbor != curr {
+                        curr = best_neighbor;
+                        curr_dist = best_dist;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        (curr, curr_dist)
+    }
+
     pub(super) fn insert_graph_node(&mut self, id: &str, vector: &[f32]) {
         let node_id = self.nodes.len() as u32;
         let node_level = self.random_level();
@@ -169,30 +204,11 @@ impl HnswIndex {
         };
 
         let max_l = self.max_level;
-        let mut curr_dist = self.dist_to_q(&q_i8, q_scale, curr);
+        let curr_dist = self.dist_to_q(&q_i8, q_scale, curr);
 
-        for lc in (node_level + 1..=max_l).rev() {
-            let mut changed = true;
-            while changed {
-                changed = false;
-                if let Some(neighbors) = self.nodes[curr as usize].neighbors.get(lc) {
-                    let mut best_neighbor = curr;
-                    let mut best_dist = curr_dist;
-                    for &neighbor in neighbors {
-                        let d = self.dist_to_q(&q_i8, q_scale, neighbor);
-                        if d < best_dist {
-                            best_neighbor = neighbor;
-                            best_dist = d;
-                        }
-                    }
-                    if best_neighbor != curr {
-                        curr = best_neighbor;
-                        curr_dist = best_dist;
-                        changed = true;
-                    }
-                }
-            }
-        }
+        curr = self
+            .greedy_descend(&q_i8, q_scale, (curr, curr_dist), (node_level + 1..=max_l).rev())
+            .0;
 
         self.nodes.push(new_node);
         self.id_to_node.insert(id.to_string(), node_id);
@@ -265,30 +281,11 @@ impl HnswIndex {
         };
         let (q_i8, q_scale) = quantize(query);
         let mut curr = entry_point;
-        let mut curr_dist = self.dist_to_q(&q_i8, q_scale, curr);
+        let curr_dist = self.dist_to_q(&q_i8, q_scale, curr);
 
-        for lc in (1..=self.max_level).rev() {
-            let mut changed = true;
-            while changed {
-                changed = false;
-                if let Some(neighbors) = self.nodes[curr as usize].neighbors.get(lc) {
-                    let mut best_neighbor = curr;
-                    let mut best_dist = curr_dist;
-                    for &neighbor in neighbors {
-                        let d = self.dist_to_q(&q_i8, q_scale, neighbor);
-                        if d < best_dist {
-                            best_neighbor = neighbor;
-                            best_dist = d;
-                        }
-                    }
-                    if best_neighbor != curr {
-                        curr = best_neighbor;
-                        curr_dist = best_dist;
-                        changed = true;
-                    }
-                }
-            }
-        }
+        curr = self
+            .greedy_descend(&q_i8, q_scale, (curr, curr_dist), (1..=self.max_level).rev())
+            .0;
 
         let ef = self.ef_search.max(k);
         let candidates = self.search_layer(&q_i8, q_scale, &[curr], ef, 0);

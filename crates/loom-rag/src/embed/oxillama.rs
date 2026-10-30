@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use oxillama_runtime::{EngineConfig, InferenceEngine, PoolingMode};
 
-use super::{EmbedConfig, EmbedError, Embedder, Pooling, Result, truncate};
+use super::{EmbedConfig, EmbedError, Embedder, Pooling, Result, impl_prefixed_embedder, truncate};
 
 /// Context window for one input. Inputs are cut at 8,000 bytes, well inside it.
 const CONTEXT: usize = 4096;
@@ -115,19 +115,7 @@ impl OxillamaEmbedder {
     }
 }
 
-impl Embedder for OxillamaEmbedder {
-    fn model_id(&self) -> &str {
-        &self.id
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed(&self.document_prefix, texts)
-    }
-
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.embed(&self.query_prefix, &[text.to_string()])?.remove(0))
-    }
-}
+impl_prefixed_embedder!(OxillamaEmbedder, id);
 
 #[cfg(test)]
 mod tests {

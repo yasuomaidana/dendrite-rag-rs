@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::http::{Client, expect_len};
-use super::{EmbedConfig, Embedder, Result, normalize, prepare};
+use super::{EmbedConfig, Embedder, Result, impl_batched_http_embedder, normalize, prepare};
 
 pub struct OllamaEmbedder {
     client: Client,
@@ -56,25 +56,7 @@ impl OllamaEmbedder {
     }
 }
 
-impl Embedder for OllamaEmbedder {
-    fn model_id(&self) -> &str {
-        &self.id
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(texts.len());
-        for batch in texts.chunks(self.batch) {
-            out.extend(self.request(prepare(&self.document_prefix, batch))?);
-        }
-        Ok(out)
-    }
-
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(self
-            .request(prepare(&self.query_prefix, &[text.to_string()]))?
-            .remove(0))
-    }
-}
+impl_batched_http_embedder!(OllamaEmbedder, id);
 
 #[cfg(test)]
 mod tests {

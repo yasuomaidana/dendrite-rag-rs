@@ -15,7 +15,9 @@ use candle_transformers::models::{bert, jina_bert, nomic_bert};
 use serde::Deserialize;
 
 use super::tokenize::Tokenizer;
-use super::{EmbedConfig, EmbedError, Embedder, Pooling, Result, normalize, truncate};
+use super::{
+    EmbedConfig, EmbedError, Embedder, Pooling, Result, impl_prefixed_embedder, normalize, truncate,
+};
 
 /// Tokens per input; chunks are far shorter, and attention cost grows with the square.
 pub(super) const MAX_TOKENS: usize = 512;
@@ -251,19 +253,7 @@ pub(super) fn pool(hidden: &Tensor, mask: &Tensor, pooling: Pooling) -> candle_c
     }
 }
 
-impl Embedder for CandleEmbedder {
-    fn model_id(&self) -> &str {
-        &self.id
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed(&self.document_prefix, texts)
-    }
-
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.embed(&self.query_prefix, &[text.to_string()])?.remove(0))
-    }
-}
+impl_prefixed_embedder!(CandleEmbedder, id);
 
 #[cfg(test)]
 mod tests {

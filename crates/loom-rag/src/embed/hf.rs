@@ -5,7 +5,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::http::{Client, expect_len};
-use super::{EmbedConfig, EmbedError, Embedder, Pooling, Result, normalize, pool, prepare};
+use super::{
+    EmbedConfig, EmbedError, Embedder, Pooling, Result, impl_batched_http_embedder, normalize, pool, prepare,
+};
 
 /// Serverless Inference for a hub model.
 const SERVERLESS: &str = "https://router.huggingface.co/hf-inference/models";
@@ -91,25 +93,7 @@ fn parse(body: Value, pooling: Pooling) -> Result<Vec<Vec<f32>>> {
     }
 }
 
-impl Embedder for HfEmbedder {
-    fn model_id(&self) -> &str {
-        &self.id
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(texts.len());
-        for batch in texts.chunks(self.batch) {
-            out.extend(self.request(prepare(&self.document_prefix, batch))?);
-        }
-        Ok(out)
-    }
-
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(self
-            .request(prepare(&self.query_prefix, &[text.to_string()]))?
-            .remove(0))
-    }
-}
+impl_batched_http_embedder!(HfEmbedder, id);
 
 #[cfg(test)]
 mod tests {
