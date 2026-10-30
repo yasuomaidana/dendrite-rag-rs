@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/settings.json",
+  "title": "settings",
+  "description": "The settings in effect for a project: its .dendrite/rag.toml, then DENDRITE_RAG_* environment overrides. Keys are never returned.",
+  "params": {
+    "type": "object",
+    "required": ["root"],
+    "properties": {
+      "root": {"type": "string", "description": "Project directory"}
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": ["file", "file_exists", "settings"],
+    "properties": {
+      "file": {"type": "string"},
+      "file_exists": {"type": "boolean"},
+      "settings": {
+        "type": "object",
+        "properties": {
+          "embed": {
+            "type": "object",
+            "properties": {
+              "backend": {"enum": ["auto", "openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
+              "model": {"type": ["string", "null"]},
+              "url": {"type": ["string", "null"]},
+              "api_key_env": {"type": ["string", "null"]},
+              "document_prefix": {"type": ["string", "null"]},
+              "query_prefix": {"type": ["string", "null"]},
+              "pooling": {"enum": ["mean", "cls", "last", null]},
+              "batch": {"type": ["integer", "null"]},
+              "dimensions": {"type": ["integer", "null"], "minimum": 1, "description": "Matryoshka target dimensions (openai backend only)"},
+              "budget_tokens": {"type": ["integer", "null"], "minimum": 0, "description": "Estimated-token cap of one embedding run"}
+            }
+          },
+          "rerank": {"type": "object", "description": "[rerank]: backend, model, url, api_key_env, batch and abstain (0 to 1; off when unset)"},
+          "index": {"type": "object"},
+          "graph": {"type": "object", "description": "[graph]: Leiden resolution and the optional LLM layer ([graph.llm])"},
+          "fusion": {"type": "object", "description": "[fusion]: lexical, dense, symbol and community weights; unset keys keep the embedder's defaults"},
+          "lexical": {"type": "object", "description": "[lexical] BM25 parameters k1, b and q (defaults 1.2, 0.75, 1)", "properties": {"k1": {"type": "number"}, "b": {"type": "number"}, "q": {"type": "number"}}},
+          "storage": {"type": "object", "description": "[storage]: mode (local, remote, edge), repo and ledger (redb, sqlite); the shared tier's URL is never returned"},
+          "ask": {"type": "object", "description": "[ask]: local_model, paid_model and docs_share"}
+        }
+      }
+    }
+  }
+}

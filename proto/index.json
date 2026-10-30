@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/index.json",
+  "title": "index",
+  "description": "Brings the project's index up to date; full rebuilds it.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "full": {
+        "type": "boolean",
+        "default": false
+      },
+      "embed_budget_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Stop the embedding phase after this many milliseconds; the lexical index always completes"
+      },
+      "embed_budget_tokens": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Stop the embedding phase after this many tokens; the lexical index always completes"
+      },
+      "focus": {
+        "type": "string",
+        "description": "Under a budget, embed the chunks this question matches first"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "files_scanned",
+      "files_changed",
+      "files_removed",
+      "chunks_added",
+      "chunks_removed",
+      "embedded",
+      "duration_ms"
+    ],
+    "properties": {
+      "files_scanned": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "files_changed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "files_removed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "chunks_added": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "chunks_removed": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "embedded": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "duration_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "embed_error": {
+        "type": "string",
+        "description": "Set when embedding failed; lexical index is current, vectors are retried next run"
+      },
+      "embed_pending": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Chunks still without vectors; later index runs continue"
+      },
+      "embed_tokens": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Tokens processed during embedding in this run"
+      },
+      "budget_tokens_remaining": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Remaining token budget if budget_tokens was configured"
+      },
+      "communities": {
+        "type": "integer",
+        "description": "Communities after this run"
+      },
+      "graph_ms": {
+        "type": "integer",
+        "description": "Time spent on the code graph and communities"
+      },
+      "open_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Opening the engine (stores, embedder and reranker models); reported by the first run after the engine opened, 0 afterwards"
+      },
+      "walk_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Walking the project and hashing changed files"
+      },
+      "embed_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Embedding chunks and updating the vector index"
+      }
+    }
+  }
+}

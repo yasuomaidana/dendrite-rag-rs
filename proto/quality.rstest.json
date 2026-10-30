@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/quality.rstest.json",
+  "title": "quality.rstest",
+  "description": "Rust tests that should use rstest: tests differing only in constants, and setup helpers that should be fixtures.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string"
+      },
+      "exclude": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "schema",
+      "files",
+      "violations"
+    ],
+    "properties": {
+      "schema": {
+        "type": "integer",
+        "const": 1
+      },
+      "files": {
+        "type": "integer"
+      },
+      "violations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "kind",
+            "path",
+            "line",
+            "message"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "repeated_test",
+                "helper_should_be_fixture"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

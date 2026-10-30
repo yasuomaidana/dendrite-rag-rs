@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/purge.json",
+  "title": "purge",
+  "description": "Deletes the project's index directory.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "removed"
+    ],
+    "properties": {
+      "removed": {
+        "type": "boolean"
+      }
+    }
+  }
+}

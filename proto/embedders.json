@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/embedders.json",
+  "title": "embedders",
+  "description": "Embedding backends of this build, with their default models.",
+  "params": {
+    "type": "object",
+    "properties": {}
+  },
+  "result": {
+    "type": "object",
+    "required": ["backends"],
+    "properties": {
+      "backends": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["backend", "compiled", "description"],
+          "properties": {
+            "backend": {"enum": ["auto", "openai", "ollama", "hf", "candle", "oxillama", "model2vec", "none"]},
+            "compiled": {"type": "boolean", "description": "False when the build lacks the backend's cargo feature"},
+            "default_model": {"type": ["string", "null"]},
+            "default_url": {"type": ["string", "null"]},
+            "description": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

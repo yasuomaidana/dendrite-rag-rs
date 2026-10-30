@@ -1,0 +1,31 @@
+{
+  "corpus": "dendrite-rag-rs repository (github.com/yasuomaidana/dendrite-rag-rs); paths of the loom-rag / dendrite-rag workspace layout",
+  "note": "Natural-language queries paraphrase doc comments instead of quoting identifiers; a query counts as answered when any expected file appears in the results.",
+  "queries": [
+    {"q": "how does codebase retrieval and hybrid search work?", "expect": ["crates/loom-rag/src/retrieve/mod.rs", "crates/loom-rag/src/retrieve/code.rs", "crates/loom-rag/src/fusion.rs"], "broad": true},
+    {"q": "how does AST-aware code chunking work?", "expect": ["crates/loom-rag/src/chunk.rs", "crates/loom-rag/src/chunk/code.rs", "crates/loom-rag/src/lang.rs"], "broad": true},
+    {"q": "how does incremental indexing and change detection work?", "expect": ["crates/loom-rag/src/engine/index.rs", "crates/loom-rag/src/engine.rs", "crates/loom-rag/src/ledger.rs"], "broad": true},
+    {"q": "how does the symbol graph and personalized pagerank work?", "expect": ["crates/loom-rag/src/symbols.rs"], "broad": true},
+    {"q": "how does quantized vector search and exact rescoring work?", "expect": ["crates/loom-rag/src/vector.rs", "crates/loom-rag/src/engine/vectors.rs"], "broad": true},
+    {"q": "how does git history indexing and commit search work?", "expect": ["crates/loom-rag/src/history.rs"], "broad": true},
+    {"q": "how does embedding backend auto-selection work?", "expect": ["crates/loom-rag/src/embed/mod.rs", "crates/dendrite-rag/src/settings.rs"], "broad": true},
+    {"q": "how does the JSON-RPC stdio protocol server work?", "expect": ["crates/dendrite-rag/src/server.rs", "crates/dendrite-rag/src/rpc.rs"], "broad": true},
+    {"q": "split code files along syntax boundaries into chunks with scope chain and symbols", "expect": ["crates/loom-rag/src/chunk.rs", "crates/loom-rag/src/chunk/code.rs"]},
+    {"q": "split markdown documents hierarchically by headings", "expect": ["crates/loom-rag/src/chunk/text.rs", "crates/loom-rag/src/chunk.rs"]},
+    {"q": "code tokenizer splitting on case changes digit boundaries and keeping whole identifiers", "expect": ["crates/loom-rag/src/lexical.rs"]},
+    {"q": "int8 quantized flat vector scan with parallel blocks", "expect": ["crates/loom-rag/src/vector.rs"]},
+    {"q": "combine dense and lexical rankings using reciprocal rank fusion", "expect": ["crates/loom-rag/src/fusion.rs"]},
+    {"q": "pack citations into prompt budget with graph expansion and overlap removal", "expect": ["crates/loom-rag/src/retrieve/code.rs", "crates/loom-rag/src/retrieve/pack.rs", "crates/loom-rag/src/retrieve/mod.rs"]},
+    {"q": "redb database tables storing chunks files and embedding cache", "expect": ["crates/loom-rag/src/ledger.rs"]},
+    {"q": "diff merkle trees from walk and ledger to find changed files", "expect": ["crates/loom-rag/src/engine/index.rs"]},
+    {"q": "stream git log patches into tantivy documents for commit search", "expect": ["crates/loom-rag/src/history.rs"]},
+    {"q": "find chunks defining or referencing a symbol identifier", "expect": ["crates/loom-rag/src/lookup.rs", "crates/loom-rag/src/symbols.rs"]},
+    {"q": "ignore-aware directory traversal skipping binary files and build artifacts", "expect": ["crates/loom-rag/src/walk.rs"]},
+    {"q": "resolve project settings from rag toml and environment overrides", "expect": ["crates/dendrite-rag/src/settings.rs"]},
+    {"q": "query post-norm JinaBERT code embedding model implementation", "expect": ["crates/loom-rag/src/embed/jina_code.rs"]},
+    {"q": "cross-encoder reranking over fused candidates through gateway endpoint", "expect": ["crates/loom-rag/src/rerank.rs"]},
+    {"q": "estimate prompt token counts from character length with safety factor", "expect": ["crates/loom-rag/src/retrieve/pack.rs"]},
+    {"q": "CodeTokenizer", "expect": ["crates/loom-rag/src/lexical.rs"]},
+    {"q": "FlatIndex", "expect": ["crates/loom-rag/src/vector.rs"]}
+  ]
+}

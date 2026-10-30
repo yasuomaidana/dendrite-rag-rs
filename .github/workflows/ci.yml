@@ -1,0 +1,78 @@
+name: ci
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - name: No file over its production-line limit
+        run: cargo run -q -p loom-gate -- loc --format github
+      - name: Tests use the rstest crate
+        run: cargo run -q -p loom-gate -- rstest --format github
+      - name: No repeated code
+        run: cargo run -q -p loom-gate -- clones --format github
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+  memory:
+    # The benchmarks build, and the peak-heap regression gate holds (dhat, release).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: memory
+      - run: cargo clippy -p loom-rag --all-targets --features testutil,dhat -- -D warnings
+      - run: cargo test --release -p loom-rag --features dhat,testutil --test peak_heap -- --nocapture
+  embedders:
+    # Each in-process embedder builds and passes its unit tests on its own; live model
+    # tests stay behind --ignored.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: [model2vec, candle, oxillama, hnsw, sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.feature }}
+      - run: cargo clippy --workspace --all-targets --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }} -- -D warnings
+      - run: cargo test --workspace --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }}
+  postgres:
+    # The shared tier against a real PostgreSQL 16 with pgvector.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: ragtest
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rag" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      LOOM_TEST_PG_URL: postgresql://rag:rag@localhost:5432/ragtest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres
+      - run: cargo clippy --workspace --all-targets --features loom-rag/postgres,dendrite-rag/postgres -- -D warnings
+      - run: cargo test --workspace --features loom-rag/postgres,dendrite-rag/postgres

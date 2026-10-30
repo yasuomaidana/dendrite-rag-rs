@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/push.json",
+  "title": "push",
+  "description": "Uploads the project's index to the shared tier, records the chunks of the current commit and compacts the tier (feature postgres). With dry_run the same statements run in a transaction that is rolled back.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "dry_run": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "dry_run",
+      "commit",
+      "branch",
+      "files",
+      "chunks",
+      "embeddings_uploaded",
+      "vectors",
+      "compaction"
+    ],
+    "properties": {
+      "dry_run": {
+        "type": "boolean"
+      },
+      "commit": {
+        "type": "string"
+      },
+      "branch": {
+        "type": "string"
+      },
+      "files": {
+        "type": "integer"
+      },
+      "chunks": {
+        "type": "integer"
+      },
+      "embeddings_uploaded": {
+        "type": "integer"
+      },
+      "vectors": {
+        "type": "integer"
+      },
+      "compaction": {
+        "type": "object",
+        "required": [
+          "snapshots_unreachable",
+          "commits_unreachable",
+          "embeddings_orphaned",
+          "embeddings_near_duplicate",
+          "rows_orphaned"
+        ],
+        "properties": {
+          "snapshots_unreachable": {
+            "type": "integer"
+          },
+          "commits_unreachable": {
+            "type": "integer"
+          },
+          "embeddings_orphaned": {
+            "type": "integer"
+          },
+          "embeddings_near_duplicate": {
+            "type": "integer"
+          },
+          "rows_orphaned": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

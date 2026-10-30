@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/quality.loc.json",
+  "title": "quality.loc",
+  "description": "Production lines per code file against the project's limits (tests, comments and blank lines do not count). No index needed.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "config": {
+        "type": "string",
+        "description": "Directives file; default <root>/.github/dendrite/directives.toml"
+      },
+      "max_production_lines": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 500
+      },
+      "warn_at": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 450
+      },
+      "exclude": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Globs relative to root"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "schema",
+      "max_production_lines",
+      "warn_at",
+      "totals",
+      "files"
+    ],
+    "properties": {
+      "schema": {
+        "type": "integer",
+        "const": 1
+      },
+      "max_production_lines": {
+        "type": "integer"
+      },
+      "warn_at": {
+        "type": "integer"
+      },
+      "totals": {
+        "type": "object",
+        "required": [
+          "files",
+          "production",
+          "test",
+          "warnings",
+          "failures"
+        ],
+        "properties": {
+          "files": {
+            "type": "integer"
+          },
+          "production": {
+            "type": "integer"
+          },
+          "test": {
+            "type": "integer"
+          },
+          "warnings": {
+            "type": "integer"
+          },
+          "failures": {
+            "type": "integer"
+          }
+        }
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "language",
+            "production",
+            "test",
+            "comment",
+            "blank",
+            "status",
+            "parse_errors"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string"
+            },
+            "production": {
+              "type": "integer"
+            },
+            "test": {
+              "type": "integer"
+            },
+            "comment": {
+              "type": "integer"
+            },
+            "blank": {
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "ok",
+                "warn",
+                "fail"
+              ]
+            },
+            "parse_errors": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  }
+}
