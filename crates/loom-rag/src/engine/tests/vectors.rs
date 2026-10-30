@@ -1,7 +1,6 @@
 //! Vector index and query-embedding cache tests.
 
 use super::*;
-use crate::testutil::SharedEmbedder;
 
 #[test]
 fn dense_search_uses_cached_embeddings() {
@@ -36,12 +35,8 @@ fn truncated_or_corrupt_vectors_heals_from_cache() {
     use std::sync::atomic::Ordering;
     let dir = project();
     let embedder = Arc::new(HashEmbedder::new());
-    let mut e = Engine::open_with_embedder(
-        dir.path(),
-        Config::default(),
-        Some(Box::new(SharedEmbedder(embedder.clone()))),
-    )
-    .unwrap();
+    let mut e =
+        Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder.clone()))).unwrap();
     let r = e.index(false).unwrap();
     assert_eq!(r.embedded, r.chunks_added);
     assert!(e.status().unwrap().vectors > 0);
@@ -58,12 +53,8 @@ fn truncated_or_corrupt_vectors_heals_from_cache() {
 
     // Engine::open succeeds on corrupt vectors.bin
     let embedder = Arc::new(HashEmbedder::new());
-    let mut e = Engine::open_with_embedder(
-        dir.path(),
-        Config::default(),
-        Some(Box::new(SharedEmbedder(embedder.clone()))),
-    )
-    .unwrap();
+    let mut e =
+        Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder.clone()))).unwrap();
     assert_eq!(e.status().unwrap().vectors, 0);
 
     // After index, dense search works with zero embed calls
@@ -83,12 +74,8 @@ fn truncated_or_corrupt_vectors_heals_from_cache() {
     fs::write(&vectors_path, &bytes).unwrap();
 
     let embedder = Arc::new(HashEmbedder::new());
-    let mut e = Engine::open_with_embedder(
-        dir.path(),
-        Config::default(),
-        Some(Box::new(SharedEmbedder(embedder.clone()))),
-    )
-    .unwrap();
+    let mut e =
+        Engine::open_with_embedder(dir.path(), Config::default(), Some(Box::new(embedder.clone()))).unwrap();
     assert_eq!(e.status().unwrap().vectors, 0);
 
     let r = e.index(false).unwrap();

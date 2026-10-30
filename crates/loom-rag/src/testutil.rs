@@ -326,24 +326,6 @@ pub fn write_files(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
-/// An embedder that delegates to a [`HashEmbedder`] the test keeps a handle on, so two engines
-/// (or the test itself) can share one model and count its calls.
-pub struct SharedEmbedder(pub Arc<HashEmbedder>);
-
-impl Embedder for SharedEmbedder {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.0.embed_documents(texts)
-    }
-
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.0.embed_query(text)
-    }
-}
-
 /// `prefix` plus the current time in nanoseconds: a repository name no earlier run used.
 pub fn unique(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
@@ -377,7 +359,7 @@ pub fn engine_with(
         ..crate::engine::Config::default()
     };
     let embedder: Box<dyn Embedder> = match embedder {
-        Some(e) => Box::new(SharedEmbedder(e.clone())),
+        Some(e) => Box::new(e.clone()),
         None => Box::new(HashEmbedder::new()),
     };
     crate::engine::Engine::open_with_embedder(root, cfg, Some(embedder)).unwrap()

@@ -375,17 +375,15 @@ type LoadedEmbedders =
 static LOADED: std::sync::OnceLock<LoadedEmbedders> = std::sync::OnceLock::new();
 
 /// A loaded embedder shared by every engine the process opens with the same configuration.
-struct Shared(std::sync::Arc<dyn Embedder>);
-
-impl Embedder for Shared {
+impl<T: Embedder + ?Sized> Embedder for std::sync::Arc<T> {
     fn model_id(&self) -> &str {
-        self.0.model_id()
+        (**self).model_id()
     }
     fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.0.embed_documents(texts)
+        (**self).embed_documents(texts)
     }
     fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.0.embed_query(text)
+        (**self).embed_query(text)
     }
 }
 
@@ -409,9 +407,7 @@ fn shared_with(
         let embedder = load(cfg)?.map(std::sync::Arc::<dyn Embedder>::from);
         loaded.insert(key.clone(), embedder);
     }
-    Ok(loaded[&key]
-        .clone()
-        .map(|e| Box::new(Shared(e)) as Box<dyn Embedder>))
+    Ok(loaded[&key].clone().map(|e| Box::new(e) as Box<dyn Embedder>))
 }
 
 /// Longest text sent to a model, in bytes; longer chunks are truncated at a char boundary.

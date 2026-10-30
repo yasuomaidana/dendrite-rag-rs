@@ -66,6 +66,25 @@ use loom_rag::config::{GraphLlmSettings, VectorIndexChoice};
 use loom_rag::embed::{Backend, EmbedConfig, Pooling};
 use loom_rag::engine::Config;
 use loom_rag::rerank::{RerankBackend, RerankConfig};
+
+/// [`apply_backend_by`] for a section whose backend enum has `parse`, `ALL` and `as_str`.
+macro_rules! apply_backend {
+    ($var:expr, $key:expr, $backend:ident, $cfg:ident, $section:expr) => {
+        apply_backend_by(
+            $var,
+            $key,
+            $backend::parse,
+            $backend::ALL.iter().map(|b| b.as_str()).collect(),
+            $section,
+            |c| c.backend,
+            |backend| $cfg {
+                backend,
+                ..Default::default()
+            },
+        )?
+    };
+}
+
 use loom_rag::retrieve::DEFAULT_DOCS_SHARE;
 
 /// Project-relative location of the settings file.
@@ -167,19 +186,14 @@ impl Settings {
     }
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
-        let e = &mut self.embed;
-        if let Some(backend) = changed_backend(
+        apply_backend!(
             &var,
             "DENDRITE_RAG_EMBED_BACKEND",
-            Backend::parse,
-            Backend::ALL.iter().map(|b| b.as_str()).collect(),
-            e.backend,
-        )? {
-            *e = EmbedConfig {
-                backend,
-                ..Default::default()
-            };
-        }
+            Backend,
+            EmbedConfig,
+            &mut self.embed
+        );
+        let e = &mut self.embed;
         let set = |field: &mut Option<String>, key: &str| {
             if let Some(v) = var(key) {
                 *field = Some(v);
@@ -201,19 +215,13 @@ impl Settings {
         env_parse(&var, &mut e.batch, "DENDRITE_RAG_EMBED_BATCH")?;
         env_parse(&var, &mut e.dimensions, "DENDRITE_RAG_EMBED_DIMENSIONS")?;
         env_parse(&var, &mut e.budget_tokens, "DENDRITE_RAG_EMBED_BUDGET_TOKENS")?;
-        let r = &mut self.rerank;
-        if let Some(backend) = changed_backend(
+        apply_backend!(
             &var,
             "DENDRITE_RAG_RERANK_BACKEND",
-            RerankBackend::parse,
-            RerankBackend::ALL.iter().map(|b| b.as_str()).collect(),
-            r.backend,
-        )? {
-            *r = RerankConfig {
-                backend,
-                ..Default::default()
-            };
-        }
+            RerankBackend,
+            RerankConfig,
+            &mut self.rerank
+        );
         set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
         set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
         set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
@@ -428,21 +436,26 @@ where
     Ok(())
 }
 
-/// The backend `key` names when it is set and differs from `current`; an error lists the `names`
-/// it accepts.
-fn changed_backend<B: PartialEq>(
+/// Applies a `*_BACKEND` variable to `section`: naming a different backend restarts the section
+/// from that backend's defaults. An error lists the `names` `key` accepts.
+fn apply_backend_by<C, B: PartialEq>(
     var: &impl Fn(&str) -> Option<String>,
     key: &str,
     parse: fn(&str) -> Option<B>,
     names: Vec<&str>,
-    current: B,
-) -> anyhow::Result<Option<B>> {
+    section: &mut C,
+    backend_of: fn(&C) -> B,
+    restart: fn(B) -> C,
+) -> anyhow::Result<()> {
     let Some(raw) = var(key) else {
-        return Ok(None);
+        return Ok(());
     };
     let backend =
         parse(&raw).ok_or_else(|| anyhow::anyhow!("{key}={raw:?}: expected one of {}", names.join(", ")))?;
-    Ok((backend != current).then_some(backend))
+    if backend != backend_of(section) {
+        *section = restart(backend);
+    }
+    Ok(())
 }
 
 /// Reads `key` into `field` through `parse` when it is set; `expected` names the accepted values.
