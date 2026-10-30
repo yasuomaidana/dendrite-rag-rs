@@ -23,6 +23,25 @@ use crate::vector::{FlatIndex, VectorIndex};
 
 pub type Result<T> = crate::engine::Result<T>;
 
+/// A free connection of `pool` if there is one, else the next in turn: concurrent readers do
+/// not queue behind each other. `next` is the round-robin counter of the pool.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) fn pick_connection<'a, T>(
+    pool: &'a [std::sync::Mutex<T>],
+    next: &std::sync::atomic::AtomicUsize,
+    what: &str,
+) -> std::sync::MutexGuard<'a, T> {
+    let start = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    for i in 0..pool.len() {
+        if let Ok(c) = pool[(start + i) % pool.len()].try_lock() {
+            return c;
+        }
+    }
+    pool[start % pool.len()]
+        .lock()
+        .unwrap_or_else(|_| panic!("{what} lock"))
+}
+
 /// Read-only access to files, chunks, embeddings, metadata, and graph communities.
 pub trait LedgerStore: Send + Sync {
     fn files(&self) -> crate::ledger::Result<BTreeMap<String, FileEntry>>;

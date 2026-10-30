@@ -1,6 +1,7 @@
 //! Vector index and query-embedding cache tests.
 
 use super::*;
+use crate::testutil::SharedEmbedder;
 
 #[test]
 fn dense_search_uses_cached_embeddings() {

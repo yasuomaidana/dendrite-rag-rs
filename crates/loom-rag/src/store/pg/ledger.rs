@@ -76,15 +76,10 @@ impl LedgerStore for PgLedger {
     }
 
     fn meta(&self, key: &str) -> crate::ledger::Result<Option<String>> {
-        Ok(self
-            .0
-            .client()
-            .query_opt(
-                "SELECT value FROM rag_meta WHERE repo = $1 AND key = $2",
-                &[&self.0.repo, &key],
-            )
-            .map_err(backend)?
-            .map(|r| r.get(0)))
+        self.0.text_opt(
+            "SELECT value FROM rag_meta WHERE repo = $1 AND key = $2",
+            &[&self.0.repo, &key],
+        )
     }
 
     fn embedding(&self, key: &str) -> crate::ledger::Result<Option<Vec<f32>>> {
@@ -183,27 +178,17 @@ impl LedgerStore for PgLedger {
     }
 
     fn llm_cache(&self, model: &str, prompt_hash: &str) -> crate::ledger::Result<Option<String>> {
-        Ok(self
-            .0
-            .client()
-            .query_opt(
-                "SELECT value FROM rag_llm_cache WHERE model = $1 AND prompt_hash = $2",
-                &[&model, &prompt_hash],
-            )
-            .map_err(backend)?
-            .map(|r| r.get(0)))
+        self.0.text_opt(
+            "SELECT value FROM rag_llm_cache WHERE model = $1 AND prompt_hash = $2",
+            &[&model, &prompt_hash],
+        )
     }
 
     fn concepts(&self, path: &str) -> crate::ledger::Result<Option<String>> {
-        Ok(self
-            .0
-            .client()
-            .query_opt(
-                "SELECT concepts FROM rag_concepts WHERE repo = $1 AND path = $2",
-                &[&self.0.repo, &path],
-            )
-            .map_err(backend)?
-            .map(|r| r.get(0)))
+        self.0.text_opt(
+            "SELECT concepts FROM rag_concepts WHERE repo = $1 AND path = $2",
+            &[&self.0.repo, &path],
+        )
     }
 
     fn batch(&self) -> crate::ledger::Result<Box<dyn LedgerWrite + '_>> {
@@ -257,66 +242,61 @@ struct PgLedgerWrite<'a> {
     ops: Vec<LedgerOp>,
 }
 
+impl PgLedgerWrite<'_> {
+    fn queue(&mut self, op: LedgerOp) -> crate::ledger::Result<()> {
+        self.ops.push(op);
+        Ok(())
+    }
+}
+
 impl LedgerWrite for PgLedgerWrite<'_> {
     fn put_file(&mut self, path: &str, entry: &FileEntry) -> crate::ledger::Result<()> {
-        self.ops
-            .push(LedgerOp::PutFile(path.to_string(), serde_json::to_value(entry)?));
-        Ok(())
+        self.queue(LedgerOp::PutFile(path.to_string(), serde_json::to_value(entry)?))
     }
 
     fn remove_file(&mut self, path: &str) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::RemoveFile(path.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveFile(path.to_string()))
     }
 
     fn put_chunk(&mut self, chunk: &Chunk) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::PutChunk(
+        self.queue(LedgerOp::PutChunk(
             chunk.id.clone(),
             chunk.path.clone(),
             serde_json::to_value(chunk)?,
-        ));
-        Ok(())
+        ))
     }
 
     fn remove_chunk(&mut self, id: &str) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::RemoveChunk(id.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveChunk(id.to_string()))
     }
 
     fn put_embedding(&mut self, key: &str, vector: &[f32]) -> crate::ledger::Result<()> {
         let (m, h) = split_key(key);
-        self.ops.push(LedgerOp::PutEmbedding(
+        self.queue(LedgerOp::PutEmbedding(
             m.to_string(),
             h.to_string(),
             vector.to_vec(),
-        ));
-        Ok(())
+        ))
     }
 
     fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::PutLlmCache(
+        self.queue(LedgerOp::PutLlmCache(
             model.to_string(),
             prompt_hash.to_string(),
             value.to_string(),
-        ));
-        Ok(())
+        ))
     }
 
     fn put_concepts(&mut self, path: &str, json: &str) -> crate::ledger::Result<()> {
-        self.ops
-            .push(LedgerOp::PutConcepts(path.to_string(), json.to_string()));
-        Ok(())
+        self.queue(LedgerOp::PutConcepts(path.to_string(), json.to_string()))
     }
 
     fn remove_concepts(&mut self, path: &str) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::RemoveConcepts(path.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveConcepts(path.to_string()))
     }
 
     fn set_meta(&mut self, key: &str, value: &str) -> crate::ledger::Result<()> {
-        self.ops
-            .push(LedgerOp::SetMeta(key.to_string(), value.to_string()));
-        Ok(())
+        self.queue(LedgerOp::SetMeta(key.to_string(), value.to_string()))
     }
 
     fn put_communities(
@@ -324,13 +304,11 @@ impl LedgerWrite for PgLedgerWrite<'_> {
         communities: &[Community],
         files: &BTreeMap<String, FileEntry>,
     ) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::communities(communities, files)?);
-        Ok(())
+        self.queue(LedgerOp::communities(communities, files)?)
     }
 
     fn clear_index(&mut self) -> crate::ledger::Result<()> {
-        self.ops.push(LedgerOp::ClearIndex);
-        Ok(())
+        self.queue(LedgerOp::ClearIndex)
     }
 
     fn commit(self: Box<Self>) -> crate::ledger::Result<()> {

@@ -63,41 +63,7 @@ fn raw(dir: &Path) -> rusqlite::Connection {
 #[test]
 fn round_trips_files_chunks_embeddings_and_meta() {
     let dir = tempfile::tempdir().unwrap();
-    let chunks = chunk_file(
-        "a.go",
-        Lang::Go,
-        "package a\n\nfunc F() {}\n",
-        ChunkOptions::default(),
-    );
-    {
-        let ledger = open(dir.path());
-        let mut b = ledger.batch().unwrap();
-        let entry = FileEntry {
-            hash: "h".into(),
-            size: 3,
-            mtime_ns: 7,
-            chunk_ids: vec![chunks[0].id.clone()],
-            imports: vec!["fmt".into()],
-        };
-        b.put_file("a.go", &entry).unwrap();
-        b.put_chunk(&chunks[0]).unwrap();
-        b.put_embedding("m:x", &[1.0, -0.5]).unwrap();
-        b.set_meta("merkle_root", "abc").unwrap();
-        b.commit().unwrap();
-    }
-    let ledger = open(dir.path());
-    assert_eq!(ledger.files().unwrap()["a.go"].mtime_ns, 7);
-    assert_eq!(ledger.chunk(&chunks[0].id).unwrap().unwrap(), chunks[0]);
-    assert_eq!(ledger.embedding("m:x").unwrap().unwrap(), vec![1.0, -0.5]);
-    assert_eq!(ledger.meta("merkle_root").unwrap().as_deref(), Some("abc"));
-    assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
-
-    let mut b = ledger.batch().unwrap();
-    b.clear_index().unwrap();
-    b.commit().unwrap();
-    assert!(ledger.files().unwrap().is_empty());
-    assert_eq!(ledger.chunk_count().unwrap(), 0);
-    assert_eq!(ledger.embedding_count().unwrap(), 1);
+    crate::testutil::assert_ledger_round_trip(|| open(dir.path()));
 }
 
 #[test]

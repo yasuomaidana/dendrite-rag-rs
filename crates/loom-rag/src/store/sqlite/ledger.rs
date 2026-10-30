@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{Connection, OptionalExtension, Params, TransactionBehavior, params};
@@ -42,18 +42,9 @@ impl SqliteLedger {
         })
     }
 
-    /// A free read connection if there is one, else the next in turn: concurrent readers do
-    /// not queue behind each other.
+    /// A free read connection if there is one, else the next in turn.
     fn reader(&self) -> MutexGuard<'_, Connection> {
-        let start = self.next.fetch_add(1, Ordering::Relaxed);
-        for i in 0..self.readers.len() {
-            if let Ok(c) = self.readers[(start + i) % self.readers.len()].try_lock() {
-                return c;
-            }
-        }
-        self.readers[start % self.readers.len()]
-            .lock()
-            .expect("sqlite reader lock")
+        crate::store::pick_connection(&self.readers, &self.next, "sqlite reader")
     }
 
     fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -293,67 +284,62 @@ struct SqliteLedgerWrite<'a> {
     ops: Vec<LedgerOp>,
 }
 
+impl SqliteLedgerWrite<'_> {
+    fn queue(&mut self, op: LedgerOp) -> Result<()> {
+        self.ops.push(op);
+        Ok(())
+    }
+}
+
 impl LedgerWrite for SqliteLedgerWrite<'_> {
     fn put_file(&mut self, path: &str, entry: &FileEntry) -> Result<()> {
-        self.ops
-            .push(LedgerOp::PutFile(path.to_string(), serde_json::to_string(entry)?));
-        Ok(())
+        self.queue(LedgerOp::PutFile(path.to_string(), serde_json::to_string(entry)?))
     }
 
     fn remove_file(&mut self, path: &str) -> Result<()> {
-        self.ops.push(LedgerOp::RemoveFile(path.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveFile(path.to_string()))
     }
 
     fn put_chunk(&mut self, chunk: &Chunk) -> Result<()> {
-        self.ops.push(LedgerOp::PutChunk(
+        self.queue(LedgerOp::PutChunk(
             chunk.id.clone(),
             chunk.path.clone(),
             chunk.content_hash.clone(),
             serde_json::to_string(chunk)?,
-        ));
-        Ok(())
+        ))
     }
 
     fn remove_chunk(&mut self, id: &str) -> Result<()> {
-        self.ops.push(LedgerOp::RemoveChunk(id.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveChunk(id.to_string()))
     }
 
     fn put_embedding(&mut self, key: &str, vector: &[f32]) -> Result<()> {
         let (model, hash) = split_key(key);
-        self.ops.push(LedgerOp::PutEmbedding(
+        self.queue(LedgerOp::PutEmbedding(
             model.to_string(),
             hash.to_string(),
             encode_f32(vector),
-        ));
-        Ok(())
+        ))
     }
 
     fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> Result<()> {
-        self.ops.push(LedgerOp::PutLlmCache(
+        self.queue(LedgerOp::PutLlmCache(
             model.to_string(),
             prompt_hash.to_string(),
             value.to_string(),
-        ));
-        Ok(())
+        ))
     }
 
     fn put_concepts(&mut self, path: &str, json: &str) -> Result<()> {
-        self.ops
-            .push(LedgerOp::PutConcepts(path.to_string(), json.to_string()));
-        Ok(())
+        self.queue(LedgerOp::PutConcepts(path.to_string(), json.to_string()))
     }
 
     fn remove_concepts(&mut self, path: &str) -> Result<()> {
-        self.ops.push(LedgerOp::RemoveConcepts(path.to_string()));
-        Ok(())
+        self.queue(LedgerOp::RemoveConcepts(path.to_string()))
     }
 
     fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
-        self.ops
-            .push(LedgerOp::SetMeta(key.to_string(), value.to_string()));
-        Ok(())
+        self.queue(LedgerOp::SetMeta(key.to_string(), value.to_string()))
     }
 
     /// Replaces every community, with the id of each member file and of its chunks.
@@ -362,14 +348,12 @@ impl LedgerWrite for SqliteLedgerWrite<'_> {
         communities: &[Community],
         files: &BTreeMap<String, FileEntry>,
     ) -> Result<()> {
-        self.ops.push(LedgerOp::communities(communities, files)?);
-        Ok(())
+        self.queue(LedgerOp::communities(communities, files)?)
     }
 
     /// Removes every file and chunk (embeddings and LLM cache are kept: they are keyed by content).
     fn clear_index(&mut self) -> Result<()> {
-        self.ops.push(LedgerOp::ClearIndex);
-        Ok(())
+        self.queue(LedgerOp::ClearIndex)
     }
 
     fn commit(self: Box<Self>) -> Result<()> {

@@ -142,22 +142,6 @@ fn full_rebuild_status_and_purge() {
     assert!(!index_dir.exists());
 }
 
-struct SharedEmbedder(Arc<HashEmbedder>);
-
-impl Embedder for SharedEmbedder {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-
-    fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
-        self.0.embed_documents(texts)
-    }
-
-    fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
-        self.0.embed_query(text)
-    }
-}
-
 #[test]
 fn index_stores_communities_per_file_and_chunk() {
     let dir = project();

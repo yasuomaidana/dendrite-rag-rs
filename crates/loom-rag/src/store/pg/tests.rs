@@ -1,50 +1,17 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::embed::Embedder;
-use crate::engine::{Config, Engine};
+use crate::engine::Engine;
 use crate::retrieve::{Mode, SearchOpts};
 use crate::store::{StorageConfig, StorageMode};
-use crate::testutil::{HashEmbedder, project};
-
-struct Shared(Arc<HashEmbedder>);
-
-impl Embedder for Shared {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-    fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
-        self.0.embed_documents(texts)
-    }
-    fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
-        self.0.embed_query(text)
-    }
-}
-
-fn unique(prefix: &str) -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{prefix}-{nanos}")
-}
+use crate::testutil::{HashEmbedder, engine_with, pg_storage, project, unique};
 
 fn open(root: &std::path::Path, storage: StorageConfig, embedder: &Arc<HashEmbedder>) -> Engine {
-    let cfg = Config {
-        index_dir: Some(root.join(".loom-test")),
-        storage,
-        ..Config::default()
-    };
-    Engine::open_with_embedder(root, cfg, Some(Box::new(Shared(embedder.clone())))).unwrap()
+    engine_with(root, ".loom-test", storage, Some(embedder))
 }
 
 fn remote(url: &str, repo: &str) -> StorageConfig {
-    StorageConfig {
-        mode: StorageMode::Remote,
-        repo: Some(repo.to_string()),
-        pg_url: Some(url.to_string()),
-        ..StorageConfig::default()
-    }
+    pg_storage(StorageMode::Remote, url, repo)
 }
 
 fn ids(e: &Engine, q: &str, mode: Mode) -> Vec<String> {

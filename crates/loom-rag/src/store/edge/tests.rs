@@ -1,32 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::embed::Embedder;
-use crate::engine::{Config, Engine};
-use crate::store::{StorageConfig, StorageMode};
-use crate::testutil::{HashEmbedder, project};
-
-struct Shared(Arc<HashEmbedder>);
-
-impl Embedder for Shared {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-    fn embed_documents(&self, texts: &[String]) -> crate::embed::Result<Vec<Vec<f32>>> {
-        self.0.embed_documents(texts)
-    }
-    fn embed_query(&self, text: &str) -> crate::embed::Result<Vec<f32>> {
-        self.0.embed_query(text)
-    }
-}
-
-fn unique(prefix: &str) -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{prefix}-{nanos}")
-}
+use crate::engine::Engine;
+use crate::store::StorageMode;
+use crate::testutil::{HashEmbedder, engine_with, pg_storage, project, unique};
 
 fn open(
     root: &std::path::Path,
@@ -36,17 +13,7 @@ fn open(
     repo: &str,
     e: &Arc<HashEmbedder>,
 ) -> Engine {
-    let cfg = Config {
-        index_dir: Some(root.join(index)),
-        storage: StorageConfig {
-            mode,
-            repo: Some(repo.to_string()),
-            pg_url: Some(url.to_string()),
-            ..StorageConfig::default()
-        },
-        ..Config::default()
-    };
-    Engine::open_with_embedder(root, cfg, Some(Box::new(Shared(e.clone())))).unwrap()
+    engine_with(root, index, pg_storage(mode, url, repo), Some(e))
 }
 
 #[test]

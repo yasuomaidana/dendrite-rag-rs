@@ -324,9 +324,9 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
 mod tests {
     use std::path::Path;
 
-    use crate::engine::{Config, Engine};
-    use crate::store::{StorageConfig, StorageMode};
-    use crate::testutil::{HashEmbedder, project};
+    use crate::engine::Engine;
+    use crate::store::StorageMode;
+    use crate::testutil::project;
 
     fn git(root: &Path, args: &[&str]) {
         let ok = std::process::Command::new("git")
@@ -349,17 +349,7 @@ mod tests {
     }
 
     fn engine(root: &Path, url: &str, repo: &str, mode: StorageMode, index: &str) -> Engine {
-        let cfg = Config {
-            index_dir: Some(root.join(index)),
-            storage: StorageConfig {
-                mode,
-                repo: Some(repo.to_string()),
-                pg_url: Some(url.to_string()),
-                ..StorageConfig::default()
-            },
-            ..Config::default()
-        };
-        Engine::open_with_embedder(root, cfg, Some(Box::new(HashEmbedder::new()))).unwrap()
+        crate::testutil::engine_with(root, index, crate::testutil::pg_storage(mode, url, repo), None)
     }
 
     fn words(n: usize, extra: &str) -> String {

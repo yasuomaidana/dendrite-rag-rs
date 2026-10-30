@@ -283,75 +283,64 @@ struct EdgeLedgerWrite<'a> {
     edge: &'a Edge,
 }
 
+impl EdgeLedgerWrite<'_> {
+    /// Applies a change to the local ledger, then queues `op` to replay on the remote one.
+    fn mirror(
+        &mut self,
+        local: impl FnOnce(&mut dyn LedgerWrite) -> crate::ledger::Result<()>,
+        op: LedgerOp,
+    ) -> crate::ledger::Result<()> {
+        local(&mut *self.local)?;
+        self.ops.push(op);
+        Ok(())
+    }
+}
+
 impl LedgerWrite for EdgeLedgerWrite<'_> {
     fn put_file(&mut self, path: &str, entry: &FileEntry) -> crate::ledger::Result<()> {
-        self.local.put_file(path, entry)?;
-        self.ops
-            .push(LedgerOp::PutFile(path.to_string(), serde_json::to_value(entry)?));
-        Ok(())
+        let op = LedgerOp::PutFile(path.to_string(), serde_json::to_value(entry)?);
+        self.mirror(|l| l.put_file(path, entry), op)
     }
 
     fn remove_file(&mut self, path: &str) -> crate::ledger::Result<()> {
-        self.local.remove_file(path)?;
-        self.ops.push(LedgerOp::RemoveFile(path.to_string()));
-        Ok(())
+        self.mirror(|l| l.remove_file(path), LedgerOp::RemoveFile(path.to_string()))
     }
 
     fn put_chunk(&mut self, chunk: &Chunk) -> crate::ledger::Result<()> {
-        self.local.put_chunk(chunk)?;
-        self.ops.push(LedgerOp::PutChunk(
-            chunk.id.clone(),
-            chunk.path.clone(),
-            serde_json::to_value(chunk)?,
-        ));
-        Ok(())
+        let op = LedgerOp::PutChunk(chunk.id.clone(), chunk.path.clone(), serde_json::to_value(chunk)?);
+        self.mirror(|l| l.put_chunk(chunk), op)
     }
 
     fn remove_chunk(&mut self, id: &str) -> crate::ledger::Result<()> {
-        self.local.remove_chunk(id)?;
-        self.ops.push(LedgerOp::RemoveChunk(id.to_string()));
-        Ok(())
+        self.mirror(|l| l.remove_chunk(id), LedgerOp::RemoveChunk(id.to_string()))
     }
 
     fn put_embedding(&mut self, key: &str, vector: &[f32]) -> crate::ledger::Result<()> {
-        self.local.put_embedding(key, vector)?;
         let (model, hash) = key.split_once('\0').unwrap_or(("", key));
-        self.ops.push(LedgerOp::PutEmbedding(
-            model.to_string(),
-            hash.to_string(),
-            vector.to_vec(),
-        ));
-        Ok(())
+        let op = LedgerOp::PutEmbedding(model.to_string(), hash.to_string(), vector.to_vec());
+        self.mirror(|l| l.put_embedding(key, vector), op)
     }
 
     fn put_llm_cache(&mut self, model: &str, prompt_hash: &str, value: &str) -> crate::ledger::Result<()> {
-        self.local.put_llm_cache(model, prompt_hash, value)?;
-        self.ops.push(LedgerOp::PutLlmCache(
-            model.to_string(),
-            prompt_hash.to_string(),
-            value.to_string(),
-        ));
-        Ok(())
+        let op = LedgerOp::PutLlmCache(model.to_string(), prompt_hash.to_string(), value.to_string());
+        self.mirror(|l| l.put_llm_cache(model, prompt_hash, value), op)
     }
 
     fn put_concepts(&mut self, path: &str, json: &str) -> crate::ledger::Result<()> {
-        self.local.put_concepts(path, json)?;
-        self.ops
-            .push(LedgerOp::PutConcepts(path.to_string(), json.to_string()));
-        Ok(())
+        let op = LedgerOp::PutConcepts(path.to_string(), json.to_string());
+        self.mirror(|l| l.put_concepts(path, json), op)
     }
 
     fn remove_concepts(&mut self, path: &str) -> crate::ledger::Result<()> {
-        self.local.remove_concepts(path)?;
-        self.ops.push(LedgerOp::RemoveConcepts(path.to_string()));
-        Ok(())
+        self.mirror(
+            |l| l.remove_concepts(path),
+            LedgerOp::RemoveConcepts(path.to_string()),
+        )
     }
 
     fn set_meta(&mut self, key: &str, value: &str) -> crate::ledger::Result<()> {
-        self.local.set_meta(key, value)?;
-        self.ops
-            .push(LedgerOp::SetMeta(key.to_string(), value.to_string()));
-        Ok(())
+        let op = LedgerOp::SetMeta(key.to_string(), value.to_string());
+        self.mirror(|l| l.set_meta(key, value), op)
     }
 
     fn put_communities(
@@ -359,15 +348,12 @@ impl LedgerWrite for EdgeLedgerWrite<'_> {
         communities: &[Community],
         files: &BTreeMap<String, FileEntry>,
     ) -> crate::ledger::Result<()> {
-        self.local.put_communities(communities, files)?;
-        self.ops.push(LedgerOp::communities(communities, files)?);
-        Ok(())
+        let op = LedgerOp::communities(communities, files)?;
+        self.mirror(|l| l.put_communities(communities, files), op)
     }
 
     fn clear_index(&mut self) -> crate::ledger::Result<()> {
-        self.local.clear_index()?;
-        self.ops.push(LedgerOp::ClearIndex);
-        Ok(())
+        self.mirror(|l| l.clear_index(), LedgerOp::ClearIndex)
     }
 
     fn commit(self: Box<Self>) -> crate::ledger::Result<()> {

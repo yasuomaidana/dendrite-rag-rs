@@ -102,24 +102,50 @@ impl Ledger {
         Ok(Self { db })
     }
 
-    pub fn files(&self) -> Result<BTreeMap<String, FileEntry>> {
+    /// Every row of `table`, mapped by `f` in key order, in one read transaction.
+    fn rows<K: redb::Key + 'static, V: redb::Value + 'static, T>(
+        &self,
+        table: TableDefinition<K, V>,
+        mut f: impl for<'a> FnMut(K::SelfType<'a>, V::SelfType<'a>) -> Result<T>,
+    ) -> Result<Vec<T>> {
         let txn = self.db.begin_read()?;
-        let table = txn.open_table(FILES)?;
-        let mut out = BTreeMap::new();
+        let table = txn.open_table(table)?;
+        let mut out = Vec::new();
         for row in table.iter()? {
             let (k, v) = row?;
-            out.insert(k.value().to_string(), serde_json::from_slice(v.value())?);
+            out.push(f(k.value(), v.value())?);
         }
         Ok(out)
     }
 
-    pub fn chunk(&self, id: &str) -> Result<Option<Chunk>> {
+    /// The JSON record stored under `key` in `table`, if any.
+    fn get_json<'k, K: redb::Key + 'static, T: serde::de::DeserializeOwned>(
+        &self,
+        table: TableDefinition<K, &'static [u8]>,
+        key: K::SelfType<'k>,
+    ) -> Result<Option<T>> {
         let txn = self.db.begin_read()?;
-        let table = txn.open_table(CHUNKS)?;
-        Ok(match table.get(id)? {
+        let table = txn.open_table(table)?;
+        Ok(match table.get(key)? {
             Some(v) => Some(serde_json::from_slice(v.value())?),
             None => None,
         })
+    }
+
+    /// The text stored under `key` in `table`, if any.
+    fn get_text(&self, table: TableDefinition<&str, &str>, key: &str) -> Result<Option<String>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(table)?;
+        Ok(table.get(key)?.map(|v| v.value().to_string()))
+    }
+
+    pub fn files(&self) -> Result<BTreeMap<String, FileEntry>> {
+        let rows = self.rows(FILES, |k, v| Ok((k.to_string(), serde_json::from_slice(v)?)))?;
+        Ok(rows.into_iter().collect())
+    }
+
+    pub fn chunk(&self, id: &str) -> Result<Option<Chunk>> {
+        self.get_json(CHUNKS, id)
     }
 
     /// Loads several chunks in one read transaction; missing ids are skipped.
@@ -137,12 +163,10 @@ impl Ledger {
 
     /// Visits every stored chunk.
     pub fn for_each_chunk(&self, mut f: impl FnMut(Chunk)) -> Result<()> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(CHUNKS)?;
-        for row in table.iter()? {
-            let (_, v) = row?;
-            f(serde_json::from_slice(v.value())?);
-        }
+        self.rows(CHUNKS, |_, v| {
+            f(serde_json::from_slice(v)?);
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -152,21 +176,13 @@ impl Ledger {
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(META)?;
-        Ok(table.get(key)?.map(|v| v.value().to_string()))
+        self.get_text(META, key)
     }
 
     /// The community id of every file.
     pub fn community_files(&self) -> Result<BTreeMap<String, u32>> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(COMMUNITY_FILES)?;
-        let mut out = BTreeMap::new();
-        for row in table.iter()? {
-            let (k, v) = row?;
-            out.insert(k.value().to_string(), v.value());
-        }
-        Ok(out)
+        let rows = self.rows(COMMUNITY_FILES, |k, v| Ok((k.to_string(), v)))?;
+        Ok(rows.into_iter().collect())
     }
 
     pub fn community_of_chunk(&self, chunk: &str) -> Result<Option<u32>> {
@@ -175,23 +191,12 @@ impl Ledger {
     }
 
     pub fn community(&self, id: u32) -> Result<Option<Community>> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(COMMUNITIES)?;
-        Ok(match table.get(id)? {
-            Some(v) => Some(serde_json::from_slice(v.value())?),
-            None => None,
-        })
+        self.get_json(COMMUNITIES, id)
     }
 
     /// Every community, by id.
     pub fn communities(&self) -> Result<Vec<Community>> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(COMMUNITIES)?;
-        let mut out = Vec::new();
-        for row in table.iter()? {
-            out.push(serde_json::from_slice(row?.1.value())?);
-        }
-        Ok(out)
+        self.rows(COMMUNITIES, |_, v| Ok(serde_json::from_slice(v)?))
     }
 
     /// A cached embedding for `key` (`model ‖ content_hash`).
@@ -217,17 +222,12 @@ impl Ledger {
 
     /// A cached LLM completion for `(model, prompt_hash)`.
     pub fn llm_cache(&self, model: &str, prompt_hash: &str) -> Result<Option<String>> {
-        let key = llm_cache_key(model, prompt_hash);
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(LLM_CACHE)?;
-        Ok(table.get(key.as_str())?.map(|v| v.value().to_string()))
+        self.get_text(LLM_CACHE, &llm_cache_key(model, prompt_hash))
     }
 
     /// Extracted concepts for a file path (JSON list).
     pub fn concepts(&self, path: &str) -> Result<Option<String>> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(CONCEPTS)?;
-        Ok(table.get(path)?.map(|v| v.value().to_string()))
+        self.get_text(CONCEPTS, path)
     }
 
     /// Starts a write batch; nothing is visible until [`LedgerBatch::commit`].
@@ -348,13 +348,7 @@ impl LedgerStore for Ledger {
     }
 
     fn for_each_chunk(&self, f: &mut dyn FnMut(Chunk)) -> Result<()> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(CHUNKS)?;
-        for row in table.iter()? {
-            let (_, v) = row?;
-            f(serde_json::from_slice(v.value())?);
-        }
-        Ok(())
+        self.for_each_chunk(f)
     }
 
     fn chunk_count(&self) -> Result<u64> {

@@ -314,3 +314,103 @@ pub fn exact(vs: &[Vec<f32>], q: &[f32], k: usize) -> Vec<usize> {
     s.sort_by(|a, b| b.1.total_cmp(&a.1));
     s.into_iter().take(k).map(|(i, _)| i).collect()
 }
+
+/// An embedder that delegates to a [`HashEmbedder`] the test keeps a handle on, so two engines
+/// (or the test itself) can share one model and count its calls.
+pub struct SharedEmbedder(pub Arc<HashEmbedder>);
+
+impl Embedder for SharedEmbedder {
+    fn model_id(&self) -> &str {
+        self.0.model_id()
+    }
+
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.0.embed_documents(texts)
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.0.embed_query(text)
+    }
+}
+
+/// `prefix` plus the current time in nanoseconds: a repository name no earlier run used.
+pub fn unique(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{prefix}-{nanos}")
+}
+
+/// Storage settings for repository `repo` on the PostgreSQL server at `url`.
+pub fn pg_storage(mode: crate::store::StorageMode, url: &str, repo: &str) -> crate::store::StorageConfig {
+    crate::store::StorageConfig {
+        mode,
+        repo: Some(repo.to_string()),
+        pg_url: Some(url.to_string()),
+        ..crate::store::StorageConfig::default()
+    }
+}
+
+/// An engine over `root` whose index lives in `index` and which stores as `storage` says. It
+/// embeds with `embedder` when given (sharing its call counts), else with its own hash model.
+pub fn engine_with(
+    root: &std::path::Path,
+    index: &str,
+    storage: crate::store::StorageConfig,
+    embedder: Option<&Arc<HashEmbedder>>,
+) -> crate::engine::Engine {
+    let cfg = crate::engine::Config {
+        index_dir: Some(root.join(index)),
+        storage,
+        ..crate::engine::Config::default()
+    };
+    let embedder: Box<dyn Embedder> = match embedder {
+        Some(e) => Box::new(SharedEmbedder(e.clone())),
+        None => Box::new(HashEmbedder::new()),
+    };
+    crate::engine::Engine::open_with_embedder(root, cfg, Some(embedder)).unwrap()
+}
+
+/// What every ledger backend must keep across a reopen: files, chunks, embeddings and metadata,
+/// and a cleared index that still holds its embeddings. `open` opens the same store each call.
+pub fn assert_ledger_round_trip<L: crate::store::LedgerStore>(open: impl Fn() -> L) {
+    use crate::chunk::{ChunkOptions, chunk_file};
+    use crate::ledger::{FileEntry, SCHEMA_VERSION};
+
+    let chunks = chunk_file(
+        "a.go",
+        crate::lang::Lang::Go,
+        "package a\n\nfunc F() {}\n",
+        ChunkOptions::default(),
+    );
+    {
+        let ledger = open();
+        let mut b = ledger.batch().unwrap();
+        let entry = FileEntry {
+            hash: "h".into(),
+            size: 3,
+            mtime_ns: 7,
+            chunk_ids: vec![chunks[0].id.clone()],
+            imports: vec!["fmt".into()],
+        };
+        b.put_file("a.go", &entry).unwrap();
+        b.put_chunk(&chunks[0]).unwrap();
+        b.put_embedding("m:x", &[1.0, -0.5]).unwrap();
+        b.set_meta("merkle_root", "abc").unwrap();
+        b.commit().unwrap();
+    }
+    let ledger = open();
+    assert_eq!(ledger.files().unwrap()["a.go"].mtime_ns, 7);
+    assert_eq!(ledger.chunk(&chunks[0].id).unwrap().unwrap(), chunks[0]);
+    assert_eq!(ledger.embedding("m:x").unwrap().unwrap(), vec![1.0, -0.5]);
+    assert_eq!(ledger.meta("merkle_root").unwrap().as_deref(), Some("abc"));
+    assert_eq!(ledger.meta("schema").unwrap().as_deref(), Some(SCHEMA_VERSION));
+
+    let mut b = ledger.batch().unwrap();
+    b.clear_index().unwrap();
+    b.commit().unwrap();
+    assert!(ledger.files().unwrap().is_empty());
+    assert_eq!(ledger.chunk_count().unwrap(), 0);
+    assert_eq!(ledger.embedding_count().unwrap(), 1);
+}

@@ -8,7 +8,7 @@
 //! statement is an upsert or a keyed delete, so replaying an interrupted run is harmless.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use pgvector::Vector;
@@ -225,18 +225,19 @@ impl Pg {
         Ok(flat)
     }
 
-    /// A free connection if there is one, else the next in turn: concurrent readers do not
-    /// queue behind each other.
+    /// The one text column of the row `sql` selects with `params`, if there is one.
+    pub(crate) fn text_opt(
+        &self,
+        sql: &str,
+        params: &[&(dyn postgres::types::ToSql + Sync)],
+    ) -> Result<Option<String>, LedgerError> {
+        let row = self.client().query_opt(sql, params).map_err(backend)?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    /// A free connection if there is one, else the next in turn.
     pub(crate) fn client(&self) -> MutexGuard<'_, Client> {
-        let start = self.next.fetch_add(1, Ordering::Relaxed);
-        for i in 0..self.clients.len() {
-            if let Ok(c) = self.clients[(start + i) % self.clients.len()].try_lock() {
-                return c;
-            }
-        }
-        self.clients[start % self.clients.len()]
-            .lock()
-            .expect("postgres client lock")
+        super::pick_connection(&self.clients, &self.next, "postgres client")
     }
 }
 
