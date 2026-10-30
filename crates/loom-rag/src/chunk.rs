@@ -12,7 +12,7 @@ use crate::lang::Lang;
 mod code;
 use code::{Tag, TagKind, chunk_code, relang};
 mod text;
-use text::{markdown_sections, nonws, pack_text, significant, split_lines};
+use text::{markdown_sections, nonws, pack, pack_text, significant, split_lines};
 
 /// Chunk size budget, in non-whitespace characters.
 #[derive(Debug, Clone, Copy)]

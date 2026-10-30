@@ -184,7 +184,7 @@ impl<'a> GraphBuilder<'a> {
                     // already filtered by imports.)
                     if !go
                         && method_calls.contains(&name)
-                        && (COMMON_METHODS.contains(&name.as_str())
+                        && (COMMON_METHODS.split_whitespace().any(|m| m == name)
                             || g.symbols_named(&name)
                                 .iter()
                                 .filter(|&&s| !g.sites[s as usize].is_empty())
@@ -382,51 +382,10 @@ impl Engine {
 
 /// Container, string and iterator methods every standard library has: a receiver call to
 /// one of these is almost never the project's own definition of the same name.
-const COMMON_METHODS: &[&str] = &[
-    "add",
-    "append",
-    "as_ref",
-    "as_str",
-    "clear",
-    "clone",
-    "close",
-    "contains",
-    "count",
-    "entry",
-    "extend",
-    "filter",
-    "find",
-    "first",
-    "flush",
-    "get",
-    "get_mut",
-    "insert",
-    "into",
-    "is_empty",
-    "items",
-    "iter",
-    "join",
-    "keys",
-    "last",
-    "len",
-    "map",
-    "next",
-    "parse",
-    "pop",
-    "push",
-    "read",
-    "remove",
-    "replace",
-    "set",
-    "sort",
-    "split",
-    "to_string",
-    "trim",
-    "unwrap",
-    "update",
-    "values",
-    "write",
-];
+const COMMON_METHODS: &str = "\
+    add append as_ref as_str clear clone close contains count entry extend filter find first flush get \
+    get_mut insert into is_empty items iter join keys last len map next parse pop push read remove \
+    replace set sort split to_string trim unwrap update values write";
 
 /// What one chunk defines and uses, gathered before linking.
 struct Uses {

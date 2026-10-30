@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// An engine over `root` that asks the model served at `url` for summaries and concepts when `enabled`.
+fn llm_engine(root: &std::path::Path, enabled: bool, url: &str) -> Engine {
+    let cfg = Config {
+        graph_llm: crate::config::GraphLlmSettings {
+            enabled,
+            model: Some("test-model".into()),
+            summaries: true,
+            concepts: true,
+        },
+        ..Config::default()
+    };
+    Engine::open_with_embedder(root, cfg, None)
+        .unwrap()
+        .with_llm(crate::llm::Client::new(
+            Some(url.to_string()),
+            None,
+            "test-model".into(),
+        ))
+}
+
 #[test]
 fn llm_request_shape_and_enrichment() {
     use crate::graph::query::Explanation;
@@ -71,22 +91,7 @@ fn llm_caching_makes_no_requests_on_second_run() {
     let dir = project();
     let resp = r#"{"choices":[{"message":{"content":"[{\"name\": \"Testing\", \"description\": \"Test suite concept\"}]"}}]}"#;
     let stub = crate::testutil::HttpStub::serve(resp);
-    let cfg = Config {
-        graph_llm: crate::config::GraphLlmSettings {
-            enabled: true,
-            model: Some("test-model".into()),
-            summaries: true,
-            concepts: true,
-        },
-        ..Config::default()
-    };
-    let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
-        .unwrap()
-        .with_llm(crate::llm::Client::new(
-            Some(stub.url.clone()),
-            None,
-            "test-model".into(),
-        ));
+    let mut e = llm_engine(dir.path(), true, &stub.url);
     e.index(false).unwrap();
     let initial_count = stub.request_count();
     assert!(initial_count > 0);
@@ -121,22 +126,7 @@ fn llm_failure_keeps_deterministic_summary() {
     .unwrap();
     let stub =
         crate::testutil::HttpStub::serve_status(500, "Internal Server Error", r#"{"error": "overloaded"}"#);
-    let cfg = Config {
-        graph_llm: crate::config::GraphLlmSettings {
-            enabled: true,
-            model: Some("test-model".into()),
-            summaries: true,
-            concepts: true,
-        },
-        ..Config::default()
-    };
-    let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
-        .unwrap()
-        .with_llm(crate::llm::Client::new(
-            Some(stub.url.clone()),
-            None,
-            "test-model".into(),
-        ));
+    let mut e = llm_engine(dir.path(), true, &stub.url);
     let r = e.index(false).unwrap();
     assert!(r.llm_error.is_some(), "must record llm_error");
 
@@ -157,22 +147,7 @@ fn llm_failure_keeps_deterministic_summary() {
 fn llm_disabled_makes_no_requests() {
     let dir = project();
     let stub = crate::testutil::HttpStub::serve(r#"{"choices":[]}"#);
-    let cfg = Config {
-        graph_llm: crate::config::GraphLlmSettings {
-            enabled: false,
-            model: Some("test-model".into()),
-            summaries: true,
-            concepts: true,
-        },
-        ..Config::default()
-    };
-    let mut e = Engine::open_with_embedder(dir.path(), cfg, None)
-        .unwrap()
-        .with_llm(crate::llm::Client::new(
-            Some(stub.url.clone()),
-            None,
-            "test-model".into(),
-        ));
+    let mut e = llm_engine(dir.path(), false, &stub.url);
     let r = e.index(false).unwrap();
     assert_eq!(r.llm_error, None);
     assert_eq!(stub.request_count(), 0);

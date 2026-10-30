@@ -77,25 +77,46 @@ pub(super) fn pack_text(src: &str, range: Range<usize>, max: usize) -> Vec<Range
         paragraphs.push(start..range.end);
     }
 
-    let mut out: Vec<Range<usize>> = Vec::new();
+    let mut out = Vec::new();
+    pack(
+        paragraphs.into_iter().map(|p| (p, ())),
+        bytes,
+        max,
+        &mut out,
+        |p, (), out| {
+            out.extend(split_lines(bytes, p, max));
+        },
+    );
+    out
+}
+
+/// Greedily packs consecutive items into ranges of at most `max` non-whitespace characters.
+/// An item larger than `max` flushes the range being built and goes to `split`, which pushes
+/// its pieces onto the output.
+pub(super) fn pack<T>(
+    items: impl IntoIterator<Item = (Range<usize>, T)>,
+    src: &[u8],
+    max: usize,
+    out: &mut Vec<Range<usize>>,
+    mut split: impl FnMut(Range<usize>, T, &mut Vec<Range<usize>>),
+) {
     let mut cur: Option<Range<usize>> = None;
     let mut cur_size = 0;
-    for p in paragraphs {
-        let size = nonws(&bytes[p.clone()]);
+    for (r, item) in items {
+        let size = nonws(&src[r.clone()]);
         if size > max {
             out.extend(cur.take());
             cur_size = 0;
-            out.extend(split_lines(bytes, p, max));
+            split(r, item, out);
         } else if cur_size + size > max {
-            out.extend(cur.replace(p));
+            out.extend(cur.replace(r));
             cur_size = size;
         } else {
-            cur = Some(cur.map_or(p.clone(), |c| c.start..p.end));
+            cur = Some(cur.map_or(r.clone(), |c| c.start..r.end));
             cur_size += size;
         }
     }
     out.extend(cur);
-    out
 }
 
 /// Splits `range` at line ends into pieces of at most `max` non-whitespace characters.

@@ -1,10 +1,10 @@
-use std::fs;
 use std::path::Path;
 
 use rstest::{fixture, rstest};
 
 use crate::quality::config::DupConfig;
 use crate::quality::{CloneReport, check_clones};
+use crate::testutil::write_files as project;
 
 const ALPHA: &str = "fn alpha(items: &[i32]) -> i32 {\n    let mut total = 0;\n    for item in items {\n        if *item > 10 {\n            total += item * 2;\n        }\n    }\n    total\n}\n";
 const BETA: &str = "fn beta(values: &[i32]) -> i32 {\n    let mut sum = 5;\n    for v in values {\n        if *v > 99 {\n            sum += v * 3;\n        }\n    }\n    sum\n}\n";
@@ -17,16 +17,6 @@ fn small() -> DupConfig {
         min_tokens: 10,
         ..DupConfig::default()
     }
-}
-
-fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    for (rel, body) in files {
-        let p = dir.path().join(rel);
-        fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(p, body).unwrap();
-    }
-    dir
 }
 
 fn run(dir: &Path, cfg: &DupConfig) -> CloneReport {

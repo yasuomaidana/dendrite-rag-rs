@@ -14,19 +14,6 @@ fn kinds(src: &str) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn tests_that_differ_only_in_constants_should_be_cases() {
-    let found = check_source("src/lib.rs", TWO_SAME_TESTS);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].kind, "repeated_test");
-    assert_eq!(found[0].line, 4);
-    assert!(
-        found[0].message.contains("adds_small")
-            && found[0].message.contains("adds_large")
-            && found[0].message.contains("#[case]")
-    );
-}
-
 #[rstest]
 #[case::different_structure(
     "    #[test]\n    fn first() {\n        let left = 1;\n        let right = 2;\n        assert_eq!(add(left, right), 3);\n    }\n    #[test]\n    fn second() {\n        let items = vec![1, 2, 3];\n        let total: i32 = items.iter().sum();\n        assert!(total > 0 && total < 10);\n    }\n"
@@ -43,16 +30,23 @@ fn leaves_fine_tests_alone(#[case] body: &str) {
 
 const HELPER_TWICE: &str = "mod tests {\n    fn open() -> Store {\n        Store::new()\n    }\n    #[test]\n    fn writes() {\n        let store = open();\n        store.put(1);\n    }\n    #[test]\n    fn reads() {\n        let store = open().with_data();\n        store.get(1);\n    }\n}\n";
 
-#[test]
-fn a_setup_helper_two_tests_bind_should_be_a_fixture() {
-    let found = check_source("src/lib.rs", HELPER_TWICE);
+#[rstest]
+#[case::constants_only(TWO_SAME_TESTS, "repeated_test", 4, &["adds_small", "adds_large", "#[case]"])]
+#[case::shared_setup_helper(HELPER_TWICE, "helper_should_be_fixture", 2, &["open()", "writes", "reads"])]
+fn flags_the_repetition(
+    #[case] src: &str,
+    #[case] kind: &str,
+    #[case] line: usize,
+    #[case] mentions: &[&str],
+) {
+    let found = check_source("src/lib.rs", src);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].kind, "helper_should_be_fixture");
-    assert_eq!(found[0].line, 2);
+    assert_eq!(found[0].kind, kind);
+    assert_eq!(found[0].line, line);
     assert!(
-        found[0].message.contains("open()")
-            && found[0].message.contains("writes")
-            && found[0].message.contains("reads")
+        mentions.iter().all(|m| found[0].message.contains(m)),
+        "{}",
+        found[0].message
     );
 }
 

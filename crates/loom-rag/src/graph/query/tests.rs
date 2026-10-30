@@ -1,12 +1,10 @@
 use super::*;
 use crate::engine::Config;
 use rstest::{fixture, rstest};
-use std::fs;
 
 #[fixture]
 fn engine() -> (tempfile::TempDir, Engine) {
-    let dir = tempfile::tempdir().unwrap();
-    let files = [
+    let dir = crate::testutil::write_files(&[
         ("go.mod", "module example.com/m\n"),
         (
             "pkg/sidecar/sidecar.go",
@@ -20,12 +18,7 @@ fn engine() -> (tempfile::TempDir, Engine) {
             "pkg/rag/retriever.go",
             "package rag\n\nimport \"example.com/m/pkg/sidecar\"\n\nfunc Retrieve() { sidecar.Start(\"x\") }\n",
         ),
-    ];
-    for (p, src) in files {
-        let path = dir.path().join(p);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, src).unwrap();
-    }
+    ]);
     let mut e = Engine::open_with_embedder(dir.path(), Config::default(), None).unwrap();
     e.index(false).unwrap();
     (dir, e)

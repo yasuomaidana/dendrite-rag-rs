@@ -102,29 +102,21 @@ fn imports(lang: Lang, root: Node, src: &[u8]) -> Vec<String> {
 /// cAST: greedily pack sibling nodes up to `max` non-whitespace characters, recursing into
 /// nodes that are too large on their own and splitting oversized leaves by lines.
 fn cast(node: Node, src: &[u8], max: usize, out: &mut Vec<Range<usize>>) {
-    let mut cur: Option<Range<usize>> = None;
-    let mut cur_size = 0;
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        let r = child.byte_range();
-        let size = nonws(&src[r.clone()]);
-        if size > max {
-            out.extend(cur.take());
-            cur_size = 0;
+    let children: Vec<Node> = node.children(&mut cursor).collect();
+    pack(
+        children.into_iter().map(|c| (c.byte_range(), c)),
+        src,
+        max,
+        out,
+        |r, child, out| {
             if child.child_count() > 0 {
                 cast(child, src, max, out);
             } else {
                 out.extend(split_lines(src, r, max));
             }
-        } else if cur_size + size > max {
-            out.extend(cur.replace(r));
-            cur_size = size;
-        } else {
-            cur = Some(cur.map_or(r.clone(), |c| c.start..r.end));
-            cur_size += size;
-        }
-    }
-    out.extend(cur);
+        },
+    );
 }
 
 /// Turns ordered node groups into spans that tile the whole file. Each boundary moves back

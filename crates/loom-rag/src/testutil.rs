@@ -315,6 +315,17 @@ pub fn exact(vs: &[Vec<f32>], q: &[f32], k: usize) -> Vec<usize> {
     s.into_iter().take(k).map(|(i, _)| i).collect()
 }
 
+/// A temporary directory holding `files` (`relative path`, `contents`), parents created.
+pub fn write_files(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (rel, body) in files {
+        let path = dir.path().join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+    dir
+}
+
 /// An embedder that delegates to a [`HashEmbedder`] the test keeps a handle on, so two engines
 /// (or the test itself) can share one model and count its calls.
 pub struct SharedEmbedder(pub Arc<HashEmbedder>);

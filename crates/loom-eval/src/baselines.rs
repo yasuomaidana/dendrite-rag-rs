@@ -19,12 +19,10 @@ const TOP: usize = 50;
 const WINDOW_LINES: usize = 40;
 
 /// Words a grep for a natural-language question would not search for.
-const STOPWORDS: &[&str] = &[
-    "the", "and", "for", "how", "does", "what", "which", "where", "when", "with", "from", "into", "that",
-    "this", "are", "its", "their", "there", "about", "work", "works", "use", "using", "get", "can", "should",
-    "who", "why", "you", "your", "our", "has", "have", "been", "was", "were", "will", "per", "all", "any",
-    "not", "but", "only",
-];
+const STOPWORDS: &str = "\
+    the and for how does what which where when with from into that this are its their there about work \
+    works use using get can should who why you your our has have been was were will per all any not but \
+    only";
 
 struct File {
     path: String,
@@ -123,7 +121,7 @@ impl Baselines {
         let mut words: Vec<String> = query
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .map(str::to_lowercase)
-            .filter(|w| w.len() >= 3 && !STOPWORDS.contains(&w.as_str()))
+            .filter(|w| w.len() >= 3 && !STOPWORDS.split_whitespace().any(|s| s == w))
             .collect();
         words.sort();
         words.dedup();

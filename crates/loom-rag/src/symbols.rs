@@ -166,18 +166,21 @@ impl SymbolIndex {
         out
     }
 
-    /// Chunks defining `name`.
-    pub fn definitions(&self, name: &str) -> Vec<String> {
+    /// The chunks `table` lists for the symbol `name`.
+    fn chunks_of(&self, name: &str, table: &[Vec<u32>]) -> Vec<String> {
         self.symbols
             .get(name)
-            .map_or_else(Vec::new, |s| self.chunk_ids(&self.defs[s as usize]))
+            .map_or_else(Vec::new, |s| self.chunk_ids(&table[s as usize]))
+    }
+
+    /// Chunks defining `name`.
+    pub fn definitions(&self, name: &str) -> Vec<String> {
+        self.chunks_of(name, &self.defs)
     }
 
     /// Chunks referencing `name` (calls, type uses).
     pub fn references(&self, name: &str) -> Vec<String> {
-        self.symbols
-            .get(name)
-            .map_or_else(Vec::new, |s| self.chunk_ids(&self.refs[s as usize]))
+        self.chunks_of(name, &self.refs)
     }
 
     /// One-hop neighbours of a chunk: definitions of what it references, then chunks that
@@ -188,16 +191,16 @@ impl SymbolIndex {
         };
         let mut out = Vec::new();
         let mut seen: HashSet<u32> = HashSet::from([c]);
-        for &name in self.chunk_refs[c as usize].iter() {
-            let ids = &self.defs[name as usize];
-            if ids.len() <= 3 {
-                out.extend(ids.iter().filter(|&&id| seen.insert(id)));
-            }
-        }
-        for &name in self.chunk_defs[c as usize].iter() {
-            let ids = &self.refs[name as usize];
-            if ids.len() <= 20 {
-                out.extend(ids.iter().filter(|&&id| seen.insert(id)));
+        // What the chunk references, through their definitions; what it defines, through their references.
+        for (names, table, cap) in [
+            (&self.chunk_refs, &self.defs, 3),
+            (&self.chunk_defs, &self.refs, 20),
+        ] {
+            for &name in names[c as usize].iter() {
+                let ids = &table[name as usize];
+                if ids.len() <= cap {
+                    out.extend(ids.iter().filter(|&&id| seen.insert(id)));
+                }
             }
         }
         out.truncate(limit);
