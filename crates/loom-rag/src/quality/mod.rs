@@ -8,6 +8,7 @@ pub mod clone_report;
 pub mod clones;
 pub mod complexity;
 pub mod config;
+pub mod docs;
 pub mod loc;
 pub mod regions;
 pub mod report;
@@ -29,6 +30,8 @@ pub use structure::{StructureReport, check_structure};
 mod clone_tests;
 #[cfg(test)]
 mod complexity_tests;
+#[cfg(test)]
+mod docs_tests;
 #[cfg(test)]
 mod rstest_dep_tests;
 #[cfg(test)]

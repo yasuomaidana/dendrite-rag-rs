@@ -78,6 +78,10 @@ pub struct StructureConfig {
     pub max_dir_production_lines: usize,
     /// This many modules of one directory whose names start with the same word fail: they are a sub-module.
     pub max_prefix_group: usize,
+    /// Whether every project unit (crate, Go module, package, repository root) needs its documentation files.
+    pub require_docs: bool,
+    /// The documentation files a unit needs, by file name.
+    pub docs_files: Vec<String>,
     /// Globs, relative to the project root, of files that are not looked at.
     pub exclude: Vec<String>,
 }
@@ -88,6 +92,8 @@ impl Default for StructureConfig {
             max_files_per_dir: 12,
             max_dir_production_lines: 3000,
             max_prefix_group: 4,
+            require_docs: true,
+            docs_files: vec!["README.md".into(), "CHANGELOG.md".into()],
             exclude: Vec::new(),
         }
     }
@@ -107,6 +113,9 @@ impl StructureConfig {
         }
         if self.max_prefix_group < 2 {
             bail!("structure.max_prefix_group must be at least 2");
+        }
+        if self.require_docs && self.docs_files.is_empty() {
+            bail!("structure.docs_files must name at least one file when structure.require_docs is on");
         }
         Ok(())
     }

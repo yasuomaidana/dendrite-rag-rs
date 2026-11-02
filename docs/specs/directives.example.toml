@@ -17,6 +17,8 @@ exclude = []
 max_files_per_dir = 12
 max_dir_production_lines = 3000
 max_prefix_group = 4
+require_docs = true
+docs_files = ["README.md", "CHANGELOG.md"]
 exclude = []
 
 [coverage]

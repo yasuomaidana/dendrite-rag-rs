@@ -130,6 +130,8 @@ struct StructureLimits {
     max_files_per_dir: Option<usize>,
     max_dir_production_lines: Option<usize>,
     max_prefix_group: Option<usize>,
+    require_docs: Option<bool>,
+    docs_files: Option<Vec<String>>,
     exclude: Option<Vec<String>>,
 }
 
@@ -141,6 +143,8 @@ limits_gate!(
     max_files_per_dir,
     max_dir_production_lines,
     max_prefix_group,
+    require_docs,
+    docs_files,
     exclude
 );
 

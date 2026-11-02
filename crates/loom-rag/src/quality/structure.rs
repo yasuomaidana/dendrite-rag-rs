@@ -13,8 +13,9 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::quality::config::StructureConfig;
+use crate::quality::docs;
 use crate::quality::loc::{count_lines, counts_as_code, is_test_path};
-use crate::walk::{WalkOptions, walk};
+use crate::walk::{SourceFile, WalkOptions, walk};
 
 /// Version of the JSON shape below; consumers (`dendrite allostasis gate`) check it.
 pub const SCHEMA: u32 = 1;
@@ -188,8 +189,23 @@ pub fn check_structure(root: &Path, cfg: &StructureConfig) -> anyhow::Result<Str
             })
         })
         .collect();
-    let (dirs, findings) = analyze(&units, cfg);
+    let (dirs, mut findings) = analyze(&units, cfg);
+    if cfg.require_docs {
+        findings.extend(documentation_findings(root, &files, cfg));
+    }
     Ok(StructureReport::new(cfg, units.len(), dirs, findings))
+}
+
+/// The `docs` findings: the units under `root` without their documentation files.
+fn documentation_findings(root: &Path, files: &[SourceFile], cfg: &StructureConfig) -> Vec<Finding> {
+    let paths: BTreeSet<String> = files.iter().map(|f| f.path.clone()).collect();
+    let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap_or_default();
+    let manifests: Vec<String> = paths
+        .iter()
+        .filter(|p| docs::is_manifest(p, &read))
+        .cloned()
+        .collect();
+    docs::missing_docs(&manifests, &paths, &cfg.docs_files)
 }
 
 impl StructureReport {

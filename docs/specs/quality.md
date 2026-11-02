@@ -104,13 +104,14 @@ A flat `match` or `switch` that only maps values scores high on cyclomatic compl
 
     loom-gate structure [--root .] [--config <directives.toml>] [--format text|json|github] [--max-files N] [--max-lines N] [--max-prefix-group N] [--exclude GLOB]…
 
-A file under the line limit is not enough: forty files in one package, or a dozen called `commit_execute_*`, `commit_push_*`, `commit_message_*`, name the concerns in file names where a module should. Three rules judge each directory of code files (Markdown, data and the like are ignored). A test file belongs to the module it tests (`x_test.go`, `x_tests.rs`, `test_x.py`, `x.spec.ts` are `x`), so a test never counts as a module of its own.
+A file under the line limit is not enough: forty files in one package, or a dozen called `commit_execute_*`, `commit_push_*`, `commit_message_*`, name the concerns in file names where a module should. Four rules judge the project: three look at each directory of code files (Markdown, data and the like are ignored). A test file belongs to the module it tests (`x_test.go`, `x_tests.rs`, `test_x.py`, `x.spec.ts` are `x`), so a test never counts as a module of its own.
 
 | Rule | Key | Default | Fails when |
 |---|---|---|---|
 | `files` | `max_files_per_dir` | 12 | the directory holds more modules |
 | `lines` | `max_dir_production_lines` | 3000 | its files' production lines (tests, comments, blanks excluded) add up to more |
 | `prefix` | `max_prefix_group` | 4 | this many modules start with the same word (the part of the name before the first `_`): they are a sub-module, and the finding says to move them into one named after that word |
+| `docs` | `require_docs`, `docs_files` | on, `README.md` and `CHANGELOG.md` | a project unit lacks one of the files. A unit is the repository root and every directory with a Cargo package (`Cargo.toml` with `[package]`), `go.mod`, `package.json` or `pyproject.toml`. The finding names the missing files; `value` is how many are missing and `limit` is 0 |
 
 `exclude` (globs, relative to the root) leaves files out. The `quality.structure` method takes `{root, config?, max_files_per_dir?, max_dir_production_lines?, max_prefix_group?, exclude?}` and returns `{schema: 1, max_files_per_dir, max_dir_production_lines, max_prefix_group, totals: {dirs, files, failures}, findings: [{path, rule, value, limit, files, message}]}`.
 

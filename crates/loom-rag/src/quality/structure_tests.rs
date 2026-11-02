@@ -120,7 +120,10 @@ fn checks_a_real_tree_and_renders_it() {
         ("src/gen/job_e.rs", "fn e() {}\n"),
         ("notes.md", "# not code\n"),
     ]);
-    let cfg = StructureConfig::default();
+    let cfg = StructureConfig {
+        require_docs: false,
+        ..Default::default()
+    };
     let report = check_structure(dir.path(), &cfg).unwrap();
     assert_eq!(
         (report.totals.dirs, report.totals.files, report.totals.failures),

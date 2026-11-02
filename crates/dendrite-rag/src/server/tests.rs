@@ -357,6 +357,8 @@ fn quality_structure_reports_directories_that_are_piles_of_files() {
     for name in ["job_a", "job_b", "job_c", "job_d"] {
         std::fs::write(dir.path().join(format!("src/{name}.rs")), "fn f() {}\n").unwrap();
     }
+    std::fs::write(dir.path().join("README.md"), "# p\n").unwrap();
+    std::fs::write(dir.path().join("CHANGELOG.md"), "# c\n").unwrap();
     let mut s = Server::new(Config::default());
 
     let r = call(&mut s, "quality.structure", json!({"root": root}));
@@ -377,6 +379,25 @@ fn quality_structure_reports_directories_that_are_piles_of_files() {
     );
     assert_eq!(r["result"]["findings"][0]["rule"], "lines");
 
+    std::fs::remove_file(dir.path().join("CHANGELOG.md")).unwrap();
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_prefix_group": 9}),
+    );
+    assert_eq!(r["result"]["findings"][0]["rule"], "docs");
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_prefix_group": 9, "docs_files": ["README.md"]}),
+    );
+    assert_eq!(r["result"]["totals"]["failures"], 0);
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_prefix_group": 9, "require_docs": false}),
+    );
+    assert_eq!(r["result"]["totals"]["failures"], 0);
     let r = call(
         &mut s,
         "quality.structure",
