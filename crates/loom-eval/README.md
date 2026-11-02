@@ -9,6 +9,22 @@ Full evaluation findings and performance results on Apple Silicon are documented
 
 ---
 
+## When to Use It
+
+### When to use
+- To benchmark retrieval accuracy (Hit@k, MRR@10, nDCG@10) across standardized golden evaluation query sets (`golden-dendrite.json`, `golden-dendrite-docs.json`, `golden-dendrite-mixed.json`, `golden-embedag.json`, `golden-dendrite-rag.json`).
+- To evaluate token economics (recall@1k, recall@2.5k, recall@4k tokens, median tokens to answer, both@2.5k) to measure prompt budget efficiency for AI coding assistants.
+- To execute paired bootstrap hypothesis testing between a baseline run and candidate run (`loom-eval compare A.json B.json`), verifying whether quality gains or regressions are statistically significant (95% CI excluding zero).
+- To calibrate `[rerank] abstain` relevance probability thresholds against negative query sets (`loom-eval abstain-probe`).
+- To benchmark file localization on the SWE-bench Verified benchmark (`loom-eval swebench`) across Python repositories.
+- To measure cold-start versus warm-cache process latency across pipeline stages (`loom-eval repeat`).
+
+### When not to use
+- Do not use as the production retrieval engine for serving queries in applications or agent runtimes; use `loom-rag` or `dendrite-rag` instead.
+- Do not use for code quality and structural health gating (production lines, clones, complexity, structure, rstest); use `loom-gate` instead.
+
+---
+
 ## Evaluation Philosophy
 
 A retrieval engine for AI coding agents cannot simply optimize for top-k document accuracy; it must optimize for **token economics** and **agent efficiency**:
@@ -230,3 +246,86 @@ Run unit tests for `loom-eval`:
 ```bash
 cargo test -p loom-eval
 ```
+
+---
+
+## Library Usage
+
+`loom-eval` can be used as a library (`loom_eval`) to score query predictions and compute metrics programmatically:
+
+```rust
+use std::time::Duration;
+use loom_eval::golden::Query;
+use loom_eval::metrics::{Scores, Unit};
+
+fn main() {
+    let query = Query {
+        q: "how does cAST chunking work?".into(),
+        expect: vec!["crates/loom-rag/src/chunk.rs".into()],
+    };
+
+    let retrieved_units = vec![
+        Unit {
+            path: "crates/loom-rag/src/chunk.rs".into(),
+            also: vec![],
+            tokens: 320,
+        },
+    ];
+
+    let mut scores = Scores::default();
+    scores.add(&query, &retrieved_units, None, Duration::from_millis(5));
+
+    println!("MRR@10: {:.3}, nDCG@10: {:.3}", scores.mrr(), scores.ndcg10());
+    println!("Tokens to first: {:?}", scores.tokens_to_first);
+}
+```
+
+---
+
+## Feature Flags
+
+`loom-eval` defines no optional Cargo feature flags:
+
+| Feature | Description |
+|---|---|
+| `default` | Empty; builds standard library and evaluation binary. |
+
+---
+
+## Workspace & Sibling Repositories
+
+- **`loom-rag`**: Core retrieval engine library evaluated by `loom-eval`. Provides syntax-aware chunking, Tantivy BM25, vector search, code graph community detection, and context packing.
+- **`dendrite-rag`**: Sidecar daemon tested by `loom-eval repeat` for process startup latency, cache warmth, and prompt generation.
+- **`loom-gate`**: Quality gates binary checking lines of code, duplication, complexity, structure, and rstest rules.
+- **`dendrite-core-rs`**: Sibling repository defining AST folding and complexity metrics.
+- **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs.
+- **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
+- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection.
+- **Dendrite control plane (`dendrite-control`)**: Orchestrates multi-repo workspaces and consumes benchmark outputs to validate sidecar releases.
+
+---
+
+## Building and Testing
+
+Build binary and library:
+```bash
+cargo build -p loom-eval
+```
+
+Run test suite:
+```bash
+cargo test -p loom-eval
+```
+
+Run the quick evaluation example:
+```bash
+cargo run --example quick_eval -p loom-eval
+```
+
+---
+
+## Specifications
+
+- [Evaluation Findings & Benchmark Results](../../eval/RESULTS.md): Full experimental results, baseline comparisons, and statistical analyses on Apple Silicon.
+- [System Architecture](../../docs/ARCHITECTURE.md): Retrieval pipeline, baselines, and design principles.
+- [Retrieval & Fusion Specification](../../docs/specs/retrieval.md): Ranking definitions, RRF fusion, and token-budgeted context packing.

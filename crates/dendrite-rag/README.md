@@ -7,6 +7,21 @@
 
 ---
 
+## When to Use It
+
+### When to use
+- As a stdio JSON-RPC 2.0 sidecar daemon for the Dendrite Go control plane (`dendrite-control`), IDE extensions, or MCP servers (`dendrite-mcp-hub`).
+- As a standalone CLI for developers to index, search, inspect symbol definitions/references, query the code graph, search git history, or evaluate configurations from the terminal.
+- To execute the `ask` question-answering cascade combining syntax-aware retrieval with local, hybrid, or paid LLM tiers through a LiteLLM gateway.
+- When project configuration needs to be managed via `.dendrite/rag.toml` files and hierarchical `DENDRITE_RAG_*` environment overrides.
+
+### When not to use
+- Do not use directly if you are writing a custom Rust application that needs an embedded, in-process retrieval engine without Dendrite configuration paths, CLI conventions, or RPC framing; use `loom-rag` directly instead.
+- Do not use for general file quality linting and structural health gates; use the `loom-gate` CLI instead (or call the `quality.*` RPC methods exposed by `dendrite-rag serve`).
+- Do not use to run statistical benchmark suites or paired bootstrap confidence interval comparisons against golden question sets; use `loom-eval` instead.
+
+---
+
 ## Operating Modes
 
 1. **JSON-RPC 2.0 server (default, or `serve`)**:
@@ -141,9 +156,9 @@ Empty variables are ignored.
 
 The server reads newline-delimited JSON-RPC 2.0 from `stdin` and writes responses to `stdout`; logs go to `stderr`. Requests are handled one at a time in the order received. Full specification: [`docs/specs/protocol.md`](../../docs/specs/protocol.md); JSON Schemas are in [`proto/`](../../proto).
 
-### Protocol version 1.9.0 and the Dendrite Go client
+### Protocol version 1.12.0 and the Dendrite Go client
 
-The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.9.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`, `oxillama`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
+The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.11.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`, `oxillama`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
 
 Dendrite's Go client (`pkg/sidecar.Client` in `dendrite-control`) spawns one sidecar process per call and runs the `health` handshake. It checks only the protocol **major** version: a server with a different major version is refused (and Dendrite falls back to its in-process Go implementation when the binary is missing, incompatible or unhealthy). Minor versions add optional params and result fields, and the client gates features on the minor version.
 
@@ -155,6 +170,8 @@ Minor additions to know about:
 | 1.7 | `docs_share` on `context` and `ask` |
 | 1.8 | `abstained` in `context` and `ask` results |
 | 1.9 | `index` param `embed_budget_tokens`; `index` result fields `embed_tokens` and `budget_tokens_remaining`; `features` in `health` |
+| 1.10 | `quality.loc` method for production lines of code checking |
+| 1.11 | `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest` methods |
 
 Because the Go client starts a new process per call, nothing held in memory survives between calls. State that does: the index directory, the embedding cache, the answer cache, and the embedding backlog, which later `index` runs continue.
 
@@ -187,6 +204,11 @@ Because the Go client starts a new process per call, nothing held in memory surv
 | `pull` | `{root}` | `{chunks, cached, vectors}` |
 | `push` | `{root, dry_run?: false}` | upload and compaction report; only in builds with the `postgres` feature |
 | `purge` | `{root}` | `{removed: true}` |
+| `quality.loc` | `{root, config?, max_production_lines?: 500, warn_at?: 450, exclude?: [glob]}` | production lines of code report (`schema`, `totals`, `files`) |
+| `quality.clones` | `{root, config?, max_percent?: 0.0, min_lines?: 5, min_tokens?: 50, include_tests?: true, exclude?: [glob]}` | structural clone duplication report (`schema`, `totals`, `groups`) |
+| `quality.complexity` | `{root, config?, max_cyclomatic?: 10, max_cognitive?: 15, exclude?: [glob]}` | cyclomatic and cognitive complexity report (`schema`, `totals`, `findings`) |
+| `quality.structure` | `{root, config?, max_files_per_dir?: 12, max_dir_production_lines?: 3000, max_prefix_group?: 4, exclude?: [glob]}` | module structure and directory size report (`schema`, `totals`, `findings`) |
+| `quality.rstest` | `{root, exclude?: [glob]}` | Rust test conventions report (`schema`, `files`, `violations`) |
 
 Errors use the standard JSON-RPC codes (`-32700`, `-32600`, `-32601`, `-32602`). Engine failures use `-32000` with `data.kind` (`config`, `not_indexed`, `io`, `embed`, `index`, or `git` for history methods). `search`, `context`, `ask`, `chunks.get`, `symbols.*` and `graph.*` return `not_indexed` before the first `index`.
 
@@ -238,3 +260,108 @@ To sweep fusion weights (`EVAL_SWEEP=1` prints the best ten combinations, `EVAL_
 ```bash
 EVAL_SWEEP=1 cargo run --release --example eval -p dendrite-rag -- . eval/golden-dendrite-rag.json
 ```
+
+---
+
+## Library Usage
+
+`dendrite-rag` also exposes a library interface (`dendrite_rag`) for embedding the sidecar server, resolving hierarchical `.dendrite/rag.toml` settings, or running `ask` programmatic workflows in Rust:
+
+```rust
+use std::path::Path;
+use dendrite_rag::settings::resolve;
+use loom_rag::engine::Engine;
+use loom_rag::retrieve::{Mode, SearchOpts};
+
+fn main() -> anyhow::Result<()> {
+    let root = Path::new(".");
+
+    // 1. Resolve configuration from .dendrite/rag.toml and environment overrides
+    let config = resolve(root)?;
+
+    // 2. Open the project engine using resolved settings
+    let mut engine = Engine::open(root, config)?;
+    let report = engine.index(false)?;
+    println!(
+        "Indexed {} files ({} changed) into {} chunks",
+        report.files_scanned, report.files_changed, report.chunks_added
+    );
+
+    // 3. Search via hybrid retrieval
+    let hits = engine.search(
+        "reciprocal rank fusion",
+        &SearchOpts {
+            top_k: 5,
+            mode: Mode::Hybrid,
+            ..SearchOpts::default()
+        },
+    )?;
+    for hit in hits {
+        println!("{}:{} score: {:.4}", hit.path, hit.start_line, hit.score);
+    }
+
+    Ok(())
+}
+```
+
+---
+
+## Cargo Features
+
+Feature flags forward directly to corresponding features in the [`loom-rag`](../loom-rag) engine library:
+
+| Feature | Forwards To | Description |
+|---|---|---|
+| `postgres` | `loom-rag/postgres` | Enables PostgreSQL 16 + `pgvector` shared tier for remote storage and edge synchronization (`push`, `pull`, `sync`). |
+| `sqlite` | `loom-rag/sqlite` | Enables SQLite bundled engine as an alternative local ledger (`[storage] ledger = "sqlite"`). |
+| `hnsw` | `loom-rag/hnsw` | Enables Hierarchical Navigable Small World vector indexing. |
+| `model2vec` | `loom-rag/model2vec` | Enables in-process static subword embeddings with `model2vec-rs` for offline use. |
+| `candle` | `loom-rag/candle` | Enables in-process safetensors encoders (BERT, NomicBERT, JinaBERT) via Hugging Face Candle. |
+| `candle-metal` | `loom-rag/candle-metal` | Enables Apple Silicon GPU acceleration via Metal for Candle embeddings. |
+| `candle-cuda` | `loom-rag/candle-cuda` | Enables NVIDIA CUDA acceleration for Candle embeddings. |
+| `candle-accelerate` | `loom-rag/candle-accelerate` | Enables Apple Accelerate CPU BLAS acceleration for Candle. |
+| `oxillama` | `loom-rag/oxillama` | Enables in-process GGUF decoder embeddings (Qwen3-Embedding) via OxiLLaMa runtime. |
+
+---
+
+## Workspace & Sibling Repositories
+
+- **`loom-rag`**: Core retrieval engine library consumed by `dendrite-rag`. Implements AST chunking, Tantivy BM25, vector search, Leiden community detection, and context packing without Dendrite dependencies.
+- **`loom-gate`**: Quality gate CLI checking production lines per file, duplication, function complexity, package structure, and Rust rstest conventions. Shares quality verification algorithms with the `quality.*` RPC methods in `dendrite-rag`.
+- **`loom-eval`**: Evaluation harness measuring Hit@k, MRR@10, nDCG@10, and token economics against golden sets and baselines.
+- **`dendrite-core-rs`**: Sibling repository defining AST folding, token counting, and cyclomatic/cognitive complexity primitives.
+- **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs and semantic review clustering.
+- **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
+- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection (`embedag-core`).
+- **Dendrite control plane (`dendrite-control`)**: Consumes the `dendrite-rag` binary as a JSON-RPC 2.0 stdio sidecar for `dendrite ask`, `dendrite query`, and `dendrite store`. Falls back to in-process Go implementations if the sidecar binary is missing or unhealthy.
+- **`dendrite-mcp-hub`**: Exposes MCP tools (`dendrite_rag_retrieve`, `dendrite_rag_ask`) to autonomous coding agents and IDE plugins.
+
+---
+
+## Building and Testing
+
+Build the binary and library:
+```bash
+cargo build -p dendrite-rag
+```
+
+Run test suite:
+```bash
+cargo test -p dendrite-rag
+```
+
+Run tests with SQLite local ledger support:
+```bash
+cargo test -p dendrite-rag --features sqlite
+```
+
+---
+
+## Specifications
+
+- [System Architecture](../../docs/ARCHITECTURE.md): System design, component boundaries, and module layout.
+- [Responsibilities & Ticket Map](../../docs/RESPONSIBILITIES.md): Ownership boundaries with `dendrite-control` and sibling repositories.
+- [JSON-RPC Protocol Specification](../../docs/specs/protocol.md): JSON-RPC 2.0 stdio protocol catalog, parameters, and error codes.
+- [Ask & Multi-Tier Workflow](../../docs/specs/ask.md): Prompt construction, local drafting, paid refinement, answer caching, and token ceilings.
+- [Quality Gates Specification](../../docs/specs/quality.md): Verification algorithms for `quality.loc`, `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest`.
+- [Embedding Backends](../../docs/specs/embedders.md): Embedding backend options, configuration hierarchy, and model defaults.

@@ -9,6 +9,22 @@ It does not depend on Dendrite, so it can be used as an embedded library in any 
 
 ---
 
+## When to Use It
+
+### When to use
+- As an embedded Rust library (`loom_rag`) for applications requiring high-precision hybrid retrieval over codebases and Markdown documentation.
+- When you need syntax-aware chunking (cAST via Tree-sitter) that preserves qualified scope chains, signatures, and doc comments without arbitrary line slicing.
+- When indexing code using Okapi BM25 with camelCase/snake_case tokenization alongside int8 quantized vector scanning or HNSW indexing.
+- When generating token-budgeted prompt context packs with automatic deduplication, graph neighbor expansion, and outline fallbacks for LLM agents.
+- When requiring local-first, incremental indexing backed by an embedded ledger (redb default, SQLite opt-in) with Merkle tree diffing (`embedag`) to avoid recomputing unchanged chunk embeddings.
+
+### When not to use
+- Do not use directly if you need a turnkey CLI or JSON-RPC 2.0 daemon implementing `.dendrite/rag.toml` settings, environment overrides, and the Dendrite multi-tier `ask` prompt workflow; use `dendrite-rag` instead.
+- Do not use for source code quality gating (lines of code, clones, complexity, structure, rstest) from the terminal; use `loom-gate` instead.
+- Do not use for automated quality scoring, token budget economics, and statistical bootstrap comparisons against baselines; use `loom-eval` instead.
+
+---
+
 ## Key Capabilities
 
 - **cAST Syntax-Tree Chunking**: Tree-sitter split-then-merge chunker that respects semantic language structures (functions, methods, classes, impl blocks, markdown headings) rather than arbitrary line windows. Each chunk carries its qualified scope chain, the symbols it defines and the names it references, and is indexed with a header of its path and scope.
@@ -236,3 +252,30 @@ Run benchmarks (using Criterion):
 ```bash
 cargo bench -p loom-rag --features testutil
 ```
+
+---
+
+## Workspace & Sibling Repositories
+
+- **`dendrite-rag`**: Sidecar daemon exposing `loom-rag` capabilities over line-delimited JSON-RPC 2.0 stdio, with `.dendrite/rag.toml` settings resolution and the multi-tier `ask` question-answering workflow.
+- **`loom-gate`**: Quality gates binary built on `loom_rag::quality` checking production lines of code, clone duplication, function complexity, package structure, and Rust test conventions.
+- **`loom-eval`**: Statistical evaluation harness measuring retrieval quality (MRR@10, nDCG@10), token economics, and confidence intervals across golden datasets and baselines.
+- **`dendrite-core-rs`**: Sibling repository defining AST folding, token counting, and cyclomatic/cognitive complexity primitives (`DEN-972`).
+- **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs and semantic review clustering (`DEN-973`).
+- **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
+- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection (`embedag-core`) used for incremental indexing.
+- **Dendrite control plane (`dendrite-control`)**: Orchestrates the multi-repo workspace (`dendrite pool`) and spawns `dendrite-rag` as a sidecar process.
+
+---
+
+## Specifications
+
+- [System Architecture](../../docs/ARCHITECTURE.md): Complete retrieval pipeline and module boundaries.
+- [Walking & Chunking](../../docs/specs/chunking.md): File discovery, cAST syntax-tree chunking, and contextual headers.
+- [Retrieval & Fusion](../../docs/specs/retrieval.md): Tantivy BM25, vector search, symbol ranking, weighted RRF, and token packing.
+- [Embedders](../../docs/specs/embedders.md): Embedding backend options, model conventions, and auto-detection rules.
+- [Storage & Ledger](../../docs/specs/store.md): redb schema, Merkle diffing, SQLite ledger, and PostgreSQL tier.
+- [Symbol Graph & Communities](../../docs/specs/graph.md): Typed code graph, Leiden clustering, and graph queries.
+- [Memory Synchronization](../../docs/specs/memory-sync.md): Local-only, edge mode with journal, and push compaction topologies.
+- [Git History Search](../../docs/specs/history.md): Commit messages and per-file diff indexing.
+- [Quality Gates](../../docs/specs/quality.md): Quality gate specifications and counting rules implemented in `loom_rag::quality`.

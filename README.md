@@ -19,13 +19,14 @@ A retrieval engine purpose-built for source code repositories and technical docu
 
 ## Workspace Layout
 
-The repository is organized as a Cargo workspace with three specialized crates:
+The repository is organized as a Cargo workspace with four specialized crates:
 
 ```text
 dendrite-rag-rs/
 ├── crates/
 │   ├── loom-rag/       # Core retrieval engine library (Rust, independent of Dendrite)
 │   ├── dendrite-rag/   # Sidecar daemon (JSON-RPC 2.0 stdio) and developer CLI
+│   ├── loom-gate/      # Quality gates CLI over source trees (loc, clones, complexity, structure, rstest)
 │   └── loom-eval/      # Statistical benchmarking suite and baseline comparison harness
 ├── docs/               # System architecture and specifications
 ├── proto/              # JSON-RPC 2.0 protocol JSON schemas
@@ -36,6 +37,7 @@ dendrite-rag-rs/
 |---|---|---|---|
 | [`loom-rag`](crates/loom-rag) | Library (`loom_rag`) | [README](crates/loom-rag/README.md) | Retrieval engine in Rust (the tree-sitter grammars are the only native code by default): AST chunking, Tantivy BM25, vector search, code graph, Leiden communities, and context packing. |
 | [`dendrite-rag`](crates/dendrite-rag) | Binary & Library | [README](crates/dendrite-rag/README.md) | JSON-RPC 2.0 stdio sidecar for Dendrite control plane and MCP hub, developer CLI, `.dendrite/rag.toml` settings, and multi-tier `ask` workflow. |
+| [`loom-gate`](crates/loom-gate) | Binary | [README](crates/loom-gate/README.md) | Quality gate CLI checking production lines per file, duplication, function complexity, package structure, and Rust rstest conventions. |
 | [`loom-eval`](crates/loom-eval) | Binary & Library | [README](crates/loom-eval/README.md) | Evaluation harness measuring Hit@k, MRR@10, nDCG@10, token economics (recall@1k/2.5k/4k), and bootstrap confidence intervals against grep-agent, whole-file BM25 and fixed-window baselines. |
 
 ---
