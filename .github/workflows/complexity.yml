@@ -21,7 +21,7 @@ jobs:
         id: limits
         run: |
           f=.github/dendrite/directives.toml
-          pick() { awk -v key="$1" '/^\[complexity\]/{t=1;next} /^\[/{t=0} t && $1==key {print $3; exit}' "$f" 2>/dev/null; }
+          pick() { awk -v key="$1" '/^\[complexity\]/{t=1;next} /^\[/{t=0} t && $1==key {print $3; exit}' "$f" 2>/dev/null || true; }
           cyc=$(pick max_cyclomatic); cog=$(pick max_cognitive)
           echo "cyc=${cyc:-10}" >> "$GITHUB_OUTPUT"
           echo "cog=${cog:-15}" >> "$GITHUB_OUTPUT"
@@ -33,13 +33,17 @@ jobs:
         env:
           CLIPPY_CONF_DIR: ${{ runner.temp }}/clippy
         run: |
-          n=$( (cargo clippy --workspace --all-targets -- -A clippy::all -D clippy::cognitive_complexity 2>&1 || true) | grep -c "cognitive complexity of" || true)
-          echo "::warning title=clippy cognitive_complexity::$n functions above the cognitive limit (known debt, see DRAG-78); this step turns blocking when the debt is cleared"
+          out=$(cargo clippy --workspace --all-targets -- -A clippy::all -D clippy::cognitive_complexity 2>&1) && rc=0 || rc=$?
+          n=$(printf '%s\n' "$out" | grep -c "cognitive complexity of" || true)
+          if [ "$rc" -ne 0 ] && [ "$n" -eq 0 ]; then printf '%s\n' "$out" | tail -30; echo "::error title=clippy::clippy did not run to completion (exit $rc)"; exit 1; fi
+          echo "::warning title=clippy cognitive_complexity::$n functions above the cognitive limit (known debt, DRAG-78); this step turns blocking when the debt is cleared"
           echo "clippy cognitive_complexity: $n functions above the limit" >> "$GITHUB_STEP_SUMMARY"
       - name: lizard (cyclomatic, report only until the first run is compared with loom-gate, see DRAG-78)
         run: |
           python3 -m pip install --quiet lizard==1.17.10
-          n=$( (python3 -m lizard -l rust -C "${{ steps.limits.outputs.cyc }}" -w -x "*/target/*" . || true) | grep -c "warning:" || true)
+          out=$(python3 -m lizard -l rust -C "${{ steps.limits.outputs.cyc }}" -w -x "*/target/*" . 2>&1) && rc=0 || rc=$?
+          n=$(printf '%s\n' "$out" | grep -c "warning:" || true)
+          if [ "$rc" -ne 0 ] && [ "$n" -eq 0 ]; then printf '%s\n' "$out" | tail -30; echo "::error title=lizard::lizard did not run (exit $rc)"; exit 1; fi
           echo "::warning title=lizard::$n Rust functions above the cyclomatic limit; compare with loom-gate complexity and make this step blocking"
           echo "lizard: $n Rust functions above the cyclomatic limit" >> "$GITHUB_STEP_SUMMARY"
   python:
@@ -51,7 +55,7 @@ jobs:
         id: limits
         run: |
           f=.github/dendrite/directives.toml
-          pick() { awk -v key="$1" '/^\[complexity\]/{t=1;next} /^\[/{t=0} t && $1==key {print $3; exit}' "$f" 2>/dev/null; }
+          pick() { awk -v key="$1" '/^\[complexity\]/{t=1;next} /^\[/{t=0} t && $1==key {print $3; exit}' "$f" 2>/dev/null || true; }
           cyc=$(pick max_cyclomatic); cog=$(pick max_cognitive)
           echo "cyc=${cyc:-10}" >> "$GITHUB_OUTPUT"
           echo "cog=${cog:-15}" >> "$GITHUB_OUTPUT"
