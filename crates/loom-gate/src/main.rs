@@ -2,16 +2,20 @@
 //!
 //!     loom-gate loc    [--root .] [--config .github/dendrite/directives.toml] [--format text|json|github]
 //!     loom-gate clones [--root .] [--config ...] [--format ...] [--min-lines N] [--max-percent P]
+//!     loom-gate complexity [--root .] [--config ...] [--format ...] [--max-cyclomatic N] [--max-cognitive N]
 //!     loom-gate rstest [--root .] [--format ...]
 //!
 //! Exit status: 0 the check passed (warnings allowed), 1 a gate failed, 2 the tool could not run.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loom_rag::quality::config::DIRECTIVES_PATH;
-use loom_rag::quality::{DupConfig, LocConfig, check_clones, check_loc, check_rstest};
+use loom_rag::quality::{
+    CloneReport, ComplexityConfig, ComplexityReport, DupConfig, LocConfig, LocReport, RstestReport,
+    check_clones, check_complexity, check_loc, check_rstest,
+};
 
 #[derive(Parser)]
 #[command(name = "loom-gate", version, about = "Quality gates over a source tree")]
@@ -26,6 +30,8 @@ enum Command {
     Loc(LocArgs),
     /// Fail when too much code is repeated: blocks that are the same up to names and constants.
     Clones(CloneArgs),
+    /// Fail when a function is more complex than the limits (cyclomatic and cognitive).
+    Complexity(ComplexityArgs),
     /// Fail when Rust tests repeat each other or set up through a helper that should be an rstest fixture.
     Rstest(RstestArgs),
 }
@@ -37,36 +43,37 @@ enum Format {
     Github,
 }
 
+/// What every gate takes: where the project is, which directives to read and how to print.
 #[derive(clap::Args)]
-struct LocArgs {
-    /// Project root.
+struct Common {
     #[arg(long, default_value = ".")]
     root: PathBuf,
-    /// Directives file with the `[loc]` limits (default: `<root>/.github/dendrite/directives.toml`).
+    /// Directives file with the gate's limits (default: `<root>/.github/dendrite/directives.toml`).
     #[arg(long)]
     config: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
+    /// Extra glob (relative to the root) of files not checked; repeatable.
+    #[arg(long)]
+    exclude: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct LocArgs {
+    #[command(flatten)]
+    common: Common,
     /// Override `loc.max_production_lines`.
     #[arg(long)]
     max: Option<usize>,
     /// Override `loc.warn_at`.
     #[arg(long)]
     warn_at: Option<usize>,
-    /// Extra glob (relative to the root) of files not to count; repeatable.
-    #[arg(long)]
-    exclude: Vec<String>,
 }
 
 #[derive(clap::Args)]
 struct CloneArgs {
-    #[arg(long, default_value = ".")]
-    root: PathBuf,
-    /// Directives file with the `[duplication]` limits (default: `<root>/.github/dendrite/directives.toml`).
-    #[arg(long)]
-    config: Option<PathBuf>,
-    #[arg(long, value_enum, default_value = "text")]
-    format: Format,
+    #[command(flatten)]
+    common: Common,
     /// Override `duplication.min_lines`.
     #[arg(long)]
     min_lines: Option<usize>,
@@ -79,9 +86,18 @@ struct CloneArgs {
     /// Override `duplication.include_tests`.
     #[arg(long)]
     include_tests: Option<bool>,
-    /// Glob (relative to the root) of files not checked; repeatable.
+}
+
+#[derive(clap::Args)]
+struct ComplexityArgs {
+    #[command(flatten)]
+    common: Common,
+    /// Override `complexity.max_cyclomatic`.
     #[arg(long)]
-    exclude: Vec<String>,
+    max_cyclomatic: Option<u32>,
+    /// Override `complexity.max_cognitive`.
+    #[arg(long)]
+    max_cognitive: Option<u32>,
 }
 
 #[derive(clap::Args)]
@@ -93,6 +109,54 @@ struct RstestArgs {
     /// Glob (relative to the root) of files not checked; repeatable.
     #[arg(long)]
     exclude: Vec<String>,
+}
+
+/// A gate's limits: the directives file's (`--config`, or the project's own), changed by the flags, and valid.
+fn configured<C>(
+    common: &Common,
+    load: fn(&Path) -> anyhow::Result<C>,
+    validate: fn(&C) -> anyhow::Result<()>,
+    change: impl FnOnce(&mut C),
+) -> anyhow::Result<C> {
+    let file = common
+        .config
+        .clone()
+        .unwrap_or_else(|| common.root.join(DIRECTIVES_PATH));
+    let mut cfg = load(&file)?;
+    change(&mut cfg);
+    validate(&cfg)?;
+    Ok(cfg)
+}
+
+/// What every gate report can do, so the commands print and judge them the same way.
+trait Render {
+    fn text(&self) -> String;
+    fn json(&self) -> String;
+    fn github(&self) -> String;
+    fn ok(&self) -> bool;
+}
+
+macro_rules! render {
+    ($($report:ty),*) => {$(
+        impl Render for $report {
+            fn text(&self) -> String { self.to_text() }
+            fn json(&self) -> String { self.to_json() }
+            fn github(&self) -> String { self.to_github() }
+            fn ok(&self) -> bool { self.passed() }
+        }
+    )*};
+}
+
+render!(LocReport, CloneReport, ComplexityReport, RstestReport);
+
+/// Prints `report` in `format`; `true` when its gate passed.
+fn emit(report: &impl Render, format: Format) -> bool {
+    match format {
+        Format::Text => print!("{}", report.text()),
+        Format::Json => println!("{}", report.json()),
+        Format::Github => print!("{}", report.github()),
+    }
+    report.ok()
 }
 
 fn main() -> ExitCode {
@@ -111,58 +175,48 @@ fn run(cli: Cli) -> anyhow::Result<bool> {
     match cli.command {
         Command::Loc(a) => loc(a),
         Command::Clones(a) => clones(a),
+        Command::Complexity(a) => complexity(a),
         Command::Rstest(a) => rstest(a),
     }
 }
 
 fn loc(a: LocArgs) -> anyhow::Result<bool> {
-    let file = a.config.clone().unwrap_or_else(|| a.root.join(DIRECTIVES_PATH));
-    let mut cfg = LocConfig::load(&file)?;
-    cfg.max_production_lines = a.max.unwrap_or(cfg.max_production_lines);
-    cfg.warn_at = a.warn_at.unwrap_or(cfg.warn_at);
-    cfg.exclude.extend(a.exclude);
-    cfg.validate()?;
-    let report = check_loc(&a.root, &cfg)?;
-    print!(
-        "{}",
-        match a.format {
-            Format::Text => report.to_text(),
-            Format::Json => report.to_json() + "\n",
-            Format::Github => report.to_github(),
-        }
-    );
-    Ok(report.passed())
+    let cfg = configured(&a.common, LocConfig::load, LocConfig::validate, |cfg| {
+        cfg.max_production_lines = a.max.unwrap_or(cfg.max_production_lines);
+        cfg.warn_at = a.warn_at.unwrap_or(cfg.warn_at);
+        cfg.exclude.extend(a.common.exclude.clone());
+    })?;
+    Ok(emit(&check_loc(&a.common.root, &cfg)?, a.common.format))
 }
 
 fn clones(a: CloneArgs) -> anyhow::Result<bool> {
-    let file = a.config.clone().unwrap_or_else(|| a.root.join(DIRECTIVES_PATH));
-    let mut cfg = DupConfig::load(&file)?;
-    cfg.min_lines = a.min_lines.unwrap_or(cfg.min_lines);
-    cfg.min_tokens = a.min_tokens.unwrap_or(cfg.min_tokens);
-    cfg.max_percent = a.max_percent.unwrap_or(cfg.max_percent);
-    cfg.include_tests = a.include_tests.unwrap_or(cfg.include_tests);
-    cfg.validate()?;
-    let report = check_clones(&a.root, &cfg, &a.exclude)?;
-    print!(
-        "{}",
-        match a.format {
-            Format::Text => report.to_text(),
-            Format::Json => report.to_json() + "\n",
-            Format::Github => report.to_github(),
-        }
-    );
-    Ok(report.passed())
+    let cfg = configured(&a.common, DupConfig::load, DupConfig::validate, |cfg| {
+        cfg.min_lines = a.min_lines.unwrap_or(cfg.min_lines);
+        cfg.min_tokens = a.min_tokens.unwrap_or(cfg.min_tokens);
+        cfg.max_percent = a.max_percent.unwrap_or(cfg.max_percent);
+        cfg.include_tests = a.include_tests.unwrap_or(cfg.include_tests);
+    })?;
+    Ok(emit(
+        &check_clones(&a.common.root, &cfg, &a.common.exclude)?,
+        a.common.format,
+    ))
+}
+
+fn complexity(a: ComplexityArgs) -> anyhow::Result<bool> {
+    let cfg = configured(
+        &a.common,
+        ComplexityConfig::load,
+        ComplexityConfig::validate,
+        |cfg| {
+            cfg.exclude.extend(a.common.exclude.clone());
+            cfg.max_cyclomatic = a.max_cyclomatic.unwrap_or(cfg.max_cyclomatic);
+            cfg.max_cognitive = a.max_cognitive.unwrap_or(cfg.max_cognitive);
+        },
+    )?;
+    Ok(emit(&check_complexity(&a.common.root, &cfg)?, a.common.format))
 }
 
 fn rstest(a: RstestArgs) -> anyhow::Result<bool> {
     let report = check_rstest(&a.root, &a.exclude)?;
-    print!(
-        "{}",
-        match a.format {
-            Format::Text => report.to_text(),
-            Format::Json => report.to_json() + "\n",
-            Format::Github => report.to_github(),
-        }
-    );
-    Ok(report.passed())
+    Ok(emit(&report, a.format))
 }

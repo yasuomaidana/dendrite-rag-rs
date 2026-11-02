@@ -300,3 +300,51 @@ fn quality_clones_and_rstest_report_through_the_protocol() {
         code::INVALID_PARAMS
     );
 }
+
+#[test]
+fn quality_complexity_reports_functions_over_the_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn busy(a: bool, b: bool) {\n    if a { if b { if a { if b {} } } }\n}\n",
+    )
+    .unwrap();
+    let mut s = Server::new(Config::default());
+
+    let r = call(&mut s, "quality.complexity", json!({"root": root}));
+    assert_eq!(r["result"]["totals"]["failures"], 0);
+    assert_eq!(r["result"]["totals"]["functions"], 1);
+
+    let r = call(
+        &mut s,
+        "quality.complexity",
+        json!({"root": root, "max_cognitive": 5}),
+    );
+    assert_eq!(r["result"]["findings"][0]["symbol"], "busy");
+    assert_eq!(r["result"]["findings"][0]["cognitive"], 10);
+
+    let r = call(
+        &mut s,
+        "quality.complexity",
+        json!({"root": root, "exclude": ["*.rs"], "max_cognitive": 5}),
+    );
+    assert_eq!(r["result"]["totals"]["files"], 0);
+
+    let r = call(
+        &mut s,
+        "quality.complexity",
+        json!({"root": root, "max_cyclomatic": 0}),
+    );
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    std::fs::create_dir_all(dir.path().join(".github/dendrite")).unwrap();
+    std::fs::write(
+        dir.path().join(".github/dendrite/directives.toml"),
+        "[complexity\n",
+    )
+    .unwrap();
+    let r = call(&mut s, "quality.complexity", json!({"root": root}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    let r = call(&mut s, "quality.complexity", json!({"nothing": 1}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
+}

@@ -1410,6 +1410,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dendrite-core-rs"
+version = "0.1.0"
+source = "git+https://github.com/yasuomaidana/dendrite-core-rs?branch=develop#ecb7a2378d048a05aafe655726045064c71eae8f"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "dendrite-rag"
 version = "0.1.0"
 dependencies = [
@@ -3311,6 +3331,7 @@ dependencies = [
  "candle-nn",
  "candle-transformers",
  "criterion 0.8.2",
+ "dendrite-core-rs",
  "dhat",
  "embedag",
  "globset",

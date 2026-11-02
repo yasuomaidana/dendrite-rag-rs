@@ -8,6 +8,11 @@ max_production_lines = 500
 warn_at = 450
 exclude = ["**/generated/**"]
 
+[complexity]
+max_cyclomatic = 10
+max_cognitive = 15
+exclude = []
+
 [coverage]
 min_percent = 100.0
 scope = "line"

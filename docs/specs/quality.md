@@ -1,6 +1,6 @@
 # Quality gates (`loom-gate`, `quality.loc`)
 
-`loom-gate` checks a source tree against the quality directives of a project. It has three gates: production lines per file (`loc`), repeated code (`clones`) and Rust test structure (`rstest`).
+`loom-gate` checks a source tree against the quality directives of a project. It has four gates: production lines per file (`loc`), repeated code (`clones`), function complexity (`complexity`) and Rust test structure (`rstest`).
 
     loom-gate loc [--root .] [--config <directives.toml>] [--format text|json|github] [--max N] [--warn-at N] [--exclude GLOB]…
 
@@ -83,6 +83,22 @@ The check passes when the share of code lines that sit in a repeated block is at
 | `include_tests` | true | whether test code (files and inline test modules, see above) is checked too |
 
 The JSON report has `schema`, the limits used, `totals` (`files`, `lines`, `duplicated_lines`, `percent`, `groups`) and `groups`, each with its `tokens` and every `location` (`path`, `start_line`, `end_line`). `--format github` prints an annotation on every location, an error when the check fails and a warning when the duplication is within the allowance.
+
+## Complexity (`loom-gate complexity`)
+
+    loom-gate complexity [--root .] [--config <directives.toml>] [--format text|json|github] [--max-cyclomatic N] [--max-cognitive N] [--exclude GLOB]…
+
+Fails (exit 1) when a function has a higher cyclomatic or cognitive complexity than the limits of `[complexity]` (defaults 10 and 15). The measuring is [`dendrite-core`](https://github.com/yasuomaidana/dendrite-core-rs)'s (`docs/ARCHITECTURE.md` § 2.4 there), so there is one algorithm for every consumer. Languages: Go, Rust, Python, TypeScript, TSX, JavaScript, C and C++; other files are skipped. Test code is measured like production code, and a nested function is its own entry.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_cyclomatic` | 10 | McCabe: 1 plus branches, loops, case arms other than the default, `catch`, `&&`/`||`, ternaries, Rust `?` |
+| `max_cognitive` | 15 | SonarSource: structures that break the flow cost 1 plus their nesting, `else` 1, a run of one boolean operator 1, a labelled jump or a recursive call 1 |
+| `exclude` | `[]` | globs, relative to the root, of files not measured |
+
+The `quality.complexity` method takes `{root, config?, max_cyclomatic?, max_cognitive?, exclude?}` and returns `{schema: 1, max_cyclomatic, max_cognitive, totals: {files, functions, failures}, findings: [{path, language, symbol, start_line, end_line, cyclomatic, cognitive}]}`, the functions over a limit worst first.
+
+A flat `match` or `switch` that only maps values scores high on cyclomatic complexity and low on cognitive: split it, or raise `max_cyclomatic` for the project with `dendrite directive`.
 
 ## Rust test structure (`loom-gate rstest`)
 
