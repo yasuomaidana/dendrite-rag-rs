@@ -1,6 +1,6 @@
 # Quality gates (`loom-gate`, `quality.loc`)
 
-`loom-gate` checks a source tree against the quality directives of a project. It has four gates: production lines per file (`loc`), repeated code (`clones`), function complexity (`complexity`) and Rust test structure (`rstest`).
+`loom-gate` checks a source tree against the quality directives of a project. It has five gates: production lines per file (`loc`), repeated code (`clones`), function complexity (`complexity`), how directories are grouped (`structure`) and Rust test structure (`rstest`).
 
     loom-gate loc [--root .] [--config <directives.toml>] [--format text|json|github] [--max N] [--warn-at N] [--exclude GLOB]…
 
@@ -99,6 +99,20 @@ Fails (exit 1) when a function has a higher cyclomatic or cognitive complexity t
 The `quality.complexity` method takes `{root, config?, max_cyclomatic?, max_cognitive?, exclude?}` and returns `{schema: 1, max_cyclomatic, max_cognitive, totals: {files, functions, failures}, findings: [{path, language, symbol, start_line, end_line, cyclomatic, cognitive}]}`, the functions over a limit worst first.
 
 A flat `match` or `switch` that only maps values scores high on cyclomatic complexity and low on cognitive: split it, or raise `max_cyclomatic` for the project with `dendrite directive`.
+
+## Structure (`loom-gate structure`)
+
+    loom-gate structure [--root .] [--config <directives.toml>] [--format text|json|github] [--max-files N] [--max-lines N] [--max-prefix-group N] [--exclude GLOB]…
+
+A file under the line limit is not enough: forty files in one package, or a dozen called `commit_execute_*`, `commit_push_*`, `commit_message_*`, name the concerns in file names where a module should. Three rules judge each directory of code files (Markdown, data and the like are ignored). A test file belongs to the module it tests (`x_test.go`, `x_tests.rs`, `test_x.py`, `x.spec.ts` are `x`), so a test never counts as a module of its own.
+
+| Rule | Key | Default | Fails when |
+|---|---|---|---|
+| `files` | `max_files_per_dir` | 12 | the directory holds more modules |
+| `lines` | `max_dir_production_lines` | 3000 | its files' production lines (tests, comments, blanks excluded) add up to more |
+| `prefix` | `max_prefix_group` | 4 | this many modules start with the same word (the part of the name before the first `_`): they are a sub-module, and the finding says to move them into one named after that word |
+
+`exclude` (globs, relative to the root) leaves files out. The `quality.structure` method takes `{root, config?, max_files_per_dir?, max_dir_production_lines?, max_prefix_group?, exclude?}` and returns `{schema: 1, max_files_per_dir, max_dir_production_lines, max_prefix_group, totals: {dirs, files, failures}, findings: [{path, rule, value, limit, files, message}]}`.
 
 ## Rust test structure (`loom-gate rstest`)
 

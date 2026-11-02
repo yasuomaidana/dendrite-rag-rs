@@ -356,6 +356,7 @@ impl Server {
             "quality.loc" => quality::loc(params),
             "quality.clones" => quality::clones(params),
             "quality.complexity" => quality::complexity(params),
+            "quality.structure" => quality::structure(params),
             "quality.rstest" => quality::rstest(params),
             "graph.communities" => {
                 let p: GraphListParams = rpc::params(params)?;

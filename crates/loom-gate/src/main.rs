@@ -3,6 +3,7 @@
 //!     loom-gate loc    [--root .] [--config .github/dendrite/directives.toml] [--format text|json|github]
 //!     loom-gate clones [--root .] [--config ...] [--format ...] [--min-lines N] [--max-percent P]
 //!     loom-gate complexity [--root .] [--config ...] [--format ...] [--max-cyclomatic N] [--max-cognitive N]
+//!     loom-gate structure [--root .] [--config ...] [--format ...] [--max-files N] [--max-lines N] [--max-prefix-group N]
 //!     loom-gate rstest [--root .] [--format ...]
 //!
 //! Exit status: 0 the check passed (warnings allowed), 1 a gate failed, 2 the tool could not run.
@@ -14,7 +15,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use loom_rag::quality::config::DIRECTIVES_PATH;
 use loom_rag::quality::{
     CloneReport, ComplexityConfig, ComplexityReport, DupConfig, LocConfig, LocReport, RstestReport,
-    check_clones, check_complexity, check_loc, check_rstest,
+    StructureConfig, StructureReport, check_clones, check_complexity, check_loc, check_rstest,
+    check_structure,
 };
 
 #[derive(Parser)]
@@ -32,6 +34,9 @@ enum Command {
     Clones(CloneArgs),
     /// Fail when a function is more complex than the limits (cyclomatic and cognitive).
     Complexity(ComplexityArgs),
+    /// Fail when a directory is a pile of files: too many modules, too many lines, or a sub-module's worth of
+    /// files sharing a name prefix.
+    Structure(StructureArgs),
     /// Fail when Rust tests repeat each other or set up through a helper that should be an rstest fixture.
     Rstest(RstestArgs),
 }
@@ -101,6 +106,21 @@ struct ComplexityArgs {
 }
 
 #[derive(clap::Args)]
+struct StructureArgs {
+    #[command(flatten)]
+    common: Common,
+    /// Override `structure.max_files_per_dir`.
+    #[arg(long)]
+    max_files: Option<usize>,
+    /// Override `structure.max_dir_production_lines`.
+    #[arg(long)]
+    max_lines: Option<usize>,
+    /// Override `structure.max_prefix_group`.
+    #[arg(long)]
+    max_prefix_group: Option<usize>,
+}
+
+#[derive(clap::Args)]
 struct RstestArgs {
     #[arg(long, default_value = ".")]
     root: PathBuf,
@@ -147,7 +167,13 @@ macro_rules! render {
     )*};
 }
 
-render!(LocReport, CloneReport, ComplexityReport, RstestReport);
+render!(
+    LocReport,
+    CloneReport,
+    ComplexityReport,
+    StructureReport,
+    RstestReport
+);
 
 /// Prints `report` in `format`; `true` when its gate passed.
 fn emit(report: &impl Render, format: Format) -> bool {
@@ -176,6 +202,7 @@ fn run(cli: Cli) -> anyhow::Result<bool> {
         Command::Loc(a) => loc(a),
         Command::Clones(a) => clones(a),
         Command::Complexity(a) => complexity(a),
+        Command::Structure(a) => structure(a),
         Command::Rstest(a) => rstest(a),
     }
 }
@@ -214,6 +241,21 @@ fn complexity(a: ComplexityArgs) -> anyhow::Result<bool> {
         },
     )?;
     Ok(emit(&check_complexity(&a.common.root, &cfg)?, a.common.format))
+}
+
+fn structure(a: StructureArgs) -> anyhow::Result<bool> {
+    let cfg = configured(
+        &a.common,
+        StructureConfig::load,
+        StructureConfig::validate,
+        |cfg| {
+            cfg.exclude.extend(a.common.exclude.clone());
+            cfg.max_files_per_dir = a.max_files.unwrap_or(cfg.max_files_per_dir);
+            cfg.max_dir_production_lines = a.max_lines.unwrap_or(cfg.max_dir_production_lines);
+            cfg.max_prefix_group = a.max_prefix_group.unwrap_or(cfg.max_prefix_group);
+        },
+    )?;
+    Ok(emit(&check_structure(&a.common.root, &cfg)?, a.common.format))
 }
 
 fn rstest(a: RstestArgs) -> anyhow::Result<bool> {

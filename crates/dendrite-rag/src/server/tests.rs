@@ -348,3 +348,41 @@ fn quality_complexity_reports_functions_over_the_limits() {
     let r = call(&mut s, "quality.complexity", json!({"nothing": 1}));
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
 }
+
+#[test]
+fn quality_structure_reports_directories_that_are_piles_of_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    for name in ["job_a", "job_b", "job_c", "job_d"] {
+        std::fs::write(dir.path().join(format!("src/{name}.rs")), "fn f() {}\n").unwrap();
+    }
+    let mut s = Server::new(Config::default());
+
+    let r = call(&mut s, "quality.structure", json!({"root": root}));
+    assert_eq!(r["result"]["findings"][0]["rule"], "prefix");
+    assert_eq!(r["result"]["totals"]["failures"], 1);
+
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_prefix_group": 5, "max_files_per_dir": 3}),
+    );
+    assert_eq!(r["result"]["findings"][0]["rule"], "files");
+
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_dir_production_lines": 1, "max_prefix_group": 9, "exclude": ["src/job_d.rs"]}),
+    );
+    assert_eq!(r["result"]["findings"][0]["rule"], "lines");
+
+    let r = call(
+        &mut s,
+        "quality.structure",
+        json!({"root": root, "max_prefix_group": 1}),
+    );
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+    let r = call(&mut s, "quality.structure", json!({"nothing": 1}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
+}

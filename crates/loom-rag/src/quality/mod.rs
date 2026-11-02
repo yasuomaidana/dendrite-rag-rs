@@ -13,15 +13,17 @@ pub mod regions;
 pub mod report;
 pub mod rstest_check;
 pub mod rstest_dep;
+pub mod structure;
 pub mod syntax;
 
 pub use check::{Status, check_loc};
 pub use clones::{CloneReport, check_clones};
 pub use complexity::{ComplexityReport, check_complexity};
-pub use config::{ComplexityConfig, DupConfig, LocConfig};
+pub use config::{ComplexityConfig, DupConfig, LocConfig, StructureConfig};
 pub use loc::{LocCount, count_lines, is_test_path};
 pub use report::LocReport;
 pub use rstest_check::{RstestReport, check_rstest};
+pub use structure::{StructureReport, check_structure};
 
 #[cfg(test)]
 mod clone_tests;
@@ -31,5 +33,7 @@ mod complexity_tests;
 mod rstest_dep_tests;
 #[cfg(test)]
 mod rstest_tests;
+#[cfg(test)]
+mod structure_tests;
 #[cfg(test)]
 mod tests;

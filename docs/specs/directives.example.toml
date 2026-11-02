@@ -13,6 +13,12 @@ max_cyclomatic = 10
 max_cognitive = 15
 exclude = []
 
+[structure]
+max_files_per_dir = 12
+max_dir_production_lines = 3000
+max_prefix_group = 4
+exclude = []
+
 [coverage]
 min_percent = 100.0
 scope = "line"

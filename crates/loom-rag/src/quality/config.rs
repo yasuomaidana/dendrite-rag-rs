@@ -68,6 +68,50 @@ impl ComplexityConfig {
     }
 }
 
+/// Limits on how a directory (package, module, crate source folder) is put together.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct StructureConfig {
+    /// A directory with more modules than this (a test file counts with the file it tests) fails.
+    pub max_files_per_dir: usize,
+    /// A directory whose files hold more production lines than this fails.
+    pub max_dir_production_lines: usize,
+    /// This many modules of one directory whose names start with the same word fail: they are a sub-module.
+    pub max_prefix_group: usize,
+    /// Globs, relative to the project root, of files that are not looked at.
+    pub exclude: Vec<String>,
+}
+
+impl Default for StructureConfig {
+    fn default() -> Self {
+        Self {
+            max_files_per_dir: 12,
+            max_dir_production_lines: 3000,
+            max_prefix_group: 4,
+            exclude: Vec::new(),
+        }
+    }
+}
+
+impl StructureConfig {
+    /// Reads the `[structure]` table of a directives file (defaults when the file or the table is missing).
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let cfg = read_directives(path)?.structure;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.max_files_per_dir == 0 || self.max_dir_production_lines == 0 {
+            bail!("structure.max_files_per_dir and structure.max_dir_production_lines must be above 0");
+        }
+        if self.max_prefix_group < 2 {
+            bail!("structure.max_prefix_group must be at least 2");
+        }
+        Ok(())
+    }
+}
+
 /// How much duplicated code a project tolerates, and what counts as a duplicate.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
@@ -123,6 +167,8 @@ struct DirectivesFile {
     duplication: DupConfig,
     #[serde(default)]
     complexity: ComplexityConfig,
+    #[serde(default)]
+    structure: StructureConfig,
 }
 
 /// Reads a directives file; a missing file is the defaults, an invalid one is an error.
