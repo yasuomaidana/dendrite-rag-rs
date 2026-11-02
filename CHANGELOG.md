@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- CI: `.github/workflows/complexity.yml` cross-checks function complexity with clippy `cognitive_complexity`, `lizard` and `ruff` C901; the Rust steps are report only while DRAG-78 is open (DRAG-82).
+
 ## [0.1.0] - 2026-11-02
 
 ### Added
