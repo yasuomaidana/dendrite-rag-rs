@@ -27,3 +27,8 @@ pub mod symbols;
 pub mod testutil;
 pub mod vector;
 pub mod walk;
+
+/// Compiles the Rust examples of the crate README as doctests, so they cannot drift from the code.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

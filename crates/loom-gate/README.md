@@ -194,7 +194,7 @@ cargo run -p loom-gate -- rstest --root .
 - **`dendrite-core-rs`**: Sibling repository defining foundational cyclomatic and cognitive complexity algorithms (`docs/ARCHITECTURE.md` Section 2.4).
 - **`dendrite-git-rs`**: Sibling repository providing Git hunk dependency graphing and review branch splitting.
 - **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
-- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection (`embedag-core`).
+- **`embedag`**: Rust library of graph building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives); `loom-rag` uses it for incremental change detection.
 - **Dendrite control plane (`dendrite-control`)**: Orchestrates project directives (`dendrite directive`) and runs quality gates via `dendrite allostasis gate`.
 
 ---

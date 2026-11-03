@@ -263,7 +263,7 @@ cargo bench -p loom-rag --features testutil
 - **`dendrite-core-rs`**: Sibling repository defining AST folding, token counting, and cyclomatic/cognitive complexity primitives (`DEN-972`).
 - **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs and semantic review clustering (`DEN-973`).
 - **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
-- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection (`embedag-core`) used for incremental indexing.
+- **`embedag`**: Rust library of graph building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives); `loom-rag` uses its Merkle trees (`embedag-core`) for incremental change detection.
 - **Dendrite control plane (`dendrite-control`)**: Orchestrates the multi-repo workspace (`dendrite pool`) and spawns `dendrite-rag` as a sidecar process.
 
 ---

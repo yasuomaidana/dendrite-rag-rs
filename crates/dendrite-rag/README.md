@@ -332,7 +332,7 @@ Feature flags forward directly to corresponding features in the [`loom-rag`](../
 - **`dendrite-core-rs`**: Sibling repository defining AST folding, token counting, and cyclomatic/cognitive complexity primitives.
 - **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs and semantic review clustering.
 - **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
-- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection (`embedag-core`).
+- **`embedag`**: Rust library of graph building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives); `loom-rag` uses it for incremental change detection.
 - **Dendrite control plane (`dendrite-control`)**: Consumes the `dendrite-rag` binary as a JSON-RPC 2.0 stdio sidecar for `dendrite ask`, `dendrite query`, and `dendrite store`. Falls back to in-process Go implementations if the sidecar binary is missing or unhealthy.
 - **`dendrite-mcp-hub`**: Exposes MCP tools (`dendrite_rag_retrieve`, `dendrite_rag_ask`) to autonomous coding agents and IDE plugins.
 

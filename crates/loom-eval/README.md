@@ -300,7 +300,7 @@ fn main() {
 - **`dendrite-core-rs`**: Sibling repository defining AST folding and complexity metrics.
 - **`dendrite-git-rs`**: Sibling repository managing Git hunk dependency graphs.
 - **`dendrite-plane-rs`**: Sibling repository providing Plane issue tracker integration.
-- **`embedag`**: Upstream repository providing BLAKE3 Merkle tree change detection.
+- **`embedag`**: Rust library of graph building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives); `loom-rag` uses it for incremental change detection.
 - **Dendrite control plane (`dendrite-control`)**: Orchestrates multi-repo workspaces and consumes benchmark outputs to validate sidecar releases.
 
 ---
