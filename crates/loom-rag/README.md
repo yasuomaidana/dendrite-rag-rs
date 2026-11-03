@@ -148,7 +148,7 @@ loom-rag = { version = "0.1.0", path = "path/to/crates/loom-rag" }
 
 ### Basic Indexing and Hybrid Search
 
-```rust
+```rust,no_run
 use std::path::Path;
 use loom_rag::engine::{Engine, Config};
 use loom_rag::retrieve::{SearchOpts, Mode};

@@ -267,7 +267,7 @@ EVAL_SWEEP=1 cargo run --release --example eval -p dendrite-rag -- . eval/golden
 
 `dendrite-rag` also exposes a library interface (`dendrite_rag`) for embedding the sidecar server, resolving hierarchical `.dendrite/rag.toml` settings, or running `ask` programmatic workflows in Rust:
 
-```rust
+```rust,no_run
 use std::path::Path;
 use dendrite_rag::settings::resolve;
 use loom_rag::engine::Engine;

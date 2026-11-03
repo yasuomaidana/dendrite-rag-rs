@@ -253,7 +253,7 @@ cargo test -p loom-eval
 
 `loom-eval` can be used as a library (`loom_eval`) to score query predictions and compute metrics programmatically:
 
-```rust
+```rust,no_run
 use std::time::Duration;
 use loom_eval::golden::Query;
 use loom_eval::metrics::{Scores, Unit};
