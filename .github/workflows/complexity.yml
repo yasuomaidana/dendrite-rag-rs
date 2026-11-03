@@ -59,7 +59,11 @@ jobs:
           cyc=$(pick max_cyclomatic); cog=$(pick max_cognitive)
           echo "cyc=${cyc:-10}" >> "$GITHUB_OUTPUT"
           echo "cog=${cog:-15}" >> "$GITHUB_OUTPUT"
-      - name: ruff C901 (McCabe)
+      - name: ruff C901 (report only, known debt DRAG-78; McCabe does not count and/or, so ruff reports fewer than loom-gate)
         run: |
           python3 -m pip install --quiet ruff==0.12.0
-          ruff check --isolated --select C901 --config "lint.mccabe.max-complexity = ${{ steps.limits.outputs.cyc }}" eval
+          out=$(ruff check --isolated --select C901 --config "lint.mccabe.max-complexity = ${{ steps.limits.outputs.cyc }}" eval 2>&1) && rc=0 || rc=$?
+          if [ "$rc" -gt 1 ]; then printf '%s\n' "$out" | tail -20; echo "::error title=ruff::ruff did not run (exit $rc)"; exit 1; fi
+          n=$(printf '%s\n' "$out" | grep -c " C901 " || true)
+          echo "::warning title=ruff C901::$n Python functions above the complexity limit (known debt, DRAG-78); this step turns blocking when the debt is cleared"
+          echo "ruff C901: $n Python functions above the limit" >> "$GITHUB_STEP_SUMMARY"
