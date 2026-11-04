@@ -17,13 +17,15 @@ pub enum Lang {
     Tsx,
     JavaScript,
     Java,
+    Kotlin,
+    Svelte,
     C,
     Cpp,
     Markdown,
     Text,
 }
 
-const ALL_CODE: [Lang; 9] = [
+const ALL_CODE: [Lang; 10] = [
     Lang::Go,
     Lang::Rust,
     Lang::Python,
@@ -31,6 +33,7 @@ const ALL_CODE: [Lang; 9] = [
     Lang::Tsx,
     Lang::JavaScript,
     Lang::Java,
+    Lang::Kotlin,
     Lang::C,
     Lang::Cpp,
 ];
@@ -47,13 +50,15 @@ impl Lang {
             "tsx" => Lang::Tsx,
             "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
             "java" => Lang::Java,
+            "kt" | "kts" => Lang::Kotlin,
+            "svelte" => Lang::Svelte,
             "c" | "h" => Lang::C,
             "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Lang::Cpp,
             "md" | "markdown" | "mdx" => Lang::Markdown,
             "txt" | "rst" | "toml" | "yaml" | "yml" | "json" | "proto" | "sql" | "sh" | "bash" | "zsh"
-            | "mod" | "gradle" | "xml" | "html" | "css" | "scss" | "kt" | "kts" | "swift" | "rb" | "php"
-            | "cs" | "scala" | "lua" | "zig" | "dart" | "ex" | "exs" | "erl" | "hs" | "ml" | "vue"
-            | "svelte" | "tf" | "hcl" | "dockerfile" | "ini" | "cfg" => Lang::Text,
+            | "mod" | "gradle" | "xml" | "html" | "css" | "scss" | "swift" | "rb" | "php" | "cs"
+            | "scala" | "lua" | "zig" | "dart" | "ex" | "exs" | "erl" | "hs" | "ml" | "vue" | "tf"
+            | "hcl" | "dockerfile" | "ini" | "cfg" => Lang::Text,
             _ => return None,
         })
     }
@@ -67,6 +72,8 @@ impl Lang {
             Lang::Tsx => "tsx",
             Lang::JavaScript => "javascript",
             Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
+            Lang::Svelte => "svelte",
             Lang::C => "c",
             Lang::Cpp => "cpp",
             Lang::Markdown => "markdown",
@@ -84,10 +91,36 @@ impl Lang {
             Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
             Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Lang::Java => tree_sitter_java::LANGUAGE.into(),
+            Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+            Lang::Svelte => tree_sitter_svelte_ng::LANGUAGE.into(),
             Lang::C => tree_sitter_c::LANGUAGE.into(),
             Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Lang::Markdown | Lang::Text => return None,
         })
+    }
+
+    /// The `dendrite-core` language that measures and parses files of this language, if there is one.
+    pub fn core(self) -> Option<dendrite_core::Lang> {
+        use dendrite_core::Lang as Core;
+        Some(match self {
+            Lang::Go => Core::Go,
+            Lang::Rust => Core::Rust,
+            Lang::Python => Core::Python,
+            Lang::TypeScript => Core::TypeScript,
+            Lang::Tsx => Core::Tsx,
+            Lang::JavaScript => Core::JavaScript,
+            Lang::Java => Core::Java,
+            Lang::Kotlin => Core::Kotlin,
+            Lang::Svelte => Core::Svelte,
+            Lang::C => Core::C,
+            Lang::Cpp => Core::Cpp,
+            Lang::Markdown | Lang::Text => return None,
+        })
+    }
+
+    /// The language that `dendrite-core` names, for the code it finds inside a file of another language.
+    pub fn from_core(core: dendrite_core::Lang) -> Option<Lang> {
+        ALL_CODE.iter().copied().find(|l| l.core() == Some(core))
     }
 
     /// The grammar's tag query (definitions and references), compiled once per language.
@@ -132,8 +165,9 @@ fn import_query(lang: Lang) -> &'static str {
               (#eq? @_f \"require\"))"
         }
         Lang::Java => "(import_declaration (_) @import)",
+        Lang::Kotlin => "(import (qualified_identifier) @import)",
         Lang::C | Lang::Cpp => "(preproc_include path: (_) @import)",
-        Lang::Markdown | Lang::Text => "",
+        Lang::Svelte | Lang::Markdown | Lang::Text => "",
     }
 }
 
@@ -141,6 +175,16 @@ fn import_query(lang: Lang) -> &'static str {
 const C_CALLS: &str = "
 (call_expression function: (identifier) @name) @reference.call
 (call_expression function: (field_expression field: (field_identifier) @name)) @reference.call
+";
+
+/// Kotlin has no stock tag query: classes, interfaces and objects, functions, and calls (plain, or through a
+/// receiver, whose name is the last identifier of the navigation).
+const KOTLIN_TAGS: &str = "
+(class_declaration name: (identifier) @name) @definition.class
+(object_declaration name: (identifier) @name) @definition.class
+(function_declaration name: (identifier) @name) @definition.function
+(call_expression . (identifier) @name) @reference.call
+(call_expression . (navigation_expression (identifier) @name .)) @reference.call
 ";
 
 const CPP_CALLS: &str = "
@@ -163,13 +207,14 @@ fn compile_tags(lang: Lang) -> Option<Query> {
         }
         Lang::JavaScript => tree_sitter_javascript::TAGS_QUERY.to_string(),
         Lang::Java => tree_sitter_java::TAGS_QUERY.to_string(),
+        Lang::Kotlin => KOTLIN_TAGS.to_string(),
         Lang::C => format!("{}\n{C_CALLS}", tree_sitter_c::TAGS_QUERY),
         Lang::Cpp => format!(
             "{}\n{}\n{C_CALLS}\n{CPP_CALLS}",
             tree_sitter_c::TAGS_QUERY,
             tree_sitter_cpp::TAGS_QUERY
         ),
-        Lang::Markdown | Lang::Text => return None,
+        Lang::Svelte | Lang::Markdown | Lang::Text => return None,
     };
     Query::new(&grammar, &source)
         .or_else(|_| {
@@ -194,6 +239,9 @@ mod tests {
     #[case("x.TSX", Some(Lang::Tsx))]
     #[case("README.md", Some(Lang::Markdown))]
     #[case("Cargo.toml", Some(Lang::Text))]
+    #[case("A.kt", Some(Lang::Kotlin))]
+    #[case("build.gradle.kts", Some(Lang::Kotlin))]
+    #[case("App.svelte", Some(Lang::Svelte))]
     #[case("logo.png", None)]
     #[case("Makefile", None)]
     fn detects_languages_by_extension(#[case] path: &str, #[case] expected: Option<Lang>) {
@@ -210,6 +258,7 @@ mod tests {
             Lang::Tsx,
             Lang::JavaScript,
             Lang::Java,
+            Lang::Kotlin,
             Lang::C,
             Lang::Cpp
         )]

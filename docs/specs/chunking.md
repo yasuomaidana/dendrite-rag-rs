@@ -5,7 +5,7 @@
 - `ignore::WalkBuilder` (parallel), honouring `.gitignore`, `.ignore`, global git excludes and hidden-file rules.
 - Always skipped: `.git/`, `target/`, `node_modules/`, `vendor/`, `dist/`, `.loom/`, `__pycache__/`, `.venv/`, `.dendrite/` (via `Config::exclude`), plus every path matched by `Config::exclude` globs.
 - Files over `Config::max_file_bytes` (default 1 MiB) are skipped. So is any file whose first 8 KiB contain a NUL byte (binary).
-- The language comes from the file extension. Go, Rust, Python, TypeScript/TSX, JavaScript/JSX, Java, C and C++ are parsed with tree-sitter. Markdown is split by headings. Known text formats (configuration, data, SQL, shell, and languages without a bundled grammar) are split as plain text. Files with any other extension are not indexed.
+- The language comes from the file extension. Go, Rust, Python, TypeScript/TSX, JavaScript/JSX, Java, Kotlin, Svelte, C and C++ are parsed with tree-sitter. A Svelte component is chunked by its parts: the code of each `<script>` is chunked as the language it names (`lang="ts"` is TypeScript, otherwise JavaScript) with the byte offsets and line numbers of the file, and the markup and style around it as text. The regions come from `dendrite-core` (`embedded::regions`), the same definition its complexity and symbol operations use; a language is a row of tables in `lang.rs`, not code. Markdown is split by headings. Known text formats (configuration, data, SQL, shell, and languages without a bundled grammar) are split as plain text. Files with any other extension are not indexed.
 
 ## cAST: split-then-merge over the syntax tree
 

@@ -144,3 +144,37 @@ fn rejects_a_bad_table(#[case] file: &str) {
     let dir = write_files(&[(DIRECTIVES_PATH, file)]);
     assert!(ComplexityConfig::load(&dir.path().join(DIRECTIVES_PATH)).is_err());
 }
+
+const NESTED: &str = "if (a) { if (b) { if (a) { if (b) { } } } }";
+
+/// Every language the RAG indexes is measured by the same gate, through `dendrite-core`'s tables.
+#[rstest]
+#[case::java("src/Busy.java", format!("class Busy {{\n    void busy(boolean a, boolean b) {{\n        {NESTED}\n    }}\n}}\n"), "java", 2, 4)]
+#[case::kotlin("src/busy.kt", format!("fun busy(a: Boolean, b: Boolean) {{\n    {NESTED}\n}}\n"), "kotlin", 1, 3)]
+#[case::svelte(
+    "src/App.svelte",
+    format!("<p>hi</p>\n<script lang=\"ts\">\n  function busy(a: boolean, b: boolean) {{\n    {NESTED}\n  }}\n</script>\n"),
+    "svelte",
+    3,
+    5
+)]
+fn every_indexed_language_is_measured(
+    #[case] path: &str,
+    #[case] source: String,
+    #[case] language: &str,
+    #[case] start: usize,
+    #[case] end: usize,
+) {
+    let dir = write_files(&[(path, source.as_str())]);
+    let cfg = ComplexityConfig {
+        max_cyclomatic: 3,
+        ..Default::default()
+    };
+    let report = check_complexity(dir.path(), &cfg).unwrap();
+    assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+    let f = &report.findings[0];
+    assert_eq!(
+        (f.symbol.as_str(), f.language.as_str(), f.start_line, f.end_line),
+        ("busy", language, start, end)
+    );
+}

@@ -89,7 +89,11 @@ fn imports(lang: Lang, root: Node, src: &[u8]) -> Vec<String> {
             let text = cap.node.utf8_text(src).unwrap_or_default();
             let spec = text.trim_matches(|c| matches!(c, '"' | '\'' | '`' | '<' | '>'));
             match names[cap.index as usize] {
-                "import" if !spec.is_empty() => out.push(spec.to_string()),
+                // A wildcard import keeps its star even when the grammar puts `.*` after the path (Kotlin).
+                "import" if !spec.is_empty() => {
+                    let star = if is_wildcard(cap.node) { ".*" } else { "" };
+                    out.push(format!("{spec}{star}"));
+                }
                 "import.mod" => out.push(format!("mod:{spec}")),
                 _ => {}
             }
@@ -97,6 +101,13 @@ fn imports(lang: Lang, root: Node, src: &[u8]) -> Vec<String> {
     }
     dedup_keep_order(&mut out);
     out
+}
+
+/// Whether `.` `*` follows the node: `import a.b.*`, where the path is a node of its own.
+fn is_wildcard(path: Node) -> bool {
+    let dot = path.next_sibling().filter(|n| n.kind() == ".");
+    dot.and_then(|d| d.next_sibling())
+        .is_some_and(|n| n.kind() == "*")
 }
 
 /// cAST: greedily pack sibling nodes up to `max` non-whitespace characters, recursing into
@@ -206,7 +217,11 @@ fn is_member(name: Node) -> bool {
         return false;
     };
     match parent.kind() {
-        "field_expression" | "selector_expression" | "member_expression" | "attribute" => true,
+        "field_expression"
+        | "selector_expression"
+        | "member_expression"
+        | "attribute"
+        | "navigation_expression" => true,
         // Java: `obj.call()` carries an `object` field; a bare `call()` does not.
         "method_invocation" => parent.child_by_field_name("object").is_some(),
         _ => false,

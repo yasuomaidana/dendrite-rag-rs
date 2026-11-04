@@ -88,7 +88,7 @@ The JSON report has `schema`, the limits used, `totals` (`files`, `lines`, `dupl
 
     loom-gate complexity [--root .] [--config <directives.toml>] [--format text|json|github] [--max-cyclomatic N] [--max-cognitive N] [--exclude GLOB]…
 
-Fails (exit 1) when a function has a higher cyclomatic or cognitive complexity than the limits of `[complexity]` (defaults 10 and 15). The measuring is [`dendrite-core`](https://github.com/yasuomaidana/dendrite-core-rs)'s (`docs/ARCHITECTURE.md` § 2.4 there), so there is one algorithm for every consumer. Languages: Go, Rust, Python, TypeScript, TSX, JavaScript, C and C++; other files are skipped. Test code is measured like production code, and a nested function is its own entry.
+Fails (exit 1) when a function has a higher cyclomatic or cognitive complexity than the limits of `[complexity]` (defaults 10 and 15). The measuring is [`dendrite-core`](https://github.com/yasuomaidana/dendrite-core-rs)'s (`docs/ARCHITECTURE.md` § 2.4 there), so there is one algorithm for every consumer. Languages: Go, Rust, Python, TypeScript, TSX, JavaScript, Java, Kotlin, Svelte (the functions of its `<script>` blocks, numbered by the lines of the file), C and C++; other files are skipped. Test code is measured like production code, and a nested function is its own entry.
 
 | Key | Default | Meaning |
 |---|---|---|

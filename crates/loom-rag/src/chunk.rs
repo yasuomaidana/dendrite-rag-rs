@@ -11,6 +11,8 @@ use crate::lang::Lang;
 
 mod code;
 use code::{Tag, TagKind, chunk_code, relang};
+mod embedded;
+use embedded::chunk_embedded;
 mod text;
 use text::{markdown_sections, nonws, pack, pack_text, significant, split_lines};
 
@@ -101,6 +103,7 @@ pub fn analyze_file(path: &str, lang: Lang, src: &str, opts: ChunkOptions) -> (V
                 .filter_map(|(r, scope)| build(path, lang, src, &lines, r, scope, &[], &[]))
                 .collect()
         }
+        Lang::Svelte => return chunk_embedded(path, lang, src, &lines, opts),
         Lang::Text => pack_text(src, 0..src.len(), opts.max_chars)
             .into_iter()
             .filter_map(|r| build(path, lang, src, &lines, r, Vec::new(), &[], &[]))

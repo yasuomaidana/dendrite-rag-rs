@@ -17,21 +17,6 @@ use crate::walk::{WalkOptions, walk};
 /// Version of the JSON shape below; consumers (`dendrite allostasis gate`) check it.
 pub const SCHEMA: u32 = 1;
 
-/// The `dendrite-core` language that measures files of `lang`, if there is one.
-fn core_lang(lang: Lang) -> Option<dendrite_core::Lang> {
-    Some(match lang {
-        Lang::Go => dendrite_core::Lang::Go,
-        Lang::Rust => dendrite_core::Lang::Rust,
-        Lang::Python => dendrite_core::Lang::Python,
-        Lang::TypeScript => dendrite_core::Lang::TypeScript,
-        Lang::Tsx => dendrite_core::Lang::Tsx,
-        Lang::JavaScript => dendrite_core::Lang::JavaScript,
-        Lang::C => dendrite_core::Lang::C,
-        Lang::Cpp => dendrite_core::Lang::Cpp,
-        _ => return None,
-    })
-}
-
 /// A function above a limit.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Finding {
@@ -97,7 +82,7 @@ pub fn check_complexity(root: &Path, cfg: &ComplexityConfig) -> anyhow::Result<C
     let rows: Vec<(usize, Vec<Finding>)> = files
         .par_iter()
         .filter_map(|f| {
-            let core = core_lang(f.lang)?;
+            let core = Lang::core(f.lang)?;
             let bytes = std::fs::read(&f.abs).ok()?;
             let metrics = complexity(core, &String::from_utf8_lossy(&bytes));
             Some(measure(&f.path, f.lang, metrics, cfg))

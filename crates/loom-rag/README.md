@@ -94,7 +94,7 @@ flowchart TD
 | Module | Description |
 |---|---|
 | [`walk`](src/walk.rs) | Parallel directory traversal respecting gitignore rules and hidden files, with a fixed skip list (`.git`, `target`, `node_modules`, `vendor`, ...), a binary-file check, and a file size cap (1 MiB by default). |
-| [`lang`](src/lang.rs) | Language detection by file extension and Tree-sitter grammars for Go, Rust, Python, TypeScript, TSX, JavaScript, Java, C, and C++. Markdown and plain text are split without a grammar. |
+| [`lang`](src/lang.rs) | Language detection by file extension and Tree-sitter grammars for Go, Rust, Python, TypeScript, TSX, JavaScript, Java, Kotlin, Svelte, C, and C++. Markdown and plain text are split without a grammar. |
 | [`chunk`](src/chunk.rs) | cAST AST-aware splitting (`chunk/code.rs`), Markdown hierarchical heading splitting (`chunk/text.rs`), and contextual header generation. |
 | [`corpus`](src/corpus.rs) | Corpus segmentation (`Code` vs `Docs`) and the corpus filter of a query (`all`, `code`, `docs`). |
 | [`config`](src/config.rs) | `GraphLlmSettings` and `VectorIndexChoice`. The other configuration types live next to what they configure: `Config` in `engine`, `EmbedConfig` in `embed`, `Bm25Params` in `bm25`, `FusionWeights` and `FusionConfig` in `retrieve`, `StorageConfig` in `store`, `RerankConfig` in `rerank`. |

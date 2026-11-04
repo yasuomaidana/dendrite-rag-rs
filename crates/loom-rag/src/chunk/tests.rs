@@ -147,6 +147,13 @@ fn python_and_typescript_parse() {
     "trim"
 )]
 #[case(
+    "A.kt",
+    Lang::Kotlin,
+    "import com.acme.util.Strings\nimport com.acme.model.*\nimport a.b.C as D\nclass A { fun f() { Strings.trim(\"x\") } }\n",
+    &["com.acme.util.Strings", "com.acme.model.*", "a.b.C"][..],
+    "trim"
+)]
+#[case(
     "a.c",
     Lang::C,
     "#include \"util.h\"\n#include <stdio.h>\nint f(void) { return helper(1); }\n",
@@ -219,4 +226,84 @@ fn ids_change_with_content_and_hashes_with_text_only() {
     );
     assert_ne!(a[0].id, b[0].id);
     assert_eq!(a[0].content_hash, b[0].content_hash);
+}
+
+const SVELTE: &str = "<script lang=\"ts\">\n  import { shout } from './util';\n  export function greet(name: string): string {\n    return shout(name);\n  }\n</script>\n\n<h1>{greet('world')}</h1>\n\n<script context=\"module\">\n  export const answer = 42;\n</script>\n\n<style>\n  h1 { color: red; }\n</style>\n";
+
+#[test]
+fn a_svelte_component_is_chunked_by_its_scripts_and_its_markup() {
+    let (chunks, imports) = analyze_file("App.svelte", Lang::Svelte, SVELTE, ChunkOptions::default());
+    assert_eq!(imports, vec!["./util".to_string()]);
+    assert!(chunks.iter().all(|c| c.lang == Lang::Svelte));
+    let code = chunks
+        .iter()
+        .find(|c| c.symbols.contains(&"greet".to_string()))
+        .expect("the script function");
+    assert!(code.content.contains("shout(name)"));
+    // byte offsets and lines are those of the file, not of the script
+    assert_eq!(&SVELTE[code.start_byte..code.end_byte], code.content);
+    assert_eq!(code.content.matches("<h1>").count(), 0);
+    assert!(code.calls.contains(&"shout".to_string()));
+    let markup = chunks
+        .iter()
+        .find(|c| c.content.contains("<h1>"))
+        .expect("the markup");
+    assert!(markup.symbols.is_empty());
+    assert!(
+        markup.content.contains("color: red"),
+        "style stays with the markup"
+    );
+    assert!(
+        !markup.content.contains("shout"),
+        "script text is not duplicated into the markup chunk"
+    );
+}
+
+#[test]
+fn svelte_chunks_tile_nothing_twice_and_stay_in_file_order() {
+    let (chunks, _) = analyze_file("App.svelte", Lang::Svelte, SVELTE, ChunkOptions::default());
+    let starts: Vec<usize> = chunks.iter().map(|c| c.start_byte).collect();
+    let mut sorted = starts.clone();
+    sorted.sort_unstable();
+    assert_eq!(starts, sorted);
+    let lines: Vec<(usize, usize)> = chunks.iter().map(|c| (c.start_line, c.end_line)).collect();
+    assert!(
+        lines.iter().all(|(s, e)| s <= e && *e <= SVELTE.lines().count()),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_svelte_component_without_scripts_is_all_markup() {
+    let (chunks, imports) = analyze_file(
+        "A.svelte",
+        Lang::Svelte,
+        "<p>hi</p>\n{#if x}<b>yes</b>{/if}\n",
+        ChunkOptions::default(),
+    );
+    assert!(imports.is_empty());
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].lang, Lang::Svelte);
+}
+
+#[test]
+fn kotlin_is_chunked_with_its_definitions() {
+    let src = "package a\n\nclass Box(val v: Int) {\n    fun get(): Int = v\n}\n\nobject Registry {\n    fun all(): List<Int> = emptyList()\n}\n\nfun top(x: Int): Int = Box(x).get()\n";
+    let (chunks, _) = analyze_file(
+        "Box.kt",
+        Lang::Kotlin,
+        src,
+        ChunkOptions {
+            max_chars: 60,
+            min_chars: 10,
+        },
+    );
+    let symbols: Vec<&String> = chunks.iter().flat_map(|c| &c.symbols).collect();
+    for name in ["Box", "get", "Registry", "all", "top"] {
+        assert!(symbols.iter().any(|s| *s == name), "{name} not in {symbols:?}");
+    }
+    assert!(
+        chunks.iter().any(|c| c.method_calls.contains(&"get".to_string())),
+        "a receiver call is a method call"
+    );
 }

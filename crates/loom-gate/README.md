@@ -114,7 +114,7 @@ cargo run -p loom-gate -- clones --root . --min-tokens 50 --min-lines 5
 
 ### 3. `complexity` (Function Complexity)
 
-Fails when any function exceeds McCabe cyclomatic or SonarSource cognitive complexity thresholds. Complexity is evaluated across Go, Rust, Python, TypeScript, TSX, JavaScript, C, and C++.
+Fails when any function exceeds McCabe cyclomatic or SonarSource cognitive complexity thresholds. Complexity is evaluated across Go, Rust, Python, TypeScript, TSX, JavaScript, Java, Kotlin, Svelte (the functions of its scripts), C, and C++.
 
 ```bash
 loom-gate complexity [--root .] [--config <PATH>] [--format text|json|github] [--max-cyclomatic N] [--max-cognitive N] [--exclude GLOB]...

@@ -54,7 +54,8 @@ impl Resolver {
             Lang::Rust => self.rust(from, spec),
             Lang::Python => self.python(from, spec),
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.script(from, spec),
-            Lang::Java => self.java(spec),
+            Lang::Java | Lang::Kotlin => self.jvm(spec),
+            Lang::Svelte => self.script(from, spec),
             Lang::C | Lang::Cpp => self.include(from, spec),
             Lang::Markdown | Lang::Text => Vec::new(),
         };
@@ -195,7 +196,9 @@ impl Resolver {
         self.first(candidates)
     }
 
-    fn java(&self, spec: &str) -> Vec<String> {
+    /// Java and Kotlin: `a.b.C` is a file `a/b/C` in either language (they call each other), `a.b.*` a directory.
+    fn jvm(&self, spec: &str) -> Vec<String> {
+        const EXTENSIONS: [&str; 2] = [".java", ".kt"];
         let spec = spec.trim_start_matches("static ").trim();
         if let Some(pkg) = spec.strip_suffix(".*") {
             let suffix = pkg.replace('.', "/");
@@ -203,14 +206,18 @@ impl Resolver {
                 .dirs
                 .keys()
                 .find(|d| *d == &suffix || d.ends_with(&format!("/{suffix}")));
-            return dir.map_or_else(Vec::new, |d| self.dir_files(d, ".java", ""));
+            return dir.map_or_else(Vec::new, |d| {
+                EXTENSIONS.iter().flat_map(|e| self.dir_files(d, e, "")).collect()
+            });
         }
         // `a.b.C` or a static import `a.b.C.member`.
         let parts: Vec<&str> = spec.split('.').collect();
         for n in (1..=parts.len()).rev() {
-            let found = self.by_suffix(&format!("{}.java", parts[..n].join("/")));
-            if !found.is_empty() {
-                return found;
+            for ext in EXTENSIONS {
+                let found = self.by_suffix(&format!("{}{ext}", parts[..n].join("/")));
+                if !found.is_empty() {
+                    return found;
+                }
             }
         }
         Vec::new()
@@ -309,6 +316,10 @@ mod tests {
             "web/src/a.ts",
             "java/src/com/acme/util/Strings.java",
             "java/src/com/acme/App.java",
+            "kt/src/com/acme/Main.kt",
+            "kt/src/com/acme/kt/Box.kt",
+            "web/src/App.svelte",
+            "web/src/Widget.svelte",
             "native/util.h",
             "native/a.c",
         ];
@@ -384,6 +395,24 @@ mod tests {
         assert_eq!(
             r.resolve("java/src/com/acme/App.java", Lang::Java, "com.acme.util.*"),
             ["java/src/com/acme/util/Strings.java"]
+        );
+
+        assert_eq!(
+            r.resolve("kt/src/com/acme/Main.kt", Lang::Kotlin, "com.acme.util.Strings"),
+            ["java/src/com/acme/util/Strings.java"],
+            "Kotlin imports a Java class"
+        );
+        assert_eq!(
+            r.resolve("kt/src/com/acme/Main.kt", Lang::Kotlin, "com.acme.kt.Box"),
+            ["kt/src/com/acme/kt/Box.kt"]
+        );
+        assert_eq!(
+            r.resolve("kt/src/com/acme/Main.kt", Lang::Kotlin, "com.acme.kt.*"),
+            ["kt/src/com/acme/kt/Box.kt"]
+        );
+        assert_eq!(
+            r.resolve("web/src/App.svelte", Lang::Svelte, "./Widget.svelte"),
+            ["web/src/Widget.svelte"]
         );
 
         assert_eq!(r.resolve("native/a.c", Lang::C, "util.h"), ["native/util.h"]);
