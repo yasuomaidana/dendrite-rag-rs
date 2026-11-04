@@ -38,84 +38,242 @@ const ALL_CODE: [Lang; 10] = [
     Lang::Cpp,
 ];
 
+/// Everything that differs between languages, in one row each: the id, the extensions, the grammar, the
+/// `dendrite-core` language that measures it and the tag query. The methods of [`Lang`] only look a row up, so
+/// adding a language is adding a row (no `match` per property).
+struct Row {
+    lang: Lang,
+    id: &'static str,
+    exts: &'static [&'static str],
+    grammar: fn() -> Option<Language>,
+    core: Option<dendrite_core::Lang>,
+    /// The tag query (definitions and references); `None` when there is none to run.
+    tags: fn() -> Option<String>,
+    /// A smaller query to fall back on when the combined one does not compile.
+    tags_fallback: Option<&'static str>,
+}
+
+const TEXT_EXTS: &[&str] = &[
+    "txt",
+    "rst",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "proto",
+    "sql",
+    "sh",
+    "bash",
+    "zsh",
+    "mod",
+    "gradle",
+    "xml",
+    "html",
+    "css",
+    "scss",
+    "swift",
+    "rb",
+    "php",
+    "cs",
+    "scala",
+    "lua",
+    "zig",
+    "dart",
+    "ex",
+    "exs",
+    "erl",
+    "hs",
+    "ml",
+    "vue",
+    "tf",
+    "hcl",
+    "dockerfile",
+    "ini",
+    "cfg",
+];
+
+fn ts_tags() -> Option<String> {
+    // The TypeScript queries extend the JavaScript ones.
+    Some(format!(
+        "{}\n{}",
+        tree_sitter_javascript::TAGS_QUERY,
+        tree_sitter_typescript::TAGS_QUERY
+    ))
+}
+
+fn c_tags() -> Option<String> {
+    Some(format!("{}\n{C_CALLS}", tree_sitter_c::TAGS_QUERY))
+}
+
+fn cpp_tags() -> Option<String> {
+    Some(format!(
+        "{}\n{}\n{C_CALLS}\n{CPP_CALLS}",
+        tree_sitter_c::TAGS_QUERY,
+        tree_sitter_cpp::TAGS_QUERY
+    ))
+}
+
+const fn code(
+    lang: Lang,
+    id: &'static str,
+    exts: &'static [&'static str],
+    grammar: fn() -> Option<Language>,
+    core: dendrite_core::Lang,
+    tags: fn() -> Option<String>,
+) -> Row {
+    Row {
+        lang,
+        id,
+        exts,
+        grammar,
+        core: Some(core),
+        tags,
+        tags_fallback: None,
+    }
+}
+
+const fn plain(lang: Lang, id: &'static str, exts: &'static [&'static str]) -> Row {
+    Row {
+        lang,
+        id,
+        exts,
+        grammar: || None,
+        core: None,
+        tags: || None,
+        tags_fallback: None,
+    }
+}
+
+static ROWS: [Row; 13] = [
+    code(
+        Lang::Go,
+        "go",
+        &["go"],
+        || Some(tree_sitter_go::LANGUAGE.into()),
+        dendrite_core::Lang::Go,
+        || Some(tree_sitter_go::TAGS_QUERY.to_string()),
+    ),
+    code(
+        Lang::Rust,
+        "rust",
+        &["rs"],
+        || Some(tree_sitter_rust::LANGUAGE.into()),
+        dendrite_core::Lang::Rust,
+        || Some(tree_sitter_rust::TAGS_QUERY.to_string()),
+    ),
+    code(
+        Lang::Python,
+        "python",
+        &["py", "pyi"],
+        || Some(tree_sitter_python::LANGUAGE.into()),
+        dendrite_core::Lang::Python,
+        || Some(tree_sitter_python::TAGS_QUERY.to_string()),
+    ),
+    Row {
+        tags_fallback: Some(tree_sitter_typescript::TAGS_QUERY),
+        ..code(
+            Lang::TypeScript,
+            "typescript",
+            &["ts", "mts", "cts"],
+            || Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+            dendrite_core::Lang::TypeScript,
+            ts_tags,
+        )
+    },
+    Row {
+        tags_fallback: Some(tree_sitter_typescript::TAGS_QUERY),
+        ..code(
+            Lang::Tsx,
+            "tsx",
+            &["tsx"],
+            || Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+            dendrite_core::Lang::Tsx,
+            ts_tags,
+        )
+    },
+    code(
+        Lang::JavaScript,
+        "javascript",
+        &["js", "mjs", "cjs", "jsx"],
+        || Some(tree_sitter_javascript::LANGUAGE.into()),
+        dendrite_core::Lang::JavaScript,
+        || Some(tree_sitter_javascript::TAGS_QUERY.to_string()),
+    ),
+    code(
+        Lang::Java,
+        "java",
+        &["java"],
+        || Some(tree_sitter_java::LANGUAGE.into()),
+        dendrite_core::Lang::Java,
+        || Some(tree_sitter_java::TAGS_QUERY.to_string()),
+    ),
+    code(
+        Lang::Kotlin,
+        "kotlin",
+        &["kt", "kts"],
+        || Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
+        dendrite_core::Lang::Kotlin,
+        || Some(KOTLIN_TAGS.to_string()),
+    ),
+    // A Svelte component is chunked through the scripts `dendrite-core` finds in it, so it has no tag query.
+    code(
+        Lang::Svelte,
+        "svelte",
+        &["svelte"],
+        || Some(tree_sitter_svelte_ng::LANGUAGE.into()),
+        dendrite_core::Lang::Svelte,
+        || None,
+    ),
+    code(
+        Lang::C,
+        "c",
+        &["c", "h"],
+        || Some(tree_sitter_c::LANGUAGE.into()),
+        dendrite_core::Lang::C,
+        c_tags,
+    ),
+    Row {
+        tags_fallback: Some(tree_sitter_cpp::TAGS_QUERY),
+        ..code(
+            Lang::Cpp,
+            "cpp",
+            &["cc", "cpp", "cxx", "hpp", "hh", "hxx"],
+            || Some(tree_sitter_cpp::LANGUAGE.into()),
+            dendrite_core::Lang::Cpp,
+            cpp_tags,
+        )
+    },
+    plain(Lang::Markdown, "markdown", &["md", "markdown", "mdx"]),
+    plain(Lang::Text, "text", TEXT_EXTS),
+];
+
 impl Lang {
+    fn row(self) -> &'static Row {
+        ROWS.iter()
+            .find(|r| r.lang == self)
+            .expect("every language has a row")
+    }
+
     /// Detects the language from the file extension; `None` means the file is not indexed.
     pub fn from_path(path: &Path) -> Option<Lang> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-        Some(match ext.as_str() {
-            "go" => Lang::Go,
-            "rs" => Lang::Rust,
-            "py" | "pyi" => Lang::Python,
-            "ts" | "mts" | "cts" => Lang::TypeScript,
-            "tsx" => Lang::Tsx,
-            "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
-            "java" => Lang::Java,
-            "kt" | "kts" => Lang::Kotlin,
-            "svelte" => Lang::Svelte,
-            "c" | "h" => Lang::C,
-            "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Lang::Cpp,
-            "md" | "markdown" | "mdx" => Lang::Markdown,
-            "txt" | "rst" | "toml" | "yaml" | "yml" | "json" | "proto" | "sql" | "sh" | "bash" | "zsh"
-            | "mod" | "gradle" | "xml" | "html" | "css" | "scss" | "swift" | "rb" | "php" | "cs"
-            | "scala" | "lua" | "zig" | "dart" | "ex" | "exs" | "erl" | "hs" | "ml" | "vue" | "tf"
-            | "hcl" | "dockerfile" | "ini" | "cfg" => Lang::Text,
-            _ => return None,
-        })
+        ROWS.iter()
+            .find(|r| r.exts.contains(&ext.as_str()))
+            .map(|r| r.lang)
     }
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            Lang::Go => "go",
-            Lang::Rust => "rust",
-            Lang::Python => "python",
-            Lang::TypeScript => "typescript",
-            Lang::Tsx => "tsx",
-            Lang::JavaScript => "javascript",
-            Lang::Java => "java",
-            Lang::Kotlin => "kotlin",
-            Lang::Svelte => "svelte",
-            Lang::C => "c",
-            Lang::Cpp => "cpp",
-            Lang::Markdown => "markdown",
-            Lang::Text => "text",
-        }
+        self.row().id
     }
 
     /// The tree-sitter grammar, for code languages.
     pub fn grammar(self) -> Option<Language> {
-        Some(match self {
-            Lang::Go => tree_sitter_go::LANGUAGE.into(),
-            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Lang::Python => tree_sitter_python::LANGUAGE.into(),
-            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Lang::Java => tree_sitter_java::LANGUAGE.into(),
-            Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
-            Lang::Svelte => tree_sitter_svelte_ng::LANGUAGE.into(),
-            Lang::C => tree_sitter_c::LANGUAGE.into(),
-            Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-            Lang::Markdown | Lang::Text => return None,
-        })
+        (self.row().grammar)()
     }
 
     /// The `dendrite-core` language that measures and parses files of this language, if there is one.
     pub fn core(self) -> Option<dendrite_core::Lang> {
-        use dendrite_core::Lang as Core;
-        Some(match self {
-            Lang::Go => Core::Go,
-            Lang::Rust => Core::Rust,
-            Lang::Python => Core::Python,
-            Lang::TypeScript => Core::TypeScript,
-            Lang::Tsx => Core::Tsx,
-            Lang::JavaScript => Core::JavaScript,
-            Lang::Java => Core::Java,
-            Lang::Kotlin => Core::Kotlin,
-            Lang::Svelte => Core::Svelte,
-            Lang::C => Core::C,
-            Lang::Cpp => Core::Cpp,
-            Lang::Markdown | Lang::Text => return None,
-        })
+        self.row().core
     }
 
     /// The language that `dendrite-core` names, for the code it finds inside a file of another language.
@@ -192,41 +350,13 @@ const CPP_CALLS: &str = "
 ";
 
 fn compile_tags(lang: Lang) -> Option<Query> {
-    let grammar = lang.grammar()?;
-    let source = match lang {
-        Lang::Go => tree_sitter_go::TAGS_QUERY.to_string(),
-        Lang::Rust => tree_sitter_rust::TAGS_QUERY.to_string(),
-        Lang::Python => tree_sitter_python::TAGS_QUERY.to_string(),
-        // The TypeScript queries extend the JavaScript ones.
-        Lang::TypeScript | Lang::Tsx => {
-            format!(
-                "{}\n{}",
-                tree_sitter_javascript::TAGS_QUERY,
-                tree_sitter_typescript::TAGS_QUERY
-            )
-        }
-        Lang::JavaScript => tree_sitter_javascript::TAGS_QUERY.to_string(),
-        Lang::Java => tree_sitter_java::TAGS_QUERY.to_string(),
-        Lang::Kotlin => KOTLIN_TAGS.to_string(),
-        Lang::C => format!("{}\n{C_CALLS}", tree_sitter_c::TAGS_QUERY),
-        Lang::Cpp => format!(
-            "{}\n{}\n{C_CALLS}\n{CPP_CALLS}",
-            tree_sitter_c::TAGS_QUERY,
-            tree_sitter_cpp::TAGS_QUERY
-        ),
-        Lang::Svelte | Lang::Markdown | Lang::Text => return None,
-    };
+    let row = lang.row();
+    let grammar = (row.grammar)()?;
+    let source = (row.tags)()?;
     Query::new(&grammar, &source)
-        .or_else(|_| {
-            // Fall back to the language's own query when the combined one does not compile.
-            let own = match lang {
-                Lang::TypeScript | Lang::Tsx => tree_sitter_typescript::TAGS_QUERY,
-                Lang::Cpp => tree_sitter_cpp::TAGS_QUERY,
-                _ => return Err(()),
-            };
-            Query::new(&grammar, own).map_err(|_| ())
-        })
         .ok()
+        // Fall back to the language's own query when the combined one does not compile.
+        .or_else(|| Query::new(&grammar, row.tags_fallback?).ok())
 }
 
 #[cfg(test)]
