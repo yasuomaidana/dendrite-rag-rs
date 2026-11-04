@@ -106,3 +106,15 @@ fn reads_embeddings_through_from_the_shared_tier() {
     let p = ours.pull().unwrap();
     assert_eq!(p.cached, p.chunks);
 }
+
+#[test]
+fn a_torn_journal_tail_does_not_swallow_the_next_batch() {
+    let dir = project();
+    let journal = dir.path().join(super::JOURNAL_FILE);
+    std::fs::write(&journal, "{\"cut").unwrap();
+    let edge = super::Edge::new("postgresql://rag:rag@127.0.0.1:1/x", "torn", journal.clone());
+    edge.append("{}").unwrap();
+    let text = std::fs::read_to_string(&journal).unwrap();
+    assert_eq!(text, "{\"cut\n{}\n");
+    assert_eq!(edge.pending(), 2);
+}

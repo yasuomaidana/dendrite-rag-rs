@@ -86,7 +86,12 @@ impl Edge {
     }
 
     fn append(&self, line: &str) -> std::io::Result<()> {
+        let torn = std::fs::read(&self.journal).is_ok_and(|b| b.last().is_some_and(|&c| c != b'\n'));
         let mut f = OpenOptions::new().create(true).append(true).open(&self.journal)?;
+        if torn {
+            // A crash cut the last line; end it so this batch does not fuse with the fragment.
+            f.write_all(b"\n")?;
+        }
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()

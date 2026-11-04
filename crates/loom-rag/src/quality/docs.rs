@@ -16,7 +16,7 @@ pub(crate) fn is_manifest(path: &str, contents: &dyn Fn(&str) -> String) -> bool
     match name {
         "Cargo.toml" => {
             let text = contents(path);
-            text.contains("[package]") || !text.contains("[workspace]")
+            text.contains("[package]") || !text.lines().any(|l| l.trim_start().starts_with("[workspace"))
         }
         _ => MANIFESTS.contains(&name),
     }

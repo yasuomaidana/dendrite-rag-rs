@@ -50,14 +50,14 @@ impl Engine {
 
     /// The best dense and lexical scores of code and of documentation for `query`.
     pub fn probe(&self, query: &str, t: &mut Timings) -> Result<Probe> {
-        let dense = |corpus| match self.dense_in(query, PROBE, corpus, &mut Timings::default()) {
+        let dense = |corpus, t: &mut Timings| match self.dense_in(query, PROBE, corpus, t) {
             Ok(r) => Ok(best(&r)),
             Err(Error::Embed(_)) => Ok(None),
             Err(e) => Err(e),
         };
         let probe = Probe {
-            dense_code: dense(CorpusFilter::Code)?,
-            dense_docs: dense(CorpusFilter::Docs)?,
+            dense_code: dense(CorpusFilter::Code, t)?,
+            dense_docs: dense(CorpusFilter::Docs, t)?,
             lexical_code: best(&self.lexical_in(query, PROBE, CorpusFilter::Code, t)?),
             lexical_docs: best(&self.lexical_in(query, PROBE, CorpusFilter::Docs, t)?),
             docs_share: self.docs_share(query, t)?,

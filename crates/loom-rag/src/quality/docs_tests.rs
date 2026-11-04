@@ -19,6 +19,11 @@ fn both() -> Vec<String> {
 #[rstest]
 #[case::cargo_package("a/Cargo.toml", "[package]\nname = \"a\"", true)]
 #[case::cargo_workspace_only("Cargo.toml", "[workspace]\nmembers = []", false)]
+#[case::cargo_workspace_tables_only(
+    "Cargo.toml",
+    "[workspace.package]\nversion = \"1\"\n[workspace.dependencies]",
+    false
+)]
 #[case::cargo_without_tables("x/Cargo.toml", "", true)]
 #[case::go_module("svc/go.mod", "", true)]
 #[case::npm("web/package.json", "", true)]

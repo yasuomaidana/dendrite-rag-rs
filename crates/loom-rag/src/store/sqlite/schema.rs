@@ -66,7 +66,7 @@ pub(super) fn open_writer(path: &Path) -> crate::ledger::Result<Connection> {
 pub(super) fn open_reader(path: &Path) -> crate::ledger::Result<Connection> {
     let conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .or_backend()?;
     conn.execute_batch(SETTINGS).or_backend()?;

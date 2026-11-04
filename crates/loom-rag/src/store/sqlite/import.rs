@@ -46,6 +46,13 @@ pub(super) fn import_redb(conn: &mut Connection, path: &Path) -> Result<()> {
                 "warning: failed to import the caches of {}: {e}; embeddings will be recomputed",
                 redb.display()
             );
+            // The copy rolls back with `tx`; record the failure so later opens do not retry it.
+            drop(tx);
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, 'failed')",
+                [IMPORT_KEY],
+            )
+            .or_backend()?;
             Ok(())
         }
     }
