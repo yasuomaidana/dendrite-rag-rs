@@ -112,10 +112,12 @@ impl Edge {
             return Err(lines.len());
         };
         for (i, line) in lines.iter().enumerate() {
-            // A line that does not parse was cut by a crash mid-write; it never reached
-            // the local store's commit either, so it is dropped.
+            // A line that does not parse was cut by a crash mid-write; keep it (and the rest)
+            // so we don't silently drop a locally-committed batch.
             let Ok(batch) = serde_json::from_str::<SyncBatch>(line) else {
-                continue;
+                let rest = lines[i..].join("\n") + "\n";
+                let _ = rewrite(&self.journal, &rest);
+                return Err(lines.len() - i);
             };
             if pg.apply(batch).is_err() {
                 self.lost();
