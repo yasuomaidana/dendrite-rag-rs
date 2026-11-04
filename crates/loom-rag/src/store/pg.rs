@@ -36,6 +36,14 @@ pub(crate) use vectors::{VectorOp, apply_vector};
 /// Schema version recorded in `rag_schema`.
 pub const SCHEMA_VERSION: i32 = 1;
 
+/// An error with the server's message, which `postgres::Error` hides behind a bare "db error".
+fn describe(e: &postgres::Error) -> String {
+    e.as_db_error().map_or_else(
+        || e.to_string(),
+        |d| format!("{} ({})", d.message(), d.code().code()),
+    )
+}
+
 const MIGRATION: &str = r#"
 DO $$
 BEGIN
@@ -90,6 +98,11 @@ CREATE TABLE IF NOT EXISTS rag_concepts (
     repo int NOT NULL, path text NOT NULL, concepts text NOT NULL, PRIMARY KEY (repo, path));
 "#;
 
+/// The last table [`MIGRATION`] creates. The migration is one transaction, so its presence means the
+/// schema is complete and re-running it is skipped: `CREATE INDEX IF NOT EXISTS` still locks its table,
+/// and that lock deadlocked with another connection's writes to the same database.
+const MIGRATED_TABLE: &str = "rag_concepts";
+
 /// Okapi BM25 over the postings, the same formula and field boosts as the Tantivy index.
 /// `stats` must stay MATERIALIZED: inlined, the planner re-aggregates it for every posting
 /// (500 ms instead of 5 ms on 5k chunks).
@@ -142,9 +155,15 @@ pub(crate) struct Pg {
 impl Pg {
     /// Connects a pool, migrates the schema and registers repository `repo`.
     pub(crate) fn connect(url: &str, repo: &str) -> Result<Self, String> {
-        let pg = |e: postgres::Error| format!("postgres: {e}");
+        let pg = |e: postgres::Error| format!("postgres: {}", describe(&e));
         let mut client = Client::connect(url, NoTls).map_err(pg)?;
-        client.batch_execute(MIGRATION).map_err(pg)?;
+        let migrated: bool = client
+            .query_one("SELECT to_regclass($1) IS NOT NULL", &[&MIGRATED_TABLE])
+            .map_err(pg)?
+            .get(0);
+        if !migrated {
+            client.batch_execute(MIGRATION).map_err(pg)?;
+        }
         let version: Option<i32> = client
             .query_opt("SELECT version FROM rag_schema LIMIT 1", &[])
             .map_err(pg)?
