@@ -1,0 +1,2 @@
+# managed by dendrite — edit with `dendrite directive "<rule>"`
+cognitive-complexity-threshold = 15
