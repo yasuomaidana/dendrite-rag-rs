@@ -87,12 +87,21 @@ fn commands(hits: &[Hit]) -> Vec<String> {
 /// them when the question asks for commands and the answer names none.
 pub(crate) fn enhance(question: &str, answer: &str, hits: &[Hit]) -> String {
     let q = question.to_lowercase();
+    let words = format!(
+        " {} ",
+        q.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let wants_command = ["command", "how to", "check", "show", "run"]
         .iter()
-        .any(|w| q.contains(w));
+        .any(|w| words.contains(&format!(" {w} ")));
     let cmds = commands(hits);
     let trimmed = answer.trim();
-    let canned = trimmed.contains(CANNED_REPLY) || trimmed.chars().count() < 20;
+    // A short answer can be a complete one ("Yes, in src/a.rs."): only nothing at all, or the canned reply of the
+    // local model, is replaced.
+    let canned = trimmed.is_empty() || trimmed.contains(CANNED_REPLY);
     if canned {
         if q.contains("available llm") || q.contains("check available") || q.contains("list model") {
             return "To check available LLMs and inference engines in Dendrite, execute the following commands:\n\n\
@@ -120,4 +129,54 @@ pub(crate) fn enhance(question: &str, answer: &str, hits: &[Hit]) -> String {
         return s;
     }
     answer.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn hit(content: &str) -> Hit {
+        Hit {
+            chunk_id: "c".into(),
+            path: "README.md".into(),
+            start_line: 1,
+            end_line: 3,
+            scope: Vec::new(),
+            score: 1.0,
+            content: content.into(),
+            duplicates: Vec::new(),
+            outline: false,
+        }
+    }
+
+    #[rstest]
+    #[case::short_correct_answer("where is the walker", "Yes, in src/a.rs.", "Yes, in src/a.rs.")]
+    #[case::checksum_is_not_check("what is a checksum", "A hash of the bytes.", "A hash of the bytes.")]
+    #[case::running_is_not_run("is it running", "Yes, it is up.", "Yes, it is up.")]
+    fn plain_answers_are_left_alone(#[case] question: &str, #[case] answer: &str, #[case] want: &str) {
+        let hits = [hit("```bash\ndendrite sync\n```")];
+        assert_eq!(enhance(question, answer, &hits), want);
+    }
+
+    #[rstest]
+    #[case::keyword("check the index", "Look at the status.")]
+    #[case::phrase("how to index this", "Run the indexer.")]
+    fn a_question_for_commands_gets_the_documented_ones(#[case] question: &str, #[case] answer: &str) {
+        let hits = [hit("```bash\ndendrite sync\n```")];
+        let out = enhance(question, answer, &hits);
+        assert!(
+            out.starts_with(answer) && out.contains("$ dendrite sync"),
+            "{out}"
+        );
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::canned(CANNED_REPLY)]
+    fn an_empty_or_canned_answer_is_replaced_by_documented_commands(#[case] answer: &str) {
+        let hits = [hit("```bash\ndendrite sync\n```")];
+        let out = enhance("anything", answer, &hits);
+        assert!(out.contains("1. `$ dendrite sync`"), "{out}");
+    }
 }

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/quality.complexity.json",
+  "title": "quality.complexity",
+  "description": "Cyclomatic and cognitive complexity of every function against the project's limits. No index needed. A root that is not a directory is an invalid_params error.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "config": {
+        "type": "string",
+        "description": "Directives file; default <root>/.github/dendrite/directives.toml"
+      },
+      "max_cyclomatic": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 10
+      },
+      "max_cognitive": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 15
+      },
+      "exclude": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Globs relative to root"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "schema",
+      "max_cyclomatic",
+      "max_cognitive",
+      "totals",
+      "findings"
+    ],
+    "properties": {
+      "schema": {
+        "type": "integer",
+        "const": 1
+      },
+      "max_cyclomatic": {
+        "type": "integer"
+      },
+      "max_cognitive": {
+        "type": "integer"
+      },
+      "totals": {
+        "type": "object",
+        "required": [
+          "files",
+          "functions",
+          "failures"
+        ],
+        "properties": {
+          "files": {
+            "type": "integer"
+          },
+          "functions": {
+            "type": "integer"
+          },
+          "failures": {
+            "type": "integer"
+          }
+        }
+      },
+      "findings": {
+        "type": "array",
+        "description": "Functions over a limit, worst first",
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "language",
+            "symbol",
+            "start_line",
+            "end_line",
+            "cyclomatic",
+            "cognitive"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string"
+            },
+            "symbol": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": "integer"
+            },
+            "end_line": {
+              "type": "integer"
+            },
+            "cyclomatic": {
+              "type": "integer"
+            },
+            "cognitive": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  }
+}

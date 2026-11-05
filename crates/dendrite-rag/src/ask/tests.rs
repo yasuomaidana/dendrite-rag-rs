@@ -127,6 +127,7 @@ fn hybrid_refines_the_local_draft(engine: (tempfile::TempDir, Engine)) {
     assert_eq!(a.local_draft.as_deref(), Some(LOCAL));
     assert_eq!(a.model, "local -> paid");
     assert_eq!(a.prompt_tokens, 20);
+    assert_eq!(a.output_tokens, 10, "the draft's output tokens count too");
     let refine = g.calls.borrow()[1].2.clone();
     assert!(refine.contains("Initial Local Draft:\n") && refine.ends_with("Refined Answer:"));
 

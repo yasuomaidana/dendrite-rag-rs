@@ -262,6 +262,7 @@ fn answer(
                 Ok(c) => AskAnswer {
                     local_draft: Some(draft_answer),
                     prompt_tokens: draft.prompt_tokens + c.prompt_tokens,
+                    output_tokens: draft.output_tokens + c.output_tokens,
                     ..finish(c, "hybrid", format!("{local_model} -> {paid_model}"), true)
                 },
                 // The draft is still an answer when refinement fails.
