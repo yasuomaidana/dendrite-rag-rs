@@ -276,12 +276,12 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
         &[&repo],
     )?;
     // An older version of a path whose embedding nearly equals a newer one adds nothing:
-    // drop the embedding when only this repository's snapshots use it, and those snapshot
-    // rows with it. Embeddings are shared, so one that a chunk of any repository or a
-    // snapshot of another repository still points at is kept.
+    // drop that path's snapshot rows of the old version, and the embedding once nothing else
+    // points at it. Embeddings are shared, so one that a chunk of any repository, a snapshot
+    // of another repository or another path's snapshot still uses is kept.
     r.embeddings_near_duplicate = tx.execute(
         "WITH old AS (
-            SELECT DISTINCT e.model, e.hash
+            SELECT DISTINCT e.model, e.hash, s.path
             FROM rag_snapshots s
             JOIN rag_embeddings e ON e.hash = s.hash
             WHERE s.repo = $1
@@ -294,8 +294,15 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
                   AND vector_dims(n.vec) = vector_dims(e.vec)
                   AND (n.vec <=> e.vec) < $2)),
          gone AS (
-            DELETE FROM rag_snapshots s USING old WHERE s.repo = $1 AND s.hash = old.hash)
-         DELETE FROM rag_embeddings e USING old WHERE e.model = old.model AND e.hash = old.hash",
+            DELETE FROM rag_snapshots s USING old
+            WHERE s.repo = $1 AND s.path = old.path AND s.hash = old.hash)
+         DELETE FROM rag_embeddings e
+         WHERE (e.model, e.hash) IN (SELECT model, hash FROM old)
+           AND NOT EXISTS (
+             SELECT 1 FROM rag_snapshots s
+             WHERE s.hash = e.hash
+               AND NOT (s.repo = $1 AND EXISTS (
+                 SELECT 1 FROM old o WHERE o.path = s.path AND o.hash = s.hash)))",
         &[&repo, &NEAR_DUPLICATE_DISTANCE],
     )?;
     r.embeddings_orphaned = tx.execute(
@@ -485,5 +492,89 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(dangling, 0, "repository B's snapshots lost their embeddings");
+    }
+
+    /// Only the path whose newer version nearly equals the old one loses its snapshot row;
+    /// another path that points at the same old content in the same commit keeps it, and so
+    /// does the embedding it uses.
+    #[test]
+    fn compaction_drops_only_the_superseded_paths_snapshot() {
+        let Some(pg) = crate::testutil::test_pg() else {
+            return;
+        };
+        let url = pg.url.clone();
+        let tag = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        let v1 = words(300, &format!(" twopaths{tag}"));
+        let dir = project();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), ".loom/\n").unwrap();
+        std::fs::write(root.join("p1.txt"), &v1).unwrap();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "v1"]);
+        let repo = format!("paths-{tag}");
+        let mut e = engine(root, &url, &repo, StorageMode::Local, ".loom");
+        e.index(false).unwrap();
+        e.push(false).unwrap();
+        std::fs::write(root.join("p1.txt"), format!("{v1} extra")).unwrap();
+        git(root, &["commit", "-qam", "v2"]);
+        e.index(false).unwrap();
+        e.push(false).unwrap();
+
+        // An old version of p1.txt whose embedding equals the current p1.txt embedding (the
+        // test embedder does not place near-identical text close together), and the same old
+        // content at p2.txt in that commit.
+        let mut client = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        let old_hash = format!("old{tag}");
+        let made = client
+            .execute(
+                "INSERT INTO rag_embeddings (model, hash, vec)
+                 SELECT n.model, $2, n.vec FROM rag_embeddings n, rag_chunks c, rag_repos r
+                 WHERE r.name = $1 AND c.repo = r.id AND c.path = 'p1.txt'
+                   AND n.hash = c.chunk->>'content_hash' LIMIT 1",
+                &[&repo, &old_hash],
+            )
+            .unwrap();
+        assert_eq!(made, 1, "an embedding to copy exists");
+        let rows = client
+            .execute(
+                "INSERT INTO rag_snapshots (repo, sha, chunk, path, hash)
+                 SELECT r.id, c.sha, x.chunk, x.path, $2
+                 FROM rag_repos r, rag_commits c, (VALUES ('old-a', 'p1.txt'), ('old-b', 'p2.txt')) AS x(chunk, path)
+                 WHERE r.name = $1 AND c.repo = r.id AND cardinality(c.parents) = 0",
+                &[&repo, &old_hash],
+            )
+            .unwrap();
+        assert_eq!(rows, 2);
+        e.push(false).unwrap();
+
+        let snapshot = |client: &mut postgres::Client, chunk: &str| -> i64 {
+            client
+                .query_one(
+                    "SELECT count(*) FROM rag_snapshots s JOIN rag_repos r ON r.id = s.repo
+                     WHERE r.name = $1 AND s.chunk = $2",
+                    &[&repo, &chunk],
+                )
+                .unwrap()
+                .get(0)
+        };
+        assert_eq!(
+            snapshot(&mut client, "old-a"),
+            0,
+            "the superseded p1.txt row is dropped"
+        );
+        assert_eq!(snapshot(&mut client, "old-b"), 1, "p2.txt keeps its snapshot row");
+        let embedding: i64 = client
+            .query_one(
+                "SELECT count(*) FROM rag_embeddings WHERE hash = $1",
+                &[&old_hash],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(embedding, 1, "p2.txt still uses the embedding");
     }
 }
