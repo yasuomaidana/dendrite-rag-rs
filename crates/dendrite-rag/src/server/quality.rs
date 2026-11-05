@@ -27,6 +27,16 @@ fn invalid(e: impl std::fmt::Display) -> RpcError {
     RpcError::invalid_params(format!("{e:#}"))
 }
 
+/// The request's project directory; a root that is not a directory is a usage error, not an empty project.
+fn project_root(root: &str) -> Result<&Path, RpcError> {
+    let root = Path::new(root);
+    if root.is_dir() {
+        Ok(root)
+    } else {
+        Err(invalid(format!("root {} is not a directory", root.display())))
+    }
+}
+
 /// Replaces `target` with the request's value, when it gave one.
 fn set<T>(target: &mut T, value: Option<T>) {
     if let Some(value) = value {
@@ -52,7 +62,7 @@ fn gate<L: DeserializeOwned, C, R: Serialize>(
     check: fn(&Path, &C, &L) -> anyhow::Result<R>,
 ) -> Result<Value, RpcError> {
     let request: Request<L> = rpc::params(params)?;
-    let root = Path::new(&request.root);
+    let root = project_root(&request.root)?;
     let file = request
         .config
         .map_or_else(|| root.join(DIRECTIVES_PATH), PathBuf::from);
@@ -81,15 +91,19 @@ struct LocLimits {
     exclude: Option<Vec<String>>,
 }
 
-limits_gate!(
-    loc,
-    LocLimits,
-    LocConfig,
-    check_loc,
-    max_production_lines,
-    warn_at,
-    exclude
-);
+pub(super) fn loc(params: Value) -> Result<Value, RpcError> {
+    let apply = |l: &LocLimits, cfg: &mut LocConfig| {
+        cfg.set_limits(l.max_production_lines, l.warn_at);
+        overrides!(cfg, l: exclude);
+    };
+    gate(
+        params,
+        LocConfig::load,
+        LocConfig::validate,
+        apply,
+        |root, cfg, _| check_loc(root, cfg),
+    )
+}
 
 #[derive(Deserialize)]
 struct ClonesLimits {
@@ -156,7 +170,7 @@ struct RstestLimits {
 pub(super) fn rstest(params: Value) -> Result<Value, RpcError> {
     let request: Request<RstestLimits> = rpc::params(params)?;
     let report = check_rstest(
-        Path::new(&request.root),
+        project_root(&request.root)?,
         &request.limits.exclude.unwrap_or_default(),
     )
     .map_err(|e| RpcError::engine("quality", format!("{e:#}")))?;

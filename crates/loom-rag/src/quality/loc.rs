@@ -28,6 +28,9 @@ fn extension(path: &str) -> String {
     path.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
 
+/// Name endings, before the extension, that mark a whole file as test code in any language.
+const TEST_STEM_SUFFIXES: [&str; 4] = ["_test", "_tests", ".test", ".spec"];
+
 /// Whether the whole file is test code, by where it lives and what it is called.
 pub fn is_test_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
@@ -36,12 +39,18 @@ pub fn is_test_path(path: &str) -> bool {
         return true;
     }
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
-    stem.ends_with("_test")
-        || stem.ends_with(".test")
-        || stem.ends_with(".spec")
-        || (ext == "py" && (stem.starts_with("test_") || stem == "conftest"))
-        || (matches!(ext, "c" | "cc" | "cpp" | "cxx") && stem.starts_with("test_"))
-        || (ext == "java" && (stem.ends_with("Test") || stem.ends_with("Tests")))
+    TEST_STEM_SUFFIXES.iter().any(|s| stem.ends_with(s)) || is_test_stem(stem, ext)
+}
+
+/// The test-file naming conventions of one language.
+fn is_test_stem(stem: &str, ext: &str) -> bool {
+    match ext {
+        "py" => stem.starts_with("test_") || stem == "conftest",
+        "c" | "cc" | "cpp" | "cxx" => stem.starts_with("test_"),
+        "java" => stem.ends_with("Test") || stem.ends_with("Tests"),
+        "rs" => stem == "tests",
+        _ => false,
+    }
 }
 
 /// Counts the lines of `src`, a file at `path` (`/`-separated, relative to the project).

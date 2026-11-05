@@ -10,7 +10,7 @@ pub const DIRECTIVES_PATH: &str = ".github/dendrite/directives.toml";
 
 /// Limits on production lines per file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[serde(from = "RawLoc")]
 pub struct LocConfig {
     /// A file with more production lines than this fails.
     pub max_production_lines: usize,
@@ -27,6 +27,27 @@ impl Default for LocConfig {
             warn_at: 450,
             exclude: Vec::new(),
         }
+    }
+}
+
+/// The `[loc]` table as written: a limit left out takes its default, and a default warning level that would
+/// exceed a lower maximum follows it down.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawLoc {
+    max_production_lines: Option<usize>,
+    warn_at: Option<usize>,
+    exclude: Vec<String>,
+}
+
+impl From<RawLoc> for LocConfig {
+    fn from(raw: RawLoc) -> Self {
+        let mut cfg = Self {
+            exclude: raw.exclude,
+            ..Self::default()
+        };
+        cfg.set_limits(raw.max_production_lines, raw.warn_at);
+        cfg
     }
 }
 
@@ -192,6 +213,21 @@ fn read_directives(path: &Path) -> anyhow::Result<DirectivesFile> {
 }
 
 impl LocConfig {
+    /// Applies a maximum and a warning level that were asked for. A warning level that was not asked for, and
+    /// would exceed the new maximum, drops to nine tenths of it, so tightening only the maximum works. One that
+    /// was asked for is kept as given, and `validate` rejects it when it contradicts the maximum.
+    pub fn set_limits(&mut self, max_production_lines: Option<usize>, warn_at: Option<usize>) {
+        if let Some(max) = max_production_lines {
+            self.max_production_lines = max;
+            if warn_at.is_none() && self.warn_at > max {
+                self.warn_at = max - max / 10;
+            }
+        }
+        if let Some(warn) = warn_at {
+            self.warn_at = warn;
+        }
+    }
+
     /// Reads the `[loc]` table of a directives file. A missing file, or a file with no such table, gives the
     /// defaults; a file that is not valid TOML, or whose limits contradict each other, is an error.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
