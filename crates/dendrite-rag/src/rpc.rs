@@ -147,21 +147,43 @@ pub fn serve_with_tick<H: Handler>(
             }
         }
     });
+    let mut last_idle = std::time::Instant::now();
     loop {
         match rx.recv_timeout(tick) {
             Ok(line) => {
-                let line = line?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Some(resp) = handle_line(handler, &line) {
+                if let Some(resp) = answer(handler, line)? {
                     writeln!(output, "{resp}")?;
                     output.flush()?;
                 }
+                // Steady traffic never lets the wait above time out, so idle work is also due by the clock.
+                if last_idle.elapsed() >= tick {
+                    handler.idle();
+                    last_idle = std::time::Instant::now();
+                }
             }
-            Err(RecvTimeoutError::Timeout) => handler.idle(),
+            Err(RecvTimeoutError::Timeout) => {
+                handler.idle();
+                last_idle = std::time::Instant::now();
+            }
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
+    }
+}
+
+/// The response line for one line read from the input, if it needs one. A line that is not valid UTF-8 is
+/// the client's mistake and gets a parse error; any other read failure ends the server.
+fn answer<H: Handler>(handler: &mut H, line: std::io::Result<String>) -> std::io::Result<Option<String>> {
+    match line {
+        Ok(line) if line.trim().is_empty() => Ok(None),
+        Ok(line) => Ok(handle_line(handler, &line)),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(Some(encode(
+            Value::Null,
+            Err(RpcError::new(
+                code::PARSE_ERROR,
+                "the request line is not valid UTF-8",
+            )),
+        ))),
+        Err(e) => Err(e),
     }
 }
 
@@ -245,15 +267,6 @@ mod tests {
 
     #[test]
     fn idle_runs_while_no_request_arrives() {
-        struct Counting(u32);
-        impl Handler for Counting {
-            fn call(&mut self, _: &str, _: Value) -> Result<Value, RpcError> {
-                Ok(json!(null))
-            }
-            fn idle(&mut self) {
-                self.0 += 1;
-            }
-        }
         /// A reader that stays silent for a while, then reports end of input.
         struct Silent(bool);
         impl std::io::Read for Silent {
@@ -275,5 +288,75 @@ mod tests {
         )
         .unwrap();
         assert!(h.0 >= 3, "idle ran {} times in 200ms at a 20ms tick", h.0);
+    }
+
+    /// A handler that counts its idle sweeps and answers every call.
+    struct Counting(u32);
+    impl Handler for Counting {
+        fn call(&mut self, _: &str, _: Value) -> Result<Value, RpcError> {
+            Ok(json!(null))
+        }
+        fn idle(&mut self) {
+            self.0 += 1;
+        }
+    }
+
+    /// A client that sends one request every `gap`, so the server never waits a whole tick for input.
+    struct Chatty {
+        sent: u32,
+        total: u32,
+        gap: std::time::Duration,
+    }
+    impl std::io::Read for Chatty {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.sent == self.total {
+                return Ok(0);
+            }
+            std::thread::sleep(self.gap);
+            self.sent += 1;
+            let line = format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"x\"}}\n", self.sent);
+            buf[..line.len()].copy_from_slice(line.as_bytes());
+            Ok(line.len())
+        }
+    }
+
+    #[test]
+    fn idle_also_runs_while_requests_keep_arriving() {
+        let mut h = Counting(0);
+        let mut out = Vec::new();
+        let client = Chatty {
+            sent: 0,
+            total: 12,
+            gap: std::time::Duration::from_millis(15),
+        };
+        serve_with_tick(
+            &mut h,
+            std::io::BufReader::new(client),
+            &mut out,
+            std::time::Duration::from_millis(50),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().lines().count(), 12);
+        assert!(
+            h.0 >= 2,
+            "idle ran {} times in ~180ms of steady traffic at a 50ms tick",
+            h.0
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_gets_a_parse_error_and_serving_goes_on() {
+        let mut input = b"\xff\xfe not text\n".to_vec();
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"x\"}\n");
+        let mut out = Vec::new();
+        serve(&mut Counting(0), std::io::Cursor::new(input), &mut out).unwrap();
+        let lines: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["error"]["code"], code::PARSE_ERROR);
+        assert_eq!(lines[1]["id"], 7);
     }
 }

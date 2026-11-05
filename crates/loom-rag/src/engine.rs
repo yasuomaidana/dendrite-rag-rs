@@ -128,6 +128,10 @@ pub struct IndexReport {
     pub files_scanned: usize,
     pub files_changed: usize,
     pub files_removed: usize,
+    /// Files that could not be read in this run. One that was indexed before keeps its chunks and is tried
+    /// again on the next run; one never indexed is left out until it can be read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_unreadable: Vec<String>,
     pub chunks_added: usize,
     pub chunks_removed: usize,
     /// Chunks embedded in this run (cached embeddings are not counted).

@@ -17,6 +17,46 @@ fn expand<'a>(delta_path: &str, files: impl Iterator<Item = &'a str>) -> Vec<Str
         .collect()
 }
 
+/// A walked file with its content hash. `hash` is missing for a file that could not be read and was never
+/// indexed.
+struct HashedFile {
+    file: SourceFile,
+    hash: Option<String>,
+    unreadable: bool,
+}
+
+/// Hashes `file`, or reuses the ledger's hash when its size and mtime are unchanged; when it cannot be read,
+/// the ledger's hash is kept so the file is not mistaken for a removed one.
+fn hash_file(file: SourceFile, old: &BTreeMap<String, FileEntry>) -> HashedFile {
+    let stored = old.get(&file.path);
+    if let Some(e) = stored.filter(|e| e.size == file.size && e.mtime_ns == file.mtime_ns) {
+        let hash = Some(e.hash.clone());
+        return HashedFile {
+            file,
+            hash,
+            unreadable: false,
+        };
+    }
+    match std::fs::read(&file.abs) {
+        Ok(bytes) => {
+            let hash = Some(blake3::hash(&bytes).to_hex().to_string());
+            HashedFile {
+                file,
+                hash,
+                unreadable: false,
+            }
+        }
+        Err(_) => {
+            let hash = stored.map(|e| e.hash.clone());
+            HashedFile {
+                file,
+                hash,
+                unreadable: true,
+            }
+        }
+    }
+}
+
 /// Files chunked together before their chunks are written: enough for the parallel
 /// chunker to stay busy, few enough that a group's chunks stay small in memory.
 pub(super) const CHUNK_GROUP_FILES: usize = 512;
@@ -86,20 +126,18 @@ impl Engine {
             self.ledger.files()?
         };
 
-        // Hash every file, reusing the stored hash when size and mtime are unchanged.
-        let scanned: Vec<(SourceFile, String)> = files
-            .into_par_iter()
-            .filter_map(|f| {
-                if let Some(e) = old
-                    .get(&f.path)
-                    .filter(|e| e.size == f.size && e.mtime_ns == f.mtime_ns)
-                {
-                    return Some((f, e.hash.clone()));
-                }
-                let bytes = std::fs::read(&f.abs).ok()?;
-                let hash = blake3::hash(&bytes).to_hex().to_string();
-                Some((f, hash))
-            })
+        // Hash every file, reusing the stored hash when size and mtime are unchanged. A file that cannot be
+        // read keeps the hash it had, so it counts as unchanged and its chunks stay indexed; one never seen
+        // before is left out. Either way the run reports it.
+        let hashed: Vec<HashedFile> = files.into_par_iter().map(|f| hash_file(f, &old)).collect();
+        let unreadable: Vec<String> = hashed
+            .iter()
+            .filter(|h| h.unreadable)
+            .map(|h| h.file.path.clone())
+            .collect();
+        let scanned: Vec<(SourceFile, String)> = hashed
+            .into_iter()
+            .filter_map(|h| Some((h.file, h.hash?)))
             .collect();
 
         let old_tree = merkle(old.iter().map(|(p, e)| (p.as_str(), e.hash.as_str())));
@@ -121,6 +159,7 @@ impl Engine {
             open_ms: std::mem::take(&mut self.open_ms),
             walk_ms,
             files_scanned: scanned.len(),
+            files_unreadable: unreadable,
             files_changed: added.len(),
             files_removed: removed.iter().filter(|p| !new_paths.contains(p.as_str())).count(),
             ..IndexReport::default()
@@ -207,9 +246,11 @@ impl Engine {
         // Lexical index first: the ledger commit below is what makes the run count.
         lw.commit()?;
 
-        // Unchanged content with a new mtime: refresh the entry so the next run skips it.
+        // Unchanged content with a new mtime: refresh the entry so the next run skips it. An unreadable file
+        // keeps its old size and mtime, or the next run would trust the stale hash it carries.
+        let unreadable: BTreeSet<&str> = report.files_unreadable.iter().map(String::as_str).collect();
         for (f, h) in &scanned {
-            if added.contains(&f.path) {
+            if added.contains(&f.path) || unreadable.contains(f.path.as_str()) {
                 continue;
             }
             if let Some(e) = old
