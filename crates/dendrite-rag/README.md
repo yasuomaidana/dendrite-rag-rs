@@ -156,9 +156,9 @@ Empty variables are ignored.
 
 The server reads newline-delimited JSON-RPC 2.0 from `stdin` and writes responses to `stdout`; logs go to `stderr`. Requests are handled one at a time in the order received. Full specification: [`docs/specs/protocol.md`](../../docs/specs/protocol.md); JSON Schemas are in [`proto/`](../../proto).
 
-### Protocol version 1.12.0 and the Dendrite Go client
+### Protocol version 1.13.0 and the Dendrite Go client
 
-The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.11.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`, `oxillama`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
+The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.13.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`, `oxillama`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
 
 Dendrite's Go client (`pkg/sidecar.Client` in `dendrite-control`) spawns one sidecar process per call and runs the `health` handshake. It checks only the protocol **major** version: a server with a different major version is refused (and Dendrite falls back to its in-process Go implementation when the binary is missing, incompatible or unhealthy). Minor versions add optional params and result fields, and the client gates features on the minor version.
 
@@ -172,6 +172,8 @@ Minor additions to know about:
 | 1.9 | `index` param `embed_budget_tokens`; `index` result fields `embed_tokens` and `budget_tokens_remaining`; `features` in `health` |
 | 1.10 | `quality.loc` method for production lines of code checking |
 | 1.11 | `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest` methods |
+| 1.12 | `quality.complexity` and `quality.structure` schemas, `docs` rule |
+| 1.13 | `index` result field `files_unreadable` (files that could not be read keep their entries) |
 
 Because the Go client starts a new process per call, nothing held in memory survives between calls. State that does: the index directory, the embedding cache, the answer cache, and the embedding backlog, which later `index` runs continue.
 
