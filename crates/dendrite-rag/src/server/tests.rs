@@ -242,6 +242,30 @@ fn quality_loc_reports_production_lines_against_the_directives() {
         code::INVALID_PARAMS,
         "warn_at above the maximum"
     );
+    let r = call(
+        &mut s,
+        "quality.loc",
+        json!({"root": root, "max_production_lines": 11}),
+    );
+    assert_eq!(
+        r["result"]["files"][0]["status"], "fail",
+        "a lower maximum alone is accepted"
+    );
+    let missing = dir.path().join("no-such-dir");
+    for method in [
+        "quality.loc",
+        "quality.clones",
+        "quality.complexity",
+        "quality.structure",
+        "quality.rstest",
+    ] {
+        let r = call(&mut s, method, json!({"root": missing}));
+        assert_eq!(
+            r["error"]["code"],
+            code::INVALID_PARAMS,
+            "{method} on a missing root"
+        );
+    }
     std::fs::create_dir_all(dir.path().join(".github/dendrite")).unwrap();
     std::fs::write(dir.path().join(".github/dendrite/directives.toml"), "[loc\n").unwrap();
     let r = call(&mut s, "quality.loc", json!({"root": root}));

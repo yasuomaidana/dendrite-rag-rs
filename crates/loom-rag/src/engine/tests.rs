@@ -280,3 +280,37 @@ fn chunk_contexts_are_indexed_but_never_returned() {
             .is_empty()
     );
 }
+
+/// A file that cannot be read for one run (a permission error, a lock) is not a removed file: its chunks stay,
+/// the run names it, and the next readable run picks its changes up.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_keeps_its_index_entries_and_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let root = dir.path();
+    let mut e = open(root);
+    e.index(false).unwrap();
+    let before = e.status().unwrap();
+    let file = root.join("pkg/rag/indexer.go");
+
+    fs::write(&file, "package rag\n\nfunc RetrieveChunks() {}\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&file).is_ok() {
+        return; // running as a user that ignores permissions: the failure cannot be made
+    }
+    let r = e.index(false).unwrap();
+    assert_eq!(r.files_unreadable, vec!["pkg/rag/indexer.go".to_string()]);
+    assert_eq!((r.files_changed, r.files_removed), (0, 0));
+    assert_eq!(e.status().unwrap().files, before.files);
+    assert!(
+        !e.search_lexical("IndexProject", 3).unwrap().is_empty(),
+        "the old content stays searchable"
+    );
+
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    let r = e.index(false).unwrap();
+    assert!(r.files_unreadable.is_empty());
+    assert_eq!(r.files_changed, 1);
+    assert!(e.search_lexical("IndexProject", 3).unwrap().is_empty());
+}

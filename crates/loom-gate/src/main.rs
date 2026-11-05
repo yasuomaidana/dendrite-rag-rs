@@ -209,8 +209,7 @@ fn run(cli: Cli) -> anyhow::Result<bool> {
 
 fn loc(a: LocArgs) -> anyhow::Result<bool> {
     let cfg = configured(&a.common, LocConfig::load, LocConfig::validate, |cfg| {
-        cfg.max_production_lines = a.max.unwrap_or(cfg.max_production_lines);
-        cfg.warn_at = a.warn_at.unwrap_or(cfg.warn_at);
+        cfg.set_limits(a.max, a.warn_at);
         cfg.exclude.extend(a.common.exclude.clone());
     })?;
     Ok(emit(&check_loc(&a.common.root, &cfg)?, a.common.format))

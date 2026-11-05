@@ -57,6 +57,13 @@
         "type": "integer",
         "minimum": 0
       },
+      "files_unreadable": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Files that could not be read in this run (omitted when none). One indexed before keeps its chunks and is retried on the next run."
+      },
       "chunks_added": {
         "type": "integer",
         "minimum": 0
