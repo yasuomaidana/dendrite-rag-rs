@@ -374,5 +374,8 @@ pub fn cache_key(model: &str, content_hash: &str) -> String {
     format!("{model}\u{0}{content_hash}")
 }
 
+pub mod config;
+pub mod corpus;
+pub mod llm;
 #[cfg(test)]
 mod tests;

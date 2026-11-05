@@ -5,7 +5,7 @@ use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use crate::quality::check_rstest;
-use crate::quality::rstest_dep::check_manifest;
+use crate::quality::rstest_gate::dep::check_manifest;
 
 const PLAIN_TEST: &str = "#[test]\nfn works() {\n    assert_eq!(1 + 1, 2);\n}\n";
 

@@ -413,5 +413,6 @@ fn is_test(path: &str) -> bool {
         || path.starts_with("tests/")
 }
 
+pub mod symbols;
 #[cfg(test)]
 mod tests;

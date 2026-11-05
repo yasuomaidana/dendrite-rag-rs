@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use toml::Value;
 
-use crate::quality::rstest_check::Violation;
+use crate::quality::rstest_gate::check::Violation;
 
 /// The oldest rstest the gate accepts.
 pub const MIN_RSTEST: (u64, u64) = (0, 28);

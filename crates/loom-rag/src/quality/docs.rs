@@ -65,3 +65,6 @@ fn finding(dir: &str, missing: &[&String]) -> Finding {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests;

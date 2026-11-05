@@ -478,3 +478,36 @@ fn a_span_that_no_longer_fits_is_outlined() {
     assert_eq!(big.content, "// Locate finds a binary.\nfunc Locate() {");
     assert!(packed.tokens <= 100);
 }
+
+#[rstest]
+#[case::code_query("LocateBinary", true)]
+#[case::docs_query("Demo project used in tests", false)]
+fn probe_reports_scores_and_a_docs_share(
+    calls_engine: (tempfile::TempDir, Engine),
+    #[case] query: &str,
+    #[case] code_leads: bool,
+) {
+    let (_dir, e) = calls_engine;
+    let mut t = Timings::default();
+    let p = e.probe(query, &mut t).unwrap();
+    assert!((0.0..=1.0).contains(&p.docs_share), "{p:?}");
+    assert!(p.lexical_code.is_some() || p.lexical_docs.is_some(), "{p:?}");
+    assert!(p.dense_code.is_some() && p.dense_docs.is_some(), "{p:?}");
+    if code_leads {
+        assert!(
+            p.lexical_code.unwrap_or(0.0) > p.lexical_docs.unwrap_or(0.0),
+            "{p:?}"
+        );
+    } else {
+        assert!(p.lexical_docs.is_some(), "{p:?}");
+    }
+}
+
+#[rstest]
+fn docs_share_is_zero_when_nothing_matches(calls_engine: (tempfile::TempDir, Engine)) {
+    let (_dir, e) = calls_engine;
+    let mut t = Timings::default();
+    let share = e.docs_share("zzzqqqxxx", &mut t).unwrap();
+    assert!((0.0..=1.0).contains(&share));
+    assert_eq!(Probe::default().docs_share, 0.0);
+}

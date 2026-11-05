@@ -267,3 +267,6 @@ impl StructureReport {
         out
     }
 }
+
+#[cfg(test)]
+mod tests;

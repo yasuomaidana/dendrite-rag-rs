@@ -1,7 +1,9 @@
 //! Production, test, comment and blank lines of one file.
 
+pub mod regions;
+
 use crate::lang::Lang;
-use crate::quality::regions::{self, Marked, Region};
+use regions::{Marked, Region};
 
 /// The lines of one file by kind. A line holding code and a comment is a code line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

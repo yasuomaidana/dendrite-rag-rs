@@ -1,5 +1,7 @@
 //! Structural clone detection across a source tree (`docs/specs/quality.md` § Duplication).
 
+pub mod report;
+
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
@@ -226,3 +228,6 @@ fn build_report(mut parsed: Vec<FileUnits>, cfg: &DupConfig) -> CloneReport {
         groups,
     }
 }
+
+#[cfg(test)]
+mod tests;

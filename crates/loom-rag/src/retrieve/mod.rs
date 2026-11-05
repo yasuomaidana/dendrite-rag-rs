@@ -9,8 +9,12 @@
 
 mod code;
 mod docs;
+pub mod fusion;
+pub mod lookup;
 mod mixed;
 mod pack;
+pub mod rank;
+pub mod rerank;
 mod route;
 #[cfg(test)]
 mod tests;

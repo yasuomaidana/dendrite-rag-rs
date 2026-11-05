@@ -225,5 +225,7 @@ fn dedup_keep_order(v: &mut Vec<String>) {
     v.retain(|s| seen.insert(s.clone()));
 }
 
+pub mod lang;
 #[cfg(test)]
 mod tests;
+pub mod walk;

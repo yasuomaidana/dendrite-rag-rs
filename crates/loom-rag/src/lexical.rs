@@ -14,6 +14,7 @@ use crate::bm25::Bm25Params;
 use crate::chunk::Chunk;
 use crate::store::{LexicalStore, LexicalWrite};
 
+pub mod bm25;
 mod scorer;
 
 pub(crate) const TOKENIZER: &str = "code";

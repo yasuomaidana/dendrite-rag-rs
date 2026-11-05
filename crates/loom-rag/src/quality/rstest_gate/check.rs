@@ -10,7 +10,7 @@ use serde::Serialize;
 use tree_sitter::{Node, Parser};
 
 use crate::lang::Lang;
-use crate::quality::rstest_dep::check_manifest;
+use crate::quality::rstest_gate::dep::check_manifest;
 use crate::quality::syntax::{Limits, Normalize, walk};
 use crate::walk::{WalkOptions, walk as walk_tree};
 

@@ -160,3 +160,6 @@ impl ComplexityReport {
         out
     }
 }
+
+#[cfg(test)]
+mod tests;

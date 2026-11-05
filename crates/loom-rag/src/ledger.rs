@@ -471,5 +471,6 @@ mod import;
 #[cfg(feature = "sqlite")]
 pub(crate) use import::read_caches;
 
+pub mod history;
 #[cfg(test)]
 mod tests;
