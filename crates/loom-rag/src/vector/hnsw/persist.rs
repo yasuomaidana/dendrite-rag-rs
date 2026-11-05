@@ -196,6 +196,18 @@ impl HnswIndex {
         Ok(())
     }
 
+    /// Whether the loaded graph indexes exactly the ids of the flat index: the files are written
+    /// one after the other, so a crash or a replaced vector can leave them out of step.
+    fn matches_flat(&self) -> bool {
+        let active = self.nodes.iter().filter(|n| !n.deleted).count();
+        active == self.flat.len()
+            && self
+                .nodes
+                .iter()
+                .filter(|n| !n.deleted)
+                .all(|n| self.flat.row_of(&n.id).is_some())
+    }
+
     /// Loads an HNSW index written to `hnsw_path` wrapping `flat`.
     /// Missing or corrupt graph files are rebuilt from `flat` without returning an error.
     pub fn load(hnsw_path: &Path, flat: FlatIndex, ef_search: usize) -> std::io::Result<Self> {
@@ -209,8 +221,7 @@ impl HnswIndex {
 
         match index.load_hnsw_file(hnsw_path) {
             Ok(()) => {
-                let active_nodes = index.nodes.iter().filter(|n| !n.deleted).count();
-                if active_nodes == index.flat.len() {
+                if index.matches_flat() {
                     Ok(index)
                 } else {
                     index.rebuild();

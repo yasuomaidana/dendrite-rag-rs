@@ -23,11 +23,12 @@ impl HnswIndex {
         if let Some((v, scale)) = &node.tombstone_vector {
             (v.as_slice(), *scale)
         } else {
-            let row = self
-                .flat
-                .row_of(&node.id)
-                .expect("active node must exist in flat index");
-            self.flat.vector_at(row)
+            // load() rebuilds a graph that disagrees with the flat index, so a miss means a
+            // stale node: an empty vector scores worst instead of panicking the sidecar.
+            match self.flat.row_of(&node.id) {
+                Some(row) => self.flat.vector_at(row),
+                None => (&[], 0.0),
+            }
         }
     }
 

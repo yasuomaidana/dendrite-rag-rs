@@ -197,3 +197,33 @@ fn recall_report() {
         }
     }
 }
+
+/// A graph file that indexes other ids than the flat index (same count) must be rebuilt,
+/// not accepted: a search on it used to panic.
+#[test]
+fn graph_with_other_ids_than_flat_rebuilds() {
+    let vs = rand_vecs(30, 16, 5);
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("vectors.bin");
+    let hnsw_path = dir.path().join("vectors.hnsw");
+
+    let mut idx = HnswIndex::new().with_path(&bin_path);
+    for (i, v) in vs.iter().enumerate() {
+        idx.upsert(&format!("chunk-{i}"), "tag", v);
+    }
+    idx.persist().unwrap();
+
+    // Replace one vector's id in the flat file only (a crash between the two writes).
+    idx.remove("chunk-3");
+    idx.flat.upsert("other-3", "tag", &vs[3]);
+    idx.flat.persist().unwrap();
+
+    let flat = FlatIndex::load(&bin_path).unwrap();
+    assert_eq!(flat.len(), 30);
+    let loaded = HnswIndex::load(&hnsw_path, flat, 64).unwrap();
+    assert_eq!(loaded.len(), 30);
+    for q in vs.iter().take(10) {
+        assert_eq!(loaded.search(q, 3).len(), 3);
+    }
+    assert_eq!(loaded.search(&vs[3], 1)[0].0, "other-3");
+}
