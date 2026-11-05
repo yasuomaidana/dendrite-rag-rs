@@ -379,4 +379,90 @@ mod tests {
         let msg = opened.err().expect("sqlite is refused").to_string();
         assert!(msg.contains("`sqlite` feature"), "{msg}");
     }
+
+    #[rstest]
+    #[case(" Remote ", Some(StorageMode::Remote))]
+    #[case("edge", Some(StorageMode::Edge))]
+    #[case("LOCAL", Some(StorageMode::Local))]
+    #[case("cloud", None)]
+    fn storage_mode_parses_names(#[case] name: &str, #[case] expected: Option<StorageMode>) {
+        assert_eq!(StorageMode::parse(name), expected);
+    }
+
+    #[test]
+    fn repo_name_prefers_the_configured_name() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(repo_name(dir.path(), Some("shared/repo")), "shared/repo");
+    }
+
+    #[test]
+    fn repo_name_falls_back_to_the_path_without_an_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        for configured in [None, Some("")] {
+            assert_eq!(
+                repo_name(dir.path(), configured),
+                dir.path().display().to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn repo_name_reads_the_origin_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "https://example.test/acme/widgets.git"]);
+        assert_eq!(
+            repo_name(dir.path(), None),
+            "https://example.test/acme/widgets.git"
+        );
+    }
+
+    #[rstest]
+    #[case(StorageMode::Remote, "remote")]
+    #[case(StorageMode::Edge, "edge")]
+    fn open_shared_modes_need_the_tier_url(#[case] mode: StorageMode, #[case] word: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::engine::Config::default();
+        cfg.storage.mode = mode;
+        let msg = Store::open(dir.path(), dir.path(), &cfg)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(msg.contains(word) && msg.contains("shared tier URL"), "{msg}");
+    }
+
+    #[test]
+    fn open_local_mode_opens_the_configured_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::engine::Config::default();
+        let store = Store::open(dir.path(), dir.path(), &cfg).unwrap();
+        assert_eq!(store.ledger.chunk_count().unwrap(), 0);
+        assert!(dir.path().join(".gitignore").exists());
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    #[rstest]
+    #[case(StorageMode::Remote)]
+    #[case(StorageMode::Edge)]
+    fn open_shared_modes_need_the_postgres_feature(#[case] mode: StorageMode) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::engine::Config::default();
+        cfg.storage.mode = mode;
+        cfg.storage.pg_url = Some("postgres://localhost/none".into());
+        let msg = Store::open(dir.path(), dir.path(), &cfg)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(msg.contains("`postgres` feature"), "{msg}");
+    }
 }

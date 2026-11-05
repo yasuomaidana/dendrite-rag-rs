@@ -92,3 +92,107 @@ pub(crate) fn expect_len(got: usize, want: usize) -> Result<()> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Serves one canned raw HTTP response per connection and returns the base URL; each
+    /// request's text is sent back on the channel.
+    fn serve(responses: Vec<String>) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for resp in responses {
+                let Ok((mut s, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 8192];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        (url, rx)
+    }
+
+    fn reply(status: &str, extra: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\n{extra}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn post_decodes_json_and_sends_the_bearer_key() {
+        let (url, rx) = serve(vec![reply("200 OK", "", r#"{"n":3}"#)]);
+        let got: serde_json::Value = Client::new(Some("sekret".into()))
+            .post(&url, &serde_json::json!({"q": 1}))
+            .unwrap();
+        assert_eq!(got["n"], 3);
+        let req = rx.recv().unwrap().to_ascii_lowercase();
+        assert!(req.contains("authorization: bearer sekret"), "{req}");
+    }
+
+    #[test]
+    fn post_retries_a_throttled_answer_then_succeeds() {
+        let (url, _rx) = serve(vec![
+            reply("429 Too Many Requests", "Retry-After: 0\r\n", "{}"),
+            reply("200 OK", "", r#"{"ok":true}"#),
+        ]);
+        let got: serde_json::Value = Client::new(None).post(&url, &serde_json::json!({})).unwrap();
+        assert_eq!(got["ok"], true);
+    }
+
+    #[test]
+    fn post_reports_a_client_error_with_the_body_start() {
+        let (url, _rx) = serve(vec![reply("400 Bad Request", "", "no such model")]);
+        let err = Client::new(None)
+            .post::<_, serde_json::Value>(&url, &serde_json::json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("400") && err.contains("no such model"), "{err}");
+    }
+
+    #[test]
+    fn post_reports_an_undecodable_success_body() {
+        let (url, _rx) = serve(vec![reply("200 OK", "", "not json")]);
+        let err = Client::new(None)
+            .post::<_, serde_json::Value>(&url, &serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, EmbedError::Response(_)), "{err}");
+    }
+
+    #[test]
+    fn post_reports_a_refused_connection() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let err = Client::new(None)
+            .post::<_, serde_json::Value>(&format!("http://127.0.0.1:{port}"), &serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, EmbedError::Http(_)), "{err}");
+    }
+
+    #[rstest]
+    #[case(0, 400, 600)]
+    #[case(2, 1600, 2400)]
+    #[case(9, 12_800, 19_200)]
+    fn backoff_grows_with_jitter_and_caps(#[case] attempt: u32, #[case] lo: u64, #[case] hi: u64) {
+        let ms = backoff_delay(attempt).as_millis() as u64;
+        assert!((lo..=hi).contains(&ms), "{ms}");
+    }
+
+    #[rstest]
+    #[case(3, 3, true)]
+    #[case(2, 3, false)]
+    fn expect_len_checks_the_count(#[case] got: usize, #[case] want: usize, #[case] ok: bool) {
+        assert_eq!(expect_len(got, want).is_ok(), ok);
+    }
+}
