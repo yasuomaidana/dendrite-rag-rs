@@ -6,8 +6,8 @@ use std::path::Path;
 use tokenizers::pipeline::{EncodeOptions, Inputs, Override, PipelineTokenizer};
 use tokenizers::{PaddingParams, PaddingStrategy, TruncationParams};
 
-use super::Result;
-use super::candle::model_err;
+use super::model_err;
+use crate::embed::Result;
 
 pub(crate) struct Tokenizer {
     inner: PipelineTokenizer,

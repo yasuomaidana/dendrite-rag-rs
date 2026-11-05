@@ -7,6 +7,10 @@
 //! architecture comes from `config.json`. Inference runs on the CPU, or on Metal with the
 //! `candle-metal` feature.
 
+pub mod jina_code;
+mod qwen3;
+pub(crate) mod tokenize;
+
 use std::path::{Path, PathBuf};
 
 use candle_core::{D, DType, Device, Module, Tensor};
@@ -14,10 +18,10 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::{bert, jina_bert, nomic_bert};
 use serde::Deserialize;
 
-use super::tokenize::Tokenizer;
 use super::{
     EmbedConfig, EmbedError, Embedder, Pooling, Result, impl_prefixed_embedder, normalize, truncate,
 };
+use tokenize::Tokenizer;
 
 /// Tokens per input; chunks are far shorter, and attention cost grows with the square.
 pub(super) const MAX_TOKENS: usize = 512;
@@ -28,9 +32,9 @@ enum Arch {
     /// JinaBERT takes no attention mask, so it embeds one text per pass (no padding).
     Jina(jina_bert::BertModel),
     /// JinaBERT with query/key post-norm (jina-embeddings-v2-base-code).
-    JinaCode(super::jina_code::JinaCodeModel),
+    JinaCode(jina_code::JinaCodeModel),
     /// Qwen3-Embedding: a causal decoder, one text per pass, last-token pooling.
-    Qwen3(super::qwen3::Qwen3Encoder),
+    Qwen3(qwen3::Qwen3Encoder),
 }
 
 pub struct CandleEmbedder {
@@ -129,7 +133,7 @@ impl CandleEmbedder {
         let probe: Probe = serde_json::from_str(&config_text).map_err(model_err)?;
         let device = device()?;
         let dtype = if probe.model_type.as_deref() == Some("qwen3") {
-            super::qwen3::dtype(&device)
+            qwen3::dtype(&device)
         } else {
             DType::F32
         };
@@ -144,10 +148,10 @@ impl CandleEmbedder {
                 let c: nomic_bert::Config = serde_json::from_str(&config_text).map_err(parse("NomicBERT"))?;
                 Arch::Nomic(nomic_bert::NomicBertModel::load(vb, &c).map_err(model_err)?)
             }
-            Some("bert") if jina && super::jina_code::Config::is_qk_post_norm(&vb) => {
-                let c: super::jina_code::Config =
+            Some("bert") if jina && jina_code::Config::is_qk_post_norm(&vb) => {
+                let c: jina_code::Config =
                     serde_json::from_str(&config_text).map_err(parse("JinaBERT qk-post-norm"))?;
-                Arch::JinaCode(super::jina_code::JinaCodeModel::load(vb, &c).map_err(model_err)?)
+                Arch::JinaCode(jina_code::JinaCodeModel::load(vb, &c).map_err(model_err)?)
             }
             Some("bert") if jina => {
                 let c: jina_bert::Config = serde_json::from_str(&config_text).map_err(parse("JinaBERT"))?;
@@ -155,7 +159,7 @@ impl CandleEmbedder {
             }
             Some("qwen3") => {
                 let tokenizer = Tokenizer::load(&tokenizer_path, MAX_TOKENS)?;
-                Arch::Qwen3(super::qwen3::Qwen3Encoder::load(vb, &config_text, &tokenizer)?)
+                Arch::Qwen3(qwen3::Qwen3Encoder::load(vb, &config_text, &tokenizer)?)
             }
             Some("bert") | Some("roberta") | Some("xlm-roberta") => {
                 let c: bert::Config = serde_json::from_str(&config_text).map_err(parse("BERT"))?;

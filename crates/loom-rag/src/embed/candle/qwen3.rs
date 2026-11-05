@@ -18,9 +18,9 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::qwen3::{Config, Model};
 
-use super::candle::{MAX_TOKENS, model_err, pool};
 use super::tokenize::Tokenizer;
-use super::{Pooling, Result, normalize};
+use super::{MAX_TOKENS, model_err, pool};
+use crate::embed::{Pooling, Result, normalize};
 
 /// The token Qwen3-Embedding expects last in every input.
 const END_OF_TEXT: &str = "<|endoftext|>";
@@ -150,8 +150,8 @@ mod tests {
     #[test]
     fn qwen3_embedding_uses_last_token_pooling_and_a_query_instruction() {
         let model = "Qwen/Qwen3-Embedding-0.6B";
-        assert_eq!(super::super::model_pooling(model), Pooling::Last);
-        let (doc, query) = super::super::model_prefixes(model);
+        assert_eq!(crate::embed::model_pooling(model), Pooling::Last);
+        let (doc, query) = crate::embed::model_prefixes(model);
         assert_eq!(doc, "");
         assert!(query.starts_with("Instruct: ") && query.ends_with("Query: "));
     }
@@ -165,7 +165,7 @@ mod tests {
         if std::env::var("LOOM_LIVE_CANDLE").is_err() {
             return;
         }
-        let e = super::super::candle::CandleEmbedder::load(&EmbedConfig {
+        let e = crate::embed::candle::CandleEmbedder::load(&EmbedConfig {
             backend: Backend::Candle,
             model: Some("Qwen/Qwen3-Embedding-0.6B".into()),
             ..Default::default()

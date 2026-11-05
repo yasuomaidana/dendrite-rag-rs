@@ -27,15 +27,11 @@ pub use info::{BackendInfo, backends};
 #[cfg(feature = "candle")]
 pub mod candle;
 #[cfg(feature = "candle")]
-pub mod jina_code;
+pub use candle::jina_code;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
 #[cfg(feature = "oxillama")]
 pub mod oxillama;
-#[cfg(feature = "candle")]
-mod qwen3;
-#[cfg(feature = "candle")]
-pub(crate) mod tokenize;
 
 pub use openai::OpenAiEmbedder;
 
