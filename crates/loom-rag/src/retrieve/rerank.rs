@@ -483,4 +483,90 @@ mod tests {
             assert!((got - want).abs() < 0.05, "{scores:?} differs from the reference");
         }
     }
+
+    #[rstest]
+    #[case(RerankBackend::Gateway, None, None)]
+    #[case(RerankBackend::None, None, None)]
+    #[case(RerankBackend::Candle, None, Some("BAAI/bge-reranker-base"))]
+    #[case(RerankBackend::Gateway, Some("m"), Some("m"))]
+    fn model_falls_back_to_the_backend_default(
+        #[case] backend: RerankBackend,
+        #[case] model: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let cfg = RerankConfig {
+            backend,
+            model: model.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(cfg.model().as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case(None, 8)]
+    #[case(Some(0), 8)]
+    #[case(Some(3), 3)]
+    fn batch_ignores_zero(#[case] batch: Option<usize>, #[case] expected: usize) {
+        let cfg = RerankConfig {
+            batch,
+            ..Default::default()
+        };
+        assert_eq!(cfg.batch(8), expected);
+    }
+
+    /// One-shot HTTP server on localhost answering with `status` and `body`.
+    fn serve_once(status: &'static str, body: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = conn.read(&mut buf);
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            conn.write_all(reply.as_bytes()).unwrap();
+        });
+        url
+    }
+
+    fn gateway(url: String) -> GatewayReranker {
+        let cfg = RerankConfig {
+            model: Some("m".into()),
+            url: Some(url),
+            ..Default::default()
+        };
+        GatewayReranker::new(&cfg).expect("a model is configured")
+    }
+
+    #[test]
+    fn gateway_reranker_needs_a_model() {
+        assert!(GatewayReranker::new(&RerankConfig::default()).is_none());
+    }
+
+    #[test]
+    fn gateway_reranker_scores_documents_from_the_server() {
+        let url = serve_once(
+            "200 OK",
+            r#"{"results":[{"index":1,"relevance_score":0.8},{"index":0,"relevance_score":0.2}]}"#,
+        );
+        let docs = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(gateway(url).rerank("q", &docs).unwrap(), vec![0.2, 0.8]);
+    }
+
+    #[rstest]
+    #[case::server_error("500 Internal Server Error", "boom", "500")]
+    #[case::bad_body("200 OK", "not json", "")]
+    fn gateway_reranker_reports_failures(
+        #[case] status: &'static str,
+        #[case] body: &'static str,
+        #[case] contains: &str,
+    ) {
+        let err = gateway(serve_once(status, body))
+            .rerank("q", &["a".to_string()])
+            .unwrap_err();
+        assert!(err.to_string().contains(contains), "{err}");
+    }
 }
