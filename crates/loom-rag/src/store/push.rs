@@ -276,7 +276,9 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
         &[&repo],
     )?;
     // An older version of a path whose embedding nearly equals a newer one adds nothing:
-    // drop the embedding when only snapshots use it, and those snapshot rows with it.
+    // drop the embedding when only this repository's snapshots use it, and those snapshot
+    // rows with it. Embeddings are shared, so one that a chunk of any repository or a
+    // snapshot of another repository still points at is kept.
     r.embeddings_near_duplicate = tx.execute(
         "WITH old AS (
             SELECT DISTINCT e.model, e.hash
@@ -284,12 +286,15 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
             JOIN rag_embeddings e ON e.hash = s.hash
             WHERE s.repo = $1
               AND NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.chunk->>'content_hash' = e.hash)
+              AND NOT EXISTS (SELECT 1 FROM rag_snapshots o WHERE o.hash = e.hash AND o.repo <> $1)
               AND EXISTS (
                 SELECT 1 FROM rag_chunks c
                 JOIN rag_embeddings n ON n.model = e.model AND n.hash = c.chunk->>'content_hash'
                 WHERE c.repo = $1 AND c.path = s.path AND n.hash <> e.hash
                   AND vector_dims(n.vec) = vector_dims(e.vec)
-                  AND (n.vec <=> e.vec) < $2))
+                  AND (n.vec <=> e.vec) < $2)),
+         gone AS (
+            DELETE FROM rag_snapshots s USING old WHERE s.repo = $1 AND s.hash = old.hash)
          DELETE FROM rag_embeddings e USING old WHERE e.model = old.model AND e.hash = old.hash",
         &[&repo, &NEAR_DUPLICATE_DISTANCE],
     )?;
@@ -422,5 +427,63 @@ mod tests {
         // Nothing left to compact on a second push.
         let again = local.push(true).unwrap();
         assert_eq!(again.compaction, crate::store::push::CompactionReport::default());
+    }
+
+    /// Compaction in one repository must not delete an embedding that a snapshot of another
+    /// repository still points at.
+    #[test]
+    fn compaction_keeps_embeddings_other_repos_snapshots_use() {
+        let Some(pg) = crate::testutil::test_pg() else {
+            return;
+        };
+        let url = pg.url.clone();
+        let tag = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        let v1 = words(300, &format!(" shared{tag}"));
+        let make = |content: &str| {
+            let dir = project();
+            std::fs::write(dir.path().join(".gitignore"), ".loom/\n").unwrap();
+            std::fs::write(dir.path().join("notes.txt"), content).unwrap();
+            git(dir.path(), &["init", "-q", "-b", "main"]);
+            git(dir.path(), &["add", "-A"]);
+            git(dir.path(), &["commit", "-qm", "v1"]);
+            dir
+        };
+        // Repository B keeps v1 only in a snapshot: its head moved on to unrelated text.
+        let b_dir = make(&v1);
+        let b_repo = format!("b-{tag}");
+        let mut b = engine(b_dir.path(), &url, &b_repo, StorageMode::Local, ".loom");
+        b.index(false).unwrap();
+        b.push(false).unwrap();
+        let other: Vec<String> = (0..300).map(|i| format!("other{tag}x{i}")).collect();
+        std::fs::write(b_dir.path().join("notes.txt"), other.join(" ")).unwrap();
+        git(b_dir.path(), &["commit", "-qam", "v2"]);
+        b.index(false).unwrap();
+        b.push(false).unwrap();
+
+        // Repository A pushes v1, then a nearly identical v2: v1 is an old near-duplicate there.
+        let a_dir = make(&v1);
+        let a_repo = format!("a-{tag}");
+        let mut a = engine(a_dir.path(), &url, &a_repo, StorageMode::Local, ".loom");
+        a.index(false).unwrap();
+        a.push(false).unwrap();
+        std::fs::write(a_dir.path().join("notes.txt"), format!("{v1} extra")).unwrap();
+        git(a_dir.path(), &["commit", "-qam", "v2"]);
+        a.index(false).unwrap();
+        a.push(false).unwrap();
+
+        let mut client = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        let dangling: i64 = client
+            .query_one(
+                "SELECT count(*) FROM rag_snapshots s JOIN rag_repos r ON r.id = s.repo
+                 WHERE r.name = $1 AND NOT EXISTS (SELECT 1 FROM rag_embeddings e WHERE e.hash = s.hash)",
+                &[&b_repo],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(dangling, 0, "repository B's snapshots lost their embeddings");
     }
 }
