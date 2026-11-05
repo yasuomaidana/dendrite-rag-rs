@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Protocol 1.13.0: the optional `files_unreadable` field of the `index` result is a documented minor addition (`[DRAG-98]`).
 - The complexity gate measures Java, Kotlin and Svelte as well: one `Lang::core` mapping to `dendrite-core`'s languages replaces the private one in `quality::complexity`, which had left Java out (DRAG-91).
 
 ### Added
