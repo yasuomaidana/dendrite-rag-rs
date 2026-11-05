@@ -28,6 +28,8 @@ pub use info::{BackendInfo, backends};
 pub mod candle;
 #[cfg(feature = "candle")]
 pub use candle::jina_code;
+#[cfg(feature = "candle")]
+pub(crate) use candle::tokenize;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
 #[cfg(feature = "oxillama")]
