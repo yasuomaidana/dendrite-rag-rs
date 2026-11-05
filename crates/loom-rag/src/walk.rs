@@ -51,10 +51,13 @@ pub struct SourceFile {
     pub mtime_ns: u128,
 }
 
-/// Lists indexable files under `root`, sorted by path.
+/// Lists indexable files under `root`, sorted by path. A `root` that is not a readable directory is an error:
+/// walking it would find nothing, and every gate would pass on zero files.
 pub fn walk(root: &Path, opts: &WalkOptions) -> anyhow::Result<Vec<SourceFile>> {
+    anyhow::ensure!(root.is_dir(), "root {} is not a directory", root.display());
     let exclude = build_globs(&opts.exclude)?;
     let found = Mutex::new(Vec::new());
+    let root_error = Mutex::new(None::<String>);
     WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
@@ -66,9 +69,14 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> anyhow::Result<Vec<SourceFile>> 
         .run(|| {
             let found = &found;
             let exclude = &exclude;
+            let root_error = &root_error;
             Box::new(move |entry| {
-                let Ok(entry) = entry else {
-                    return WalkState::Continue;
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        note_root_error(&e, root_error);
+                        return WalkState::Continue;
+                    }
                 };
                 if !entry.file_type().is_some_and(|t| t.is_file()) {
                     return WalkState::Continue;
@@ -79,9 +87,19 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> anyhow::Result<Vec<SourceFile>> 
                 WalkState::Continue
             })
         });
+    if let Some(e) = root_error.into_inner().expect("walk mutex") {
+        anyhow::bail!("root {} cannot be read: {e}", root.display());
+    }
     let mut files = found.into_inner().expect("walk mutex");
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+/// An unreadable entry below the root is skipped; an unreadable root fails the walk, so it is remembered.
+fn note_root_error(e: &ignore::Error, root_error: &Mutex<Option<String>>) {
+    if e.io_error().is_some() && e.depth().unwrap_or(0) == 0 {
+        *root_error.lock().expect("walk mutex") = Some(e.to_string());
+    }
 }
 
 fn select(root: &Path, abs: &Path, opts: &WalkOptions, exclude: &GlobSet) -> Option<SourceFile> {
