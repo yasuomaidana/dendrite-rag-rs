@@ -285,3 +285,23 @@ fn rstest_fails_on_repeated_tests_and_passes_on_clean_code() {
         Some(0)
     );
 }
+
+#[rstest]
+#[case("loc")]
+#[case("clones")]
+#[case("complexity")]
+#[case("structure")]
+#[case("rstest")]
+fn a_missing_root_cannot_run_instead_of_passing(#[case] gate_name: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-such-dir");
+    let out = gate(&[gate_name, "--root", missing.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(2), "{gate_name}: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a directory"));
+}
+
+#[rstest]
+fn a_lower_maximum_alone_is_accepted(project: tempfile::TempDir) {
+    let out = run_loc(project.path(), &["--max", "400"]);
+    assert_eq!(out.status.code(), Some(1), "the 501-line file now fails: {out:?}");
+}

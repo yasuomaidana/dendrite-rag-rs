@@ -127,6 +127,9 @@ fn a_syntax_error_is_reported_and_the_rest_still_counts() {
 #[case("py/test_a.py", true)]
 #[case("py/conftest.py", true)]
 #[case("java/ATest.java", true)]
+#[case("src/quality/structure_tests.rs", true)]
+#[case("src/ask/tests.rs", true)]
+#[case("py/tests.py", false)]
 #[case("src/main.rs", false)]
 #[case("src/attest.rs", false)]
 #[case("py/latest.py", false)]
@@ -287,11 +290,19 @@ fn config_defaults_overrides_and_errors() {
     );
 
     fs::write(&path, "[loc]\nmax_production_lines = 300\n").unwrap();
+    let cfg = LocConfig::load(&path).unwrap();
+    assert_eq!(
+        (cfg.max_production_lines, cfg.warn_at),
+        (300, 270),
+        "the default warning level follows a lower maximum"
+    );
+    fs::write(&path, "[loc]\nmax_production_lines = 300\nwarn_at = 450\n").unwrap();
     assert!(
         LocConfig::load(&path)
             .unwrap_err()
             .to_string()
-            .contains("warn_at (450) must not exceed")
+            .contains("warn_at (450) must not exceed"),
+        "a warning level written out above the maximum is still an error"
     );
     fs::write(&path, "[loc]\nmax_production_lines = 0\n").unwrap();
     assert!(LocConfig::load(&path).is_err());
@@ -361,4 +372,24 @@ fn duplication_config_defaults_overrides_and_errors() {
         DupConfig::default(),
         "the example is the Go side's defaults"
     );
+}
+
+#[rstest::rstest]
+#[case::lower_max_only(Some(400), None, 400, 360, true)]
+#[case::higher_max_only(Some(900), None, 900, 450, true)]
+#[case::warn_only(None, Some(300), 500, 300, true)]
+#[case::both(Some(200), Some(150), 200, 150, true)]
+#[case::explicit_pair_contradicts(Some(200), Some(300), 200, 300, false)]
+#[case::explicit_warn_above_default_max(None, Some(900), 500, 900, false)]
+fn loc_limits_given_by_the_caller(
+    #[case] max: Option<usize>,
+    #[case] warn: Option<usize>,
+    #[case] want_max: usize,
+    #[case] want_warn: usize,
+    #[case] valid: bool,
+) {
+    let mut cfg = LocConfig::default();
+    cfg.set_limits(max, warn);
+    assert_eq!((cfg.max_production_lines, cfg.warn_at), (want_max, want_warn));
+    assert_eq!(cfg.validate().is_ok(), valid);
 }

@@ -232,3 +232,17 @@ fn an_empty_project_has_nothing_duplicated(small: DupConfig) {
     );
     assert!(report.passed());
 }
+
+const GO_CLOSURE_A: &str = "package a\n\nfunc runA() {\n\thandler := func(x int, y int) int {\n\t\tif x > y {\n\t\t\treturn x - 1\n\t\t}\n\t\treturn y - 2\n\t}\n\thandler(1, 2)\n}\n";
+const GO_CLOSURE_B: &str = "package b\n\nfunc runB() {\n\thandler := func(x int, y int) int {\n\t\tfor x < y {\n\t\t\tx++\n\t\t}\n\t\treturn x\n\t}\n\thandler(1, 2)\n}\n";
+const GO_CONSTANTS_B: &str = "package b\n\nfunc runB() {\n\thandler := func(x int, y int) int {\n\t\tif x > y {\n\t\t\treturn x - 99\n\t\t}\n\t\treturn y - 7\n\t}\n\thandler(3, 4)\n}\n";
+
+/// Code inside a closure or a composite literal is code: only scalar constants are normalised away.
+#[rstest]
+#[case::closures_with_different_bodies(GO_CLOSURE_B, 0)]
+#[case::same_closure_with_other_constants(GO_CONSTANTS_B, 1)]
+fn closures_are_compared_by_their_bodies(small: DupConfig, #[case] other: &str, #[case] groups: usize) {
+    let dir = project(&[("a.go", GO_CLOSURE_A), ("b.go", other)]);
+    let report = run(dir.path(), &small);
+    assert_eq!(report.groups.len(), groups, "{}", report.to_text());
+}

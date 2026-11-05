@@ -42,8 +42,32 @@ fn is_identifier(kind: &str) -> bool {
     kind == "identifier" || kind.ends_with("_identifier")
 }
 
+/// Words that make a `*literal*` node a construct holding code or other values (`func_literal`,
+/// `composite_literal`, `lambda_literal`, `literal_value`, ...) rather than one constant.
+const COMPOSITE_LITERAL_PARTS: [&str; 18] = [
+    "func",
+    "function",
+    "lambda",
+    "closure",
+    "composite",
+    "compound",
+    "array",
+    "slice",
+    "object",
+    "map",
+    "struct",
+    "collection",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "value",
+    "element",
+];
+
+/// Whether a node is one constant (a string, number, character, boolean ...), whose value is not compared.
 fn is_literal(kind: &str) -> bool {
-    kind.contains("literal")
+    (kind.contains("literal") && !COMPOSITE_LITERAL_PARTS.iter().any(|part| kind.contains(part)))
         || matches!(
             kind,
             "string" | "template_string" | "number" | "integer" | "float" | "interpreted_string_literal"
