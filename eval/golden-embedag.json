@@ -1,0 +1,31 @@
+{
+  "corpus": "embedag repository (github.com/yasuomaidana/embedag)",
+  "note": "Natural-language queries paraphrase doc comments instead of quoting identifiers; a query counts as answered when any expected file appears in the results.",
+  "queries": [
+    {"q": "how does topological community detection work?", "expect": ["crates/embedag-rag/src/community.rs"], "broad": true},
+    {"q": "how does recursive CTE traversal work in relational persistence?", "expect": ["crates/embedag-diesel/src/cte.rs", "crates/embedag-diesel/src/traversal.rs"], "broad": true},
+    {"q": "how does topological subgraph expansion work in graph RAG?", "expect": ["crates/embedag-rag/src/expansion.rs"], "broad": true},
+    {"q": "how does schema derivation and GBNF grammar token masking work?", "expect": ["crates/embedag-llm/src/gbnf.rs", "crates/embedag-llm/src/schema.rs"], "broad": true},
+    {"q": "how does the in-memory directed acyclic graph arena work?", "expect": ["crates/embedag-core/src/dag.rs"], "broad": true},
+    {"q": "how does content-addressed Merkle tree change detection work?", "expect": ["crates/embedag-core/src/merkle.rs"], "broad": true},
+    {"q": "how does multi-tier waterfall entity resolution work?", "expect": ["crates/embedag-llm/src/waterfall.rs"], "broad": true},
+    {"q": "how does structural AST similarity matching work?", "expect": ["crates/embedag-matcher/src/ast.rs", "crates/embedag-matcher/src/graph.rs"], "broad": true},
+    {"q": "detect cycles in directed graph mutations before committing", "expect": ["crates/embedag-core/src/mutation.rs", "crates/embedag-core/src/dag.rs"]},
+    {"q": "deterministic dependency resolution and topological sorting with Kahn algorithm", "expect": ["crates/embedag-core/src/resolve.rs"]},
+    {"q": "deterministic cyclical time encoding for hours and days", "expect": ["crates/embedag-core/src/encoder/temporal.rs", "crates/embedag-core/src/encoder/mod.rs"]},
+    {"q": "h3 hexagonal spatial indexing distance and normalized score", "expect": ["crates/embedag-core/src/encoder/geospatial.rs", "crates/embedag-core/src/encoder/mod.rs"]},
+    {"q": "export DAG structures to Mermaid and Graphviz DOT formats", "expect": ["crates/embedag-core/src/export.rs"]},
+    {"q": "derive macro generating AsGraphContext implementation for structs", "expect": ["crates/embedag-derive/src/as_graph_context.rs"]},
+    {"q": "derive HierarchicalModel for diesel recursive CTE queries", "expect": ["crates/embedag-derive/src/hierarchical_model.rs"]},
+    {"q": "pushdown automaton validating tokens against compiled GBNF grammar", "expect": ["crates/embedag-llm/src/gbnf.rs"]},
+    {"q": "extract structured entities using oxillama and candle local models", "expect": ["crates/embedag-llm/src/provider.rs", "crates/embedag-llm/src/extractor.rs"]},
+    {"q": "synthesize attribute differences between candidate and incoming entities", "expect": ["crates/embedag-llm/src/delta_synthesizer.rs"]},
+    {"q": "batch upsert nodes and edges into postgres with savepoints", "expect": ["crates/embedag-diesel/src/ops.rs"]},
+    {"q": "rank RRF candidates from dense and sparse retrieval stages", "expect": ["crates/embedag-rag/src/rrf.rs"]},
+    {"q": "package grounded citations and evidence spans from expanded subgraphs", "expect": ["crates/embedag-rag/src/evidence.rs"]},
+    {"q": "MemoryDag", "expect": ["crates/embedag-core/src/dag.rs"]},
+    {"q": "CommunityDetector", "expect": ["crates/embedag-rag/src/community.rs"]},
+    {"q": "WaterfallPipeline", "expect": ["crates/embedag-llm/src/waterfall.rs"]},
+    {"q": "AstMatcher", "expect": ["crates/embedag-matcher/src/ast.rs"]}
+  ]
+}

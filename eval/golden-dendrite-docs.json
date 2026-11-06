@@ -1,0 +1,33 @@
+{
+  "corpus": "Dendrite repository (github.com/yasuomaidana/Dendrite)",
+  "note": "Questions answered by documentation (docs/, README). Queries paraphrase the docs instead of quoting headings; a query counts as answered when any expected file appears in the results.",
+  "queries": [
+    {"q": "which command lists the registered inference engines and their fallback cascade?", "expect": ["docs/cli/spike.md"]},
+    {"q": "measure reachability and latency of every model engine", "expect": ["docs/cli/spike.md"]},
+    {"q": "escalate a project question to the cloud model without the confirmation prompt", "expect": ["docs/guides/asking-questions-to-dendrite.md", "docs/cli/ask.md"]},
+    {"q": "draft an answer with a free local model and let a paid model refine it", "expect": ["docs/guides/asking-questions-to-dendrite.md", "docs/cli/ask.md"]},
+    {"q": "save my multi-agent session state and pick it up again later", "expect": ["docs/cli/session.md"]},
+    {"q": "remove model-owned working copies whose branches were merged", "expect": ["docs/cli/work.md"]},
+    {"q": "query and checkpoint the persistent segmented memory store", "expect": ["docs/cli/engram.md"]},
+    {"q": "repair broken cross-project links and their paths", "expect": ["docs/cli/synapse.md"]},
+    {"q": "how many tokens did I consume in the last day and week per tier?", "expect": ["docs/cli/vesicle.md"]},
+    {"q": "dispatch an autonomous coding agent job and list its jobs", "expect": ["docs/cli/bouton.md"]},
+    {"q": "diagnose and replicate the development environment on a new machine", "expect": ["docs/cli/soma.md", "docs/guides/environment-replication.md"]},
+    {"q": "replicate the services with docker containers and check they are reachable", "expect": ["docs/guides/environment-replication.md"]},
+    {"q": "run the continuous integration checks on my laptop before pushing, including the coverage threshold", "expect": ["docs/guides/local-cicd-verification.md"]},
+    {"q": "migrate the background services to a remote Debian machine over SSH with a dry run first", "expect": ["docs/guides/moving-services-to-ssh-server.md"]},
+    {"q": "how much memory and disk does the remote server need for the services?", "expect": ["docs/guides/moving-services-to-ssh-server.md"]},
+    {"q": "onboard a new teammate and share the environment without sharing secrets", "expect": ["docs/guides/sharing-and-onboarding.md"]},
+    {"q": "use the dendrite tools from the JetBrains AI assistant chat", "expect": ["docs/guides/using-dendrite-tools-with-jetbrains.md", "docs/guides/jetbrains-mcp-and-agents-setup.md"]},
+    {"q": "how are spending limits enforced with rolling windows and hierarchical virtual keys?", "expect": ["docs/architecture/02-token-governance-litellm.md"]},
+    {"q": "what does the helper process handshake look like and where are its binaries looked up?", "expect": ["docs/architecture/sidecar-protocol.md"]},
+    {"q": "which deployment scenarios place compute in a cloud burst?", "expect": ["docs/architecture/01-system-topology.md"]},
+    {"q": "conventions for adding a new subcommand and its global flags", "expect": ["docs/architecture/cli-cobra.md"]},
+    {"q": "link the sibling repositories once and switch between local and remote sources", "expect": ["docs/DEVELOPMENT.md"]},
+    {"q": "install the tool from a git branch and update an existing installation", "expect": ["docs/guides/sharing-and-onboarding.md", "docs/cli/install.md", "docs/cli/update.md", "docs/DEVELOPMENT.md"]},
+    {"q": "spawn distributed codebases and coordinate repositories across the mesh", "expect": ["docs/cli/mesh.md"]},
+    {"q": "version and publish the documentation website", "expect": ["docs/guides/documentation-guide.md"]},
+    {"q": "use the sovereign local model runtime inside JetBrains in managed or direct mode", "expect": ["docs/guides/oxillama-jetbrains-integration.md"]},
+    {"q": "start the design tool and the project tracker locally for the first time", "expect": ["docs/guides/penpot-and-plane-beginner-tutorial.md"]}
+  ]
+}

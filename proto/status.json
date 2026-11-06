@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/status.json",
+  "title": "status",
+  "description": "Index statistics.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "files",
+      "chunks",
+      "index_dir",
+      "vectors"
+    ],
+    "properties": {
+      "files": {
+        "type": "integer"
+      },
+      "chunks": {
+        "type": "integer"
+      },
+      "index_dir": {
+        "type": "string"
+      },
+      "merkle_root": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "last_indexed": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "description": "Unix seconds"
+      },
+      "vectors": {
+        "type": "integer"
+      },
+      "embed_model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "communities": {
+        "type": "integer",
+        "description": "Communities of the code graph"
+      },
+      "sync_pending": {
+        "type": "integer",
+        "description": "Commits waiting for the shared tier (edge mode only)"
+      },
+      "embed_coverage": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Vectors / chunks; absent without an embedder"
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

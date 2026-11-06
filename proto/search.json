@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/search.json",
+  "title": "search",
+  "description": "Ranked code spans for a query.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "query"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "query": {
+        "type": "string"
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 10
+      },
+      "mode": {
+        "enum": [
+          "hybrid",
+          "lexical",
+          "dense"
+        ],
+        "default": "hybrid"
+      },
+      "corpus": {
+        "enum": [
+          "all",
+          "code",
+          "docs"
+        ],
+        "default": "all",
+        "description": "Corpora searched: all (both in one ranking), code, or docs (Markdown, txt, rst)"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Globs over project-relative paths"
+      },
+      "min_score": {
+        "type": "number"
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "hits"
+    ],
+    "properties": {
+      "hits": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      },
+      "timings": {
+        "type": "object",
+        "description": "Milliseconds spent per stage",
+        "properties": {
+          "lexical_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dense_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "symbol_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rerank_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expand_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other files holding the same text, dropped from the results"
+        },
+        "outline": {
+          "type": "boolean",
+          "description": "content is the span's outline (doc comment or heading and declaration); fetch the text with chunks.get"
+        }
+      }
+    }
+  }
+}

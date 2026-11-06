@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/ask.json",
+  "title": "ask",
+  "description": "Answers a question from the project: context pack (or top hits), local model through the LiteLLM gateway, optional hybrid refinement or paid model. Never pays without allow_paid or mode paid: a failed local model returns escalation_needed.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "question"
+    ],
+    "properties": {
+      "root": {
+        "type": "string"
+      },
+      "question": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "local",
+          "hybrid",
+          "paid"
+        ],
+        "default": "local"
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Answer from the top hits instead of a 2,500-token context pack"
+      },
+      "corpus": {
+        "type": "string",
+        "enum": [
+          "all",
+          "code",
+          "docs"
+        ],
+        "default": "all",
+        "description": "Corpora searched: all (both in one ranking), code, or docs (Markdown, txt, rst)"
+      },
+      "local_model": {
+        "type": "string"
+      },
+      "paid_model": {
+        "type": "string"
+      },
+      "allow_paid": {
+        "type": "boolean",
+        "default": false
+      },
+      "fresh": {
+        "type": "boolean",
+        "default": false,
+        "description": "Ask the model even when the same prompt was answered before (answers are cached by model and exact prompt)"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Restrict retrieval to these paths (globs): the top hits among them, 4 unless top_k is set"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "answer",
+      "source_tier",
+      "model",
+      "escalation_needed",
+      "escalated",
+      "prompt_tokens",
+      "output_tokens",
+      "hits"
+    ],
+    "properties": {
+      "answer": {
+        "type": "string"
+      },
+      "source_tier": {
+        "type": "string",
+        "enum": [
+          "local-rag",
+          "hybrid",
+          "paid-cloud",
+          ""
+        ]
+      },
+      "model": {
+        "type": "string"
+      },
+      "local_draft": {
+        "type": "string"
+      },
+      "escalation_needed": {
+        "type": "boolean"
+      },
+      "local_error": {
+        "type": "string"
+      },
+      "escalated": {
+        "type": "boolean"
+      },
+      "prompt_tokens": {
+        "type": "integer"
+      },
+      "output_tokens": {
+        "type": "integer"
+      },
+      "hits": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/hit"
+        }
+      },
+      "timings": {
+        "type": "object",
+        "description": "Milliseconds spent retrieving and in model calls",
+        "properties": {
+          "retrieval": {
+            "type": "object",
+            "description": "Milliseconds spent per retrieval stage",
+            "properties": {
+              "lexical_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dense_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "symbol_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rerank_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expand_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "local_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "cached": {
+        "type": "boolean",
+        "description": "The model's answers came from the cache of earlier identical prompts"
+      },
+      "abstained": {
+        "type": "boolean",
+        "description": "Protocol 1.8: the reranker found nothing likely to answer ([rerank] abstain); no model was asked and answer is empty. Absent when false"
+      }
+    }
+  },
+  "$defs": {
+    "hit": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "path",
+        "start_line",
+        "end_line",
+        "scope",
+        "score",
+        "content"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer"
+        },
+        "end_line": {
+          "type": "integer"
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "content": {
+          "type": "string"
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other files holding the same text, dropped from the results"
+        },
+        "outline": {
+          "type": "boolean",
+          "description": "content is the span's outline (doc comment or heading and declaration); fetch the text with chunks.get"
+        }
+      }
+    }
+  }
+}

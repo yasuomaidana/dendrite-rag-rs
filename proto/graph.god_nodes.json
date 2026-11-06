@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/graph.god_nodes.json",
+  "title": "graph.god_nodes",
+  "description": "Symbols with the most users (callers and type users); FEAT-045 god nodes have more than 20.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "min_in_degree": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 21
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 50
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "nodes"
+    ],
+    "properties": {
+      "nodes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/node"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "path",
+        "line",
+        "in_degree",
+        "out_degree",
+        "used_from_files",
+        "community",
+        "summary"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "in_degree": {
+          "type": "integer"
+        },
+        "out_degree": {
+          "type": "integer"
+        },
+        "used_from_files": {
+          "type": "integer"
+        },
+        "community": {
+          "$ref": "#/$defs/community_ref"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "community_ref": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

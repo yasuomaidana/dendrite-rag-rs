@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/sync.json",
+  "title": "sync",
+  "description": "Sends commits journaled while the shared tier was unreachable (edge mode; a no-op otherwise).",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "pending"
+    ],
+    "properties": {
+      "pending": {
+        "type": "integer",
+        "description": "Commits still waiting"
+      }
+    }
+  }
+}

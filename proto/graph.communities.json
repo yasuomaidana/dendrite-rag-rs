@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/graph.communities.json",
+  "title": "graph.communities",
+  "description": "Leiden communities of the file graph, largest first.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 50
+      },
+      "min_size": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 2,
+        "description": "Smallest community listed, in files"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "communities"
+    ],
+    "properties": {
+      "communities": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/community"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "community": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "size",
+        "files",
+        "top_symbols",
+        "summary"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Stable across index runs"
+        },
+        "label": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "description": "Member files"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The first 50 member files, sorted"
+        },
+        "top_symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/top_symbol"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "top_symbol": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "line",
+        "in_degree"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "in_degree": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

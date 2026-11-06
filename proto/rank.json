@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/rank.json",
+  "title": "rank",
+  "description": "Hybrid ranking of caller-supplied documents (no project index): code-aware BM25, cosine with the project's embedder (document embeddings cached by content), weighted RRF. Lexical only when the embedder is off or unreachable.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "query",
+      "documents"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory whose settings (embedder, fusion weights) apply"
+      },
+      "query": {
+        "type": "string"
+      },
+      "documents": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "text"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "0 = all"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "ranked"
+    ],
+    "properties": {
+      "ranked": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "score",
+            "lexical"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "score": {
+              "type": "number",
+              "description": "Weighted RRF"
+            },
+            "lexical": {
+              "type": "number",
+              "description": "BM25"
+            },
+            "dense": {
+              "type": "number",
+              "description": "Cosine; absent without an embedder"
+            }
+          }
+        }
+      }
+    }
+  }
+}
