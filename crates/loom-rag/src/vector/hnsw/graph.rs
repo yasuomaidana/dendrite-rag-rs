@@ -18,31 +18,31 @@ impl HnswIndex {
         lvl.min(32)
     }
 
-    pub(super) fn node_vector_data(&self, node_id: u32) -> (&[i8], f32) {
+    /// Distance given to a node the flat index no longer has: worse than any real distance.
+    pub(super) const STALE_DISTANCE: f32 = f32::MAX;
+
+    /// The node's quantized vector, or `None` for a stale node (the graph and the flat index
+    /// disagree). `load()` rebuilds such a graph; this only keeps a search from panicking.
+    pub(super) fn node_vector_data(&self, node_id: u32) -> Option<(&[i8], f32)> {
         let node = &self.nodes[node_id as usize];
         if let Some((v, scale)) = &node.tombstone_vector {
-            (v.as_slice(), *scale)
-        } else {
-            // load() rebuilds a graph that disagrees with the flat index, so a miss means a
-            // stale node: an empty vector scores worst instead of panicking the sidecar.
-            match self.flat.row_of(&node.id) {
-                Some(row) => self.flat.vector_at(row),
-                None => (&[], 0.0),
-            }
+            return Some((v.as_slice(), *scale));
         }
+        self.flat.row_of(&node.id).map(|row| self.flat.vector_at(row))
     }
 
     pub(super) fn dist_to_q(&self, q_i8: &[i8], q_scale: f32, node_id: u32) -> f32 {
-        let (v, v_scale) = self.node_vector_data(node_id);
-        let sim = dot_i8(q_i8, v) as f32 * q_scale * v_scale;
-        1.0 - sim
+        match self.node_vector_data(node_id) {
+            Some((v, v_scale)) => 1.0 - dot_i8(q_i8, v) as f32 * q_scale * v_scale,
+            None => Self::STALE_DISTANCE,
+        }
     }
 
     pub(super) fn dist_nodes(&self, a: u32, b: u32) -> f32 {
-        let (va, sa) = self.node_vector_data(a);
-        let (vb, sb) = self.node_vector_data(b);
-        let sim = dot_i8(va, vb) as f32 * sa * sb;
-        1.0 - sim
+        match (self.node_vector_data(a), self.node_vector_data(b)) {
+            (Some((va, sa)), Some((vb, sb))) => 1.0 - dot_i8(va, vb) as f32 * sa * sb,
+            _ => Self::STALE_DISTANCE,
+        }
     }
 
     pub(super) fn search_layer(
@@ -295,7 +295,7 @@ impl HnswIndex {
             .into_iter()
             .filter_map(|(dist, node_id)| {
                 let node = &self.nodes[node_id as usize];
-                if node.deleted {
+                if node.deleted || dist.0 >= Self::STALE_DISTANCE {
                     None
                 } else {
                     let sim = 1.0 - dist.0;

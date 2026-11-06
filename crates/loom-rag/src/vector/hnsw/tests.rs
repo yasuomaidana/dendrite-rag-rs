@@ -227,3 +227,21 @@ fn graph_with_other_ids_than_flat_rebuilds() {
     }
     assert_eq!(loaded.search(&vs[3], 1)[0].0, "other-3");
 }
+
+/// A node the flat index no longer has (the graph and flat index disagree) is never returned,
+/// even for queries that every real vector scores below zero against.
+#[test]
+fn stale_graph_nodes_are_not_returned() {
+    let vs = rand_vecs(30, 16, 11);
+    let mut idx = HnswIndex::new();
+    for (i, v) in vs.iter().enumerate() {
+        idx.upsert(&format!("c{i}"), "tag", v);
+    }
+    assert!(idx.flat.remove("c3"));
+    let away: Vec<f32> = vs[3].iter().map(|x| -x).collect();
+    for q in [&away, &vs[7]] {
+        let found = idx.search_knn(q, 30);
+        assert!(found.iter().all(|(id, _)| id != "c3"), "{found:?}");
+        assert!(!found.is_empty());
+    }
+}
