@@ -110,47 +110,7 @@ struct NewPosting<'a> {
 
 pub(crate) fn apply_lexical(tx: &mut PgConnection, repo: i32, op: LexicalOp) -> Result<(), DbError> {
     match op {
-        LexicalOp::Add(chunk) => {
-            let d = Doc::of(&chunk);
-            diesel::delete(
-                rag_postings::table.filter(rag_postings::repo.eq(repo).and(rag_postings::chunk.eq(&d.chunk))),
-            )
-            .execute(tx)?;
-            diesel::insert_into(rag_docs::table)
-                .values((
-                    rag_docs::repo.eq(repo),
-                    rag_docs::chunk.eq(&d.chunk),
-                    rag_docs::path.eq(&d.path),
-                    rag_docs::len_text.eq(d.lens[0]),
-                    rag_docs::len_symbols.eq(d.lens[1]),
-                    rag_docs::len_path.eq(d.lens[2]),
-                ))
-                .on_conflict((rag_docs::repo, rag_docs::chunk))
-                .do_update()
-                .set((
-                    rag_docs::path.eq(excluded(rag_docs::path)),
-                    rag_docs::len_text.eq(excluded(rag_docs::len_text)),
-                    rag_docs::len_symbols.eq(excluded(rag_docs::len_symbols)),
-                    rag_docs::len_path.eq(excluded(rag_docs::len_path)),
-                ))
-                .execute(tx)?;
-            let rows: Vec<NewPosting<'_>> = d
-                .postings
-                .iter()
-                .map(|(term, field, tf)| NewPosting {
-                    repo,
-                    term,
-                    field: *field,
-                    chunk: &d.chunk,
-                    tf: *tf,
-                })
-                .collect();
-            for batch in rows.chunks(INSERT_ROWS) {
-                diesel::insert_into(rag_postings::table)
-                    .values(batch)
-                    .execute(tx)?;
-            }
-        }
+        LexicalOp::Add(chunk) => add_doc(tx, repo, &chunk)?,
         LexicalOp::RemoveFile(path) => {
             let chunks: Vec<String> = rag_docs::table
                 .filter(rag_docs::repo.eq(repo).and(rag_docs::path.eq(&path)))
@@ -171,6 +131,50 @@ pub(crate) fn apply_lexical(tx: &mut PgConnection, repo: i32, op: LexicalOp) -> 
             diesel::delete(rag_postings::table.filter(rag_postings::repo.eq(repo))).execute(tx)?;
             diesel::delete(rag_docs::table.filter(rag_docs::repo.eq(repo))).execute(tx)?;
         }
+    }
+    Ok(())
+}
+
+/// Replaces the document of `chunk` and its postings.
+fn add_doc(tx: &mut PgConnection, repo: i32, chunk: &Chunk) -> Result<(), DbError> {
+    let d = Doc::of(chunk);
+    diesel::delete(
+        rag_postings::table.filter(rag_postings::repo.eq(repo).and(rag_postings::chunk.eq(&d.chunk))),
+    )
+    .execute(tx)?;
+    diesel::insert_into(rag_docs::table)
+        .values((
+            rag_docs::repo.eq(repo),
+            rag_docs::chunk.eq(&d.chunk),
+            rag_docs::path.eq(&d.path),
+            rag_docs::len_text.eq(d.lens[0]),
+            rag_docs::len_symbols.eq(d.lens[1]),
+            rag_docs::len_path.eq(d.lens[2]),
+        ))
+        .on_conflict((rag_docs::repo, rag_docs::chunk))
+        .do_update()
+        .set((
+            rag_docs::path.eq(excluded(rag_docs::path)),
+            rag_docs::len_text.eq(excluded(rag_docs::len_text)),
+            rag_docs::len_symbols.eq(excluded(rag_docs::len_symbols)),
+            rag_docs::len_path.eq(excluded(rag_docs::len_path)),
+        ))
+        .execute(tx)?;
+    let rows: Vec<NewPosting<'_>> = d
+        .postings
+        .iter()
+        .map(|(term, field, tf)| NewPosting {
+            repo,
+            term,
+            field: *field,
+            chunk: &d.chunk,
+            tf: *tf,
+        })
+        .collect();
+    for batch in rows.chunks(INSERT_ROWS) {
+        diesel::insert_into(rag_postings::table)
+            .values(batch)
+            .execute(tx)?;
     }
     Ok(())
 }

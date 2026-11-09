@@ -113,28 +113,7 @@ impl Pg {
     pub(crate) fn apply(&self, batch: SyncBatch) -> Result<(), DbError> {
         let repo = self.repo;
         let mut conn = self.conn();
-        let mut analyze = false;
-        conn.transaction::<_, DbError, _>(|tx| {
-            match batch {
-                SyncBatch::Ledger(ops) => {
-                    for op in ops {
-                        apply_ledger(tx, repo, op)?;
-                    }
-                }
-                SyncBatch::Lexical(ops) => {
-                    analyze = ops.iter().filter(|op| matches!(op, LexicalOp::Add(_))).count() > ANALYZE_AFTER;
-                    for op in ops {
-                        apply_lexical(tx, repo, op)?;
-                    }
-                }
-                SyncBatch::Vectors(ops) => {
-                    for op in ops {
-                        apply_vector(tx, repo, op)?;
-                    }
-                }
-            }
-            Ok(())
-        })?;
+        let analyze = conn.transaction::<_, DbError, _>(|tx| apply_batch(tx, repo, batch))?;
         if analyze {
             raw::analyze(&mut conn)?;
         }
@@ -167,6 +146,20 @@ impl Pg {
     pub(crate) fn conn(&self) -> MutexGuard<'_, PgConnection> {
         super::pick_connection(&self.conns, &self.next, "postgres connection")
     }
+}
+
+/// Applies `batch` inside `tx`; whether the planner statistics need refreshing afterwards.
+fn apply_batch(tx: &mut PgConnection, repo: i32, batch: SyncBatch) -> Result<bool, DbError> {
+    match batch {
+        SyncBatch::Ledger(ops) => ops.into_iter().try_for_each(|op| apply_ledger(tx, repo, op))?,
+        SyncBatch::Vectors(ops) => ops.into_iter().try_for_each(|op| apply_vector(tx, repo, op))?,
+        SyncBatch::Lexical(ops) => {
+            let adds = ops.iter().filter(|op| matches!(op, LexicalOp::Add(_))).count();
+            ops.into_iter().try_for_each(|op| apply_lexical(tx, repo, op))?;
+            return Ok(adds > ANALYZE_AFTER);
+        }
+    }
+    Ok(false)
 }
 
 fn backend(e: impl std::fmt::Display) -> LedgerError {

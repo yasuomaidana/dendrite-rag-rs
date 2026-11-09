@@ -42,6 +42,16 @@ macro_rules! put {
     };
 }
 
+/// `DELETE` of the row of `t` with primary key `key`, or of every row.
+macro_rules! remove {
+    ($conn:expr, $t:ident) => {
+        diesel::delete($t::table).execute($conn)?
+    };
+    ($conn:expr, $t:ident, $key:expr) => {
+        diesel::delete($t::table.find($key)).execute($conn)?
+    };
+}
+
 /// Read connections beside the write connection.
 const READERS: usize = 4;
 
@@ -381,7 +391,7 @@ fn apply(conn: &mut SqliteConnection, op: LedgerOp) -> diesel::QueryResult<()> {
             );
         }
         LedgerOp::RemoveFile(path) => {
-            diesel::delete(files::table.find(path)).execute(conn)?;
+            remove!(conn, files, path);
         }
         LedgerOp::PutChunk(id, path, content_hash, record) => {
             put!(
@@ -395,7 +405,7 @@ fn apply(conn: &mut SqliteConnection, op: LedgerOp) -> diesel::QueryResult<()> {
             );
         }
         LedgerOp::RemoveChunk(id) => {
-            diesel::delete(chunks::table.find(id)).execute(conn)?;
+            remove!(conn, chunks, id);
         }
         LedgerOp::PutEmbedding(model, hash, vec) => {
             put!(
@@ -436,45 +446,56 @@ fn apply(conn: &mut SqliteConnection, op: LedgerOp) -> diesel::QueryResult<()> {
             );
         }
         LedgerOp::RemoveConcepts(path) => {
-            diesel::delete(concepts::table.find(path)).execute(conn)?;
+            remove!(conn, concepts, path);
         }
         LedgerOp::PutCommunities(records, by_file, by_chunk) => {
-            diesel::delete(communities::table).execute(conn)?;
-            diesel::delete(community_files::table).execute(conn)?;
-            diesel::delete(community_chunks::table).execute(conn)?;
-            for (id, record) in records {
-                put!(
-                    conn,
-                    communities {
-                        id: id as i32,
-                        record: record
-                    }
-                );
-            }
-            for (path, id) in by_file {
-                put!(
-                    conn,
-                    community_files {
-                        path: path,
-                        cid: id as i32
-                    }
-                );
-            }
-            for (chunk, id) in by_chunk {
-                put!(
-                    conn,
-                    community_chunks {
-                        chunk: chunk,
-                        cid: id as i32
-                    }
-                );
-            }
+            put_communities(conn, records, by_file, by_chunk)?;
         }
         LedgerOp::ClearIndex => {
-            diesel::delete(files::table).execute(conn)?;
-            diesel::delete(chunks::table).execute(conn)?;
-            diesel::delete(concepts::table).execute(conn)?;
+            remove!(conn, files);
+            remove!(conn, chunks);
+            remove!(conn, concepts);
         }
+    }
+    Ok(())
+}
+
+/// Replaces every community, with the community of each file and chunk.
+fn put_communities(
+    conn: &mut SqliteConnection,
+    records: Vec<(u32, String)>,
+    by_file: Vec<(String, u32)>,
+    by_chunk: Vec<(String, u32)>,
+) -> diesel::QueryResult<()> {
+    remove!(conn, communities);
+    remove!(conn, community_files);
+    remove!(conn, community_chunks);
+    for (id, record) in records {
+        put!(
+            conn,
+            communities {
+                id: id as i32,
+                record: record
+            }
+        );
+    }
+    for (path, id) in by_file {
+        put!(
+            conn,
+            community_files {
+                path: path,
+                cid: id as i32
+            }
+        );
+    }
+    for (chunk, id) in by_chunk {
+        put!(
+            conn,
+            community_chunks {
+                chunk: chunk,
+                cid: id as i32
+            }
+        );
     }
     Ok(())
 }
