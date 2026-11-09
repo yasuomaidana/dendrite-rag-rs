@@ -1,5 +1,8 @@
 //! BM25 in SQL over the code_terms postings.
 
+use diesel::upsert::excluded;
+
+use super::schema::{rag_docs, rag_postings};
 use super::*;
 use crate::bm25::Bm25Params;
 
@@ -11,24 +14,7 @@ impl LexicalStore for PgLexical {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = self
-            .0
-            .client()
-            .query(
-                BM25,
-                &[
-                    &self.0.repo,
-                    &terms,
-                    &(limit as i64),
-                    &(params.k1 as f64),
-                    &(params.b as f64),
-                    &(params.q as f64),
-                    &(crate::lexical::SYMBOL_BOOST as f64),
-                    &(crate::lexical::PATH_BOOST as f64),
-                ],
-            )
-            .map_err(lexical_err)?;
-        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
+        raw::bm25(&mut self.0.conn(), self.0.repo, &terms, limit, params).map_err(lexical_err)
     }
 
     fn writer(&self) -> tantivy::Result<Box<dyn LexicalWrite + '_>> {
@@ -39,10 +25,11 @@ impl LexicalStore for PgLexical {
     }
 
     fn len(&self) -> u64 {
-        self.0
-            .client()
-            .query_one("SELECT count(*) FROM rag_docs WHERE repo = $1", &[&self.0.repo])
-            .map(|r| r.get::<_, i64>(0) as u64)
+        rag_docs::table
+            .filter(rag_docs::repo.eq(self.0.repo))
+            .count()
+            .get_result::<i64>(&mut *self.0.conn())
+            .map(|n| n as u64)
             .unwrap_or(0)
     }
 }
@@ -111,54 +98,78 @@ impl LexicalWrite for PgLexicalWrite<'_> {
     }
 }
 
-pub(crate) fn apply_lexical(
-    tx: &mut Transaction<'_>,
+#[derive(Insertable)]
+#[diesel(table_name = rag_postings)]
+struct NewPosting<'a> {
     repo: i32,
-    op: LexicalOp,
-) -> Result<(), postgres::Error> {
+    term: &'a str,
+    field: i16,
+    chunk: &'a str,
+    tf: i32,
+}
+
+pub(crate) fn apply_lexical(tx: &mut PgConnection, repo: i32, op: LexicalOp) -> Result<(), DbError> {
     match op {
         LexicalOp::Add(chunk) => {
             let d = Doc::of(&chunk);
-            tx.execute(
-                "DELETE FROM rag_postings WHERE repo = $1 AND chunk = $2",
-                &[&repo, &d.chunk],
-            )?;
-            tx.execute(
-                "INSERT INTO rag_docs (repo, chunk, path, len_text, len_symbols, len_path)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (repo, chunk) DO UPDATE SET path = EXCLUDED.path,
-                     len_text = EXCLUDED.len_text, len_symbols = EXCLUDED.len_symbols,
-                     len_path = EXCLUDED.len_path",
-                &[&repo, &d.chunk, &d.path, &d.lens[0], &d.lens[1], &d.lens[2]],
-            )?;
-            let mut terms = Vec::with_capacity(d.postings.len());
-            let mut fields = Vec::with_capacity(d.postings.len());
-            let mut tfs = Vec::with_capacity(d.postings.len());
-            for (t, f, n) in d.postings {
-                terms.push(t);
-                fields.push(f);
-                tfs.push(n);
+            diesel::delete(
+                rag_postings::table.filter(rag_postings::repo.eq(repo).and(rag_postings::chunk.eq(&d.chunk))),
+            )
+            .execute(tx)?;
+            diesel::insert_into(rag_docs::table)
+                .values((
+                    rag_docs::repo.eq(repo),
+                    rag_docs::chunk.eq(&d.chunk),
+                    rag_docs::path.eq(&d.path),
+                    rag_docs::len_text.eq(d.lens[0]),
+                    rag_docs::len_symbols.eq(d.lens[1]),
+                    rag_docs::len_path.eq(d.lens[2]),
+                ))
+                .on_conflict((rag_docs::repo, rag_docs::chunk))
+                .do_update()
+                .set((
+                    rag_docs::path.eq(excluded(rag_docs::path)),
+                    rag_docs::len_text.eq(excluded(rag_docs::len_text)),
+                    rag_docs::len_symbols.eq(excluded(rag_docs::len_symbols)),
+                    rag_docs::len_path.eq(excluded(rag_docs::len_path)),
+                ))
+                .execute(tx)?;
+            let rows: Vec<NewPosting<'_>> = d
+                .postings
+                .iter()
+                .map(|(term, field, tf)| NewPosting {
+                    repo,
+                    term,
+                    field: *field,
+                    chunk: &d.chunk,
+                    tf: *tf,
+                })
+                .collect();
+            for batch in rows.chunks(INSERT_ROWS) {
+                diesel::insert_into(rag_postings::table)
+                    .values(batch)
+                    .execute(tx)?;
             }
-            tx.execute(
-                "INSERT INTO rag_postings (repo, chunk, term, field, tf)
-                 SELECT $1, $2, * FROM unnest($3::text[], $4::smallint[], $5::int[])",
-                &[&repo, &d.chunk, &terms, &fields, &tfs],
-            )?;
         }
         LexicalOp::RemoveFile(path) => {
-            tx.execute(
-                "DELETE FROM rag_postings p USING rag_docs d
-                 WHERE d.repo = $1 AND d.path = $2 AND p.repo = d.repo AND p.chunk = d.chunk",
-                &[&repo, &path],
-            )?;
-            tx.execute(
-                "DELETE FROM rag_docs WHERE repo = $1 AND path = $2",
-                &[&repo, &path],
-            )?;
+            let chunks: Vec<String> = rag_docs::table
+                .filter(rag_docs::repo.eq(repo).and(rag_docs::path.eq(&path)))
+                .select(rag_docs::chunk)
+                .load(tx)?;
+            diesel::delete(
+                rag_postings::table.filter(
+                    rag_postings::repo
+                        .eq(repo)
+                        .and(rag_postings::chunk.eq_any(&chunks)),
+                ),
+            )
+            .execute(tx)?;
+            diesel::delete(rag_docs::table.filter(rag_docs::repo.eq(repo).and(rag_docs::path.eq(path))))
+                .execute(tx)?;
         }
         LexicalOp::Clear => {
-            tx.execute("DELETE FROM rag_postings WHERE repo = $1", &[&repo])?;
-            tx.execute("DELETE FROM rag_docs WHERE repo = $1", &[&repo])?;
+            diesel::delete(rag_postings::table.filter(rag_postings::repo.eq(repo))).execute(tx)?;
+            diesel::delete(rag_docs::table.filter(rag_docs::repo.eq(repo))).execute(tx)?;
         }
     }
     Ok(())

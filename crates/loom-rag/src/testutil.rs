@@ -237,6 +237,7 @@ pub struct TestPg {
 /// available, and the test then passes without doing anything.
 #[cfg(all(test, feature = "postgres"))]
 pub fn test_pg() -> Option<TestPg> {
+    use diesel::Connection as _;
     use testcontainers::core::{IntoContainerPort, WaitFor};
     use testcontainers::runners::SyncRunner;
     use testcontainers::{GenericImage, ImageExt};
@@ -268,8 +269,8 @@ pub fn test_pg() -> Option<TestPg> {
     // The first boot restarts the server after initdb: wait until it answers queries.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if let Ok(mut c) = postgres::Client::connect(&url, postgres::NoTls)
-            && c.simple_query("SELECT 1").is_ok()
+        if let Ok(mut c) = diesel::PgConnection::establish(&url)
+            && select_one(&mut c)
         {
             break;
         }
@@ -283,6 +284,19 @@ pub fn test_pg() -> Option<TestPg> {
         url,
         _container: Some(container),
     })
+}
+
+/// Whether the server answers a query.
+#[cfg(all(test, feature = "postgres"))]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a bare liveness probe, no table involved"
+)]
+fn select_one(c: &mut diesel::PgConnection) -> bool {
+    use diesel::RunQueryDsl;
+    diesel::select(diesel::dsl::sql::<diesel::sql_types::Integer>("1"))
+        .get_result::<i32>(c)
+        .is_ok()
 }
 
 /// `n` pseudo-random unit vectors of `dim` components, reproducible from `seed`.

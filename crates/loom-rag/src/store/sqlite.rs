@@ -11,6 +11,8 @@ use crate::ledger::LedgerError;
 
 mod import;
 mod ledger;
+mod open;
+mod raw;
 mod schema;
 
 pub use ledger::SqliteLedger;
@@ -33,7 +35,7 @@ trait SqliteResultExt<T> {
     fn or_backend(self) -> crate::ledger::Result<T>;
 }
 
-impl<T> SqliteResultExt<T> for rusqlite::Result<T> {
+impl<T> SqliteResultExt<T> for diesel::QueryResult<T> {
     fn or_backend(self) -> crate::ledger::Result<T> {
         self.map_err(backend)
     }

@@ -1,11 +1,15 @@
 //! The first open of `index.db` next to a `ledger.redb` copies the redb ledger's caches.
 
+use std::cell::RefCell;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use diesel::prelude::*;
+use diesel::result::Error as DbError;
+use diesel::sqlite::SqliteConnection;
 
+use super::schema::{embeddings, llm_cache, meta};
 use super::{SqliteResultExt, split_key};
-use crate::ledger::{Result, read_caches};
+use crate::ledger::{LedgerError, Result, read_caches};
 
 /// The redb ledger next to `index.db`.
 const REDB_FILE: &str = "ledger.redb";
@@ -15,67 +19,83 @@ const IMPORT_KEY: &str = "redb_import";
 /// Copies the embedding and LLM caches of the `ledger.redb` next to `path` into the ledger,
 /// once, so a switch from redb does not re-embed anything. The redb file is only read. A
 /// redb file that cannot be read is reported and skipped: its embeddings are recomputed.
-pub(super) fn import_redb(conn: &mut Connection, path: &Path) -> Result<()> {
+pub(super) fn import_redb(conn: &mut SqliteConnection, path: &Path) -> Result<()> {
     let redb = path.with_file_name(REDB_FILE);
     if !redb.is_file() {
         return Ok(());
     }
-    let done = conn
-        .query_row("SELECT value FROM meta WHERE key = ?1", [IMPORT_KEY], |r| {
-            r.get::<_, String>(0)
-        })
+    let done: Option<String> = meta::table
+        .filter(meta::key.eq(IMPORT_KEY))
+        .select(meta::value)
+        .first(conn)
         .optional()
         .or_backend()?;
     if done.is_some() {
         return Ok(());
     }
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .or_backend()?;
-    match copy_caches(&tx, &redb) {
+    let mut failed: Option<LedgerError> = None;
+    let copied = conn.immediate_transaction::<_, DbError, _>(|tx| match copy_caches(tx, &redb) {
         Ok(()) => {
-            tx.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, '1')",
-                [IMPORT_KEY],
-            )
-            .or_backend()?;
-            tx.commit().or_backend()
-        }
-        Err(e) => {
-            eprintln!(
-                "warning: failed to import the caches of {}: {e}; embeddings will be recomputed",
-                redb.display()
-            );
-            // The copy rolls back with `tx`; record the failure so later opens do not retry it.
-            drop(tx);
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, 'failed')",
-                [IMPORT_KEY],
-            )
-            .or_backend()?;
+            diesel::replace_into(meta::table)
+                .values((meta::key.eq(IMPORT_KEY), meta::value.eq("1")))
+                .execute(tx)?;
             Ok(())
         }
-    }
+        Err(e) => {
+            failed = Some(e);
+            Err(DbError::RollbackTransaction)
+        }
+    });
+    let Some(e) = failed else {
+        return copied.or_backend();
+    };
+    eprintln!(
+        "warning: failed to import the caches of {}: {e}; embeddings will be recomputed",
+        redb.display()
+    );
+    // The copy rolled back with its transaction; record the failure so later opens do not retry it.
+    diesel::replace_into(meta::table)
+        .values((meta::key.eq(IMPORT_KEY), meta::value.eq("failed")))
+        .execute(conn)
+        .or_backend()?;
+    Ok(())
 }
 
-fn copy_caches(conn: &Connection, redb: &Path) -> Result<()> {
-    let mut put_embedding = conn
-        .prepare_cached("INSERT OR IGNORE INTO embeddings (model, hash, vec) VALUES (?1, ?2, ?3)")
-        .or_backend()?;
-    let mut put_llm = conn
-        .prepare_cached("INSERT OR IGNORE INTO llm_cache (model, prompt_hash, value) VALUES (?1, ?2, ?3)")
-        .or_backend()?;
+fn copy_caches(conn: &mut SqliteConnection, redb: &Path) -> Result<()> {
+    let conn = RefCell::new(conn);
     read_caches(
         redb,
         |key, vec| {
             let (model, hash) = split_key(key);
-            put_embedding.execute(params![model, hash, vec]).or_backend()?;
-            Ok(())
+            let row = (
+                embeddings::model.eq(model),
+                embeddings::hash.eq(hash),
+                embeddings::vec.eq(vec),
+            );
+            put(
+                diesel::insert_or_ignore_into(embeddings::table).values(row),
+                &conn,
+            )
         },
         |key, value| {
-            let (model, prompt_hash) = split_key(key);
-            put_llm.execute(params![model, prompt_hash, value]).or_backend()?;
-            Ok(())
+            let (model, hash) = split_key(key);
+            let row = (
+                llm_cache::model.eq(model),
+                llm_cache::prompt_hash.eq(hash),
+                llm_cache::value.eq(value),
+            );
+            put(diesel::insert_or_ignore_into(llm_cache::table).values(row), &conn)
         },
     )
+}
+
+/// Runs one insert on the connection the two cache copies share.
+fn put(
+    stmt: impl RunQueryDsl<SqliteConnection>
+    + diesel::query_builder::QueryFragment<diesel::sqlite::Sqlite>
+    + diesel::query_builder::QueryId,
+    conn: &RefCell<&mut SqliteConnection>,
+) -> Result<()> {
+    stmt.execute(&mut **conn.borrow_mut()).or_backend()?;
+    Ok(())
 }

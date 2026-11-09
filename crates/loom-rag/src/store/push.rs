@@ -3,13 +3,19 @@
 //! Everything runs in one transaction, so `--dry-run` executes the same statements and rolls
 //! them back: its report is exactly what a real push would do.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use postgres::Transaction;
+use diesel::prelude::*;
+use diesel::result::Error as DbError;
+use diesel::upsert::excluded;
 use serde::{Deserialize, Serialize};
 
-use super::pg::{LedgerOp, LexicalOp, Pg, VectorOp, apply_ledger, apply_lexical, apply_vector};
+use super::pg::schema::{rag_branch_heads, rag_commits, rag_snapshots};
+use super::pg::{
+    INSERT_ROWS, LedgerOp, LexicalOp, Pg, VectorOp, apply_ledger, apply_lexical, apply_vector,
+    present_embeddings, raw::compact as sql,
+};
 use crate::chunk::Chunk;
 use crate::graph::communities::Community;
 use crate::ledger::FileEntry;
@@ -119,15 +125,9 @@ pub struct CompactionReport {
     pub rows_orphaned: u64,
 }
 
-pub(crate) fn push(
-    pg: &Pg,
-    local: LocalIndex,
-    git: &GitState,
-    dry_run: bool,
-) -> Result<PushReport, postgres::Error> {
+pub(crate) fn push(pg: &Pg, local: LocalIndex, git: &GitState, dry_run: bool) -> Result<PushReport, DbError> {
     let repo = pg.repo;
-    let mut client = pg.client();
-    let mut tx = client.transaction()?;
+    let mut conn = pg.conn();
     let mut report = PushReport {
         dry_run,
         commit: git.head.clone(),
@@ -137,25 +137,31 @@ pub(crate) fn push(
         vectors: local.vectors.len(),
         ..PushReport::default()
     };
-    upload(&mut tx, repo, &local, &mut report)?;
-    record(&mut tx, repo, &local, git)?;
-    report.compaction = compact(&mut tx, repo)?;
-    if dry_run {
-        tx.rollback()?;
-    } else {
-        tx.commit()?;
+    let done = conn.transaction::<_, DbError, _>(|tx| {
+        upload(tx, repo, &local, &mut report)?;
+        record(tx, repo, &local, git)?;
+        report.compaction = compact(tx, repo)?;
+        // A dry run rolls everything back, so its report is what a real push does.
+        if dry_run {
+            Err(DbError::RollbackTransaction)
+        } else {
+            Ok(())
+        }
+    });
+    match done {
+        Ok(()) | Err(DbError::RollbackTransaction) => Ok(report),
+        Err(e) => Err(e),
     }
-    Ok(report)
 }
 
 /// Replaces the repository's current state in the tier with the local index; embeddings
 /// already in the tier are not sent again.
 fn upload(
-    tx: &mut Transaction<'_>,
+    tx: &mut PgConnection,
     repo: i32,
     local: &LocalIndex,
     report: &mut PushReport,
-) -> Result<(), postgres::Error> {
+) -> Result<(), DbError> {
     apply_ledger(tx, repo, LedgerOp::ClearIndex)?;
     for (path, entry) in &local.files {
         let entry = serde_json::to_value(entry).expect("file entries serialize");
@@ -165,20 +171,12 @@ fn upload(
         let value = serde_json::to_value(c).expect("chunks serialize");
         apply_ledger(tx, repo, LedgerOp::PutChunk(c.id.clone(), c.path.clone(), value))?;
     }
-    let (models, hashes): (Vec<&str>, Vec<&str>) = local
+    let keys: Vec<(String, String)> = local
         .embeddings
         .iter()
-        .map(|(m, h, _)| (m.as_str(), h.as_str()))
-        .unzip();
-    let present: HashSet<(String, String)> = tx
-        .query(
-            "SELECT e.model, e.hash FROM unnest($1::text[], $2::text[]) AS k(model, hash)
-             JOIN rag_embeddings e ON e.model = k.model AND e.hash = k.hash",
-            &[&models, &hashes],
-        )?
-        .into_iter()
-        .map(|r| (r.get(0), r.get(1)))
+        .map(|(m, h, _)| (m.clone(), h.clone()))
         .collect();
+    let present = present_embeddings(tx, &keys)?;
     for (model, hash, vec) in &local.embeddings {
         if !present.contains(&(model.clone(), hash.clone())) {
             apply_ledger(
@@ -210,123 +208,95 @@ fn upload(
     Ok(())
 }
 
-/// Records the commit graph, the branch heads and the chunks HEAD holds.
-fn record(
-    tx: &mut Transaction<'_>,
+#[derive(Insertable)]
+#[diesel(table_name = rag_commits)]
+struct NewCommit<'a> {
     repo: i32,
-    local: &LocalIndex,
-    git: &GitState,
-) -> Result<(), postgres::Error> {
-    for (sha, parents) in &git.commits {
-        tx.execute(
-            "INSERT INTO rag_commits (repo, sha, parents) VALUES ($1, $2, $3)
-             ON CONFLICT (repo, sha) DO NOTHING",
-            &[&repo, sha, parents],
-        )?;
+    sha: &'a str,
+    parents: &'a [String],
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = rag_snapshots)]
+struct NewSnapshot<'a> {
+    repo: i32,
+    sha: &'a str,
+    chunk: &'a str,
+    path: &'a str,
+    hash: &'a str,
+}
+
+/// Records the commit graph, the branch heads and the chunks HEAD holds.
+fn record(tx: &mut PgConnection, repo: i32, local: &LocalIndex, git: &GitState) -> Result<(), DbError> {
+    let commits: Vec<NewCommit<'_>> = git
+        .commits
+        .iter()
+        .map(|(sha, parents)| NewCommit { repo, sha, parents })
+        .collect();
+    for rows in commits.chunks(INSERT_ROWS) {
+        diesel::insert_into(rag_commits::table)
+            .values(rows)
+            .on_conflict_do_nothing()
+            .execute(tx)?;
     }
     // The pushing clone's branches (its own and origin's) are the tracked heads; a branch
     // deleted everywhere stops keeping its commits alive.
     let names: Vec<&str> = git.branches.iter().map(|(b, _)| b.as_str()).collect();
-    tx.execute(
-        "DELETE FROM rag_branch_heads WHERE repo = $1 AND branch <> ALL($2)",
-        &[&repo, &names],
-    )?;
+    diesel::delete(
+        rag_branch_heads::table
+            .filter(rag_branch_heads::repo.eq(repo))
+            .filter(diesel::dsl::not(rag_branch_heads::branch.eq_any(names))),
+    )
+    .execute(tx)?;
     for (branch, sha) in &git.branches {
-        tx.execute(
-            "INSERT INTO rag_branch_heads (repo, branch, sha, updated_at) VALUES ($1, $2, $3, now())
-             ON CONFLICT (repo, branch) DO UPDATE SET sha = EXCLUDED.sha, updated_at = now()",
-            &[&repo, branch, sha],
-        )?;
+        diesel::insert_into(rag_branch_heads::table)
+            .values((
+                rag_branch_heads::repo.eq(repo),
+                rag_branch_heads::branch.eq(branch),
+                rag_branch_heads::sha.eq(sha),
+                rag_branch_heads::updated_at.eq(diesel::dsl::now),
+            ))
+            .on_conflict((rag_branch_heads::repo, rag_branch_heads::branch))
+            .do_update()
+            .set((
+                rag_branch_heads::sha.eq(excluded(rag_branch_heads::sha)),
+                rag_branch_heads::updated_at.eq(diesel::dsl::now),
+            ))
+            .execute(tx)?;
     }
-    tx.execute(
-        "DELETE FROM rag_snapshots WHERE repo = $1 AND sha = $2",
-        &[&repo, &git.head],
-    )?;
-    let (ids, rest): (Vec<&str>, Vec<(&str, &str)>) = local
+    diesel::delete(
+        rag_snapshots::table.filter(rag_snapshots::repo.eq(repo).and(rag_snapshots::sha.eq(&git.head))),
+    )
+    .execute(tx)?;
+    let snapshots: Vec<NewSnapshot<'_>> = local
         .chunks
         .iter()
-        .map(|c| (c.id.as_str(), (c.path.as_str(), c.content_hash.as_str())))
-        .unzip();
-    let (paths, hashes): (Vec<&str>, Vec<&str>) = rest.into_iter().unzip();
-    tx.execute(
-        "INSERT INTO rag_snapshots (repo, sha, chunk, path, hash)
-         SELECT $1, $2, * FROM unnest($3::text[], $4::text[], $5::text[])
-         ON CONFLICT DO NOTHING",
-        &[&repo, &git.head, &ids, &paths, &hashes],
-    )?;
+        .map(|c| NewSnapshot {
+            repo,
+            sha: &git.head,
+            chunk: &c.id,
+            path: &c.path,
+            hash: &c.content_hash,
+        })
+        .collect();
+    for rows in snapshots.chunks(INSERT_ROWS) {
+        diesel::insert_into(rag_snapshots::table)
+            .values(rows)
+            .on_conflict_do_nothing()
+            .execute(tx)?;
+    }
     Ok(())
 }
 
 /// Removes what no branch can reach and what nothing uses.
-fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, postgres::Error> {
-    let mut r = CompactionReport::default();
-    let reachable = "WITH RECURSIVE reach(sha) AS (
-            SELECT sha FROM rag_branch_heads WHERE repo = $1
-            UNION
-            SELECT unnest(c.parents) FROM rag_commits c JOIN reach ON c.sha = reach.sha
-            WHERE c.repo = $1)";
-    r.snapshots_unreachable = tx.execute(
-        &format!("{reachable} DELETE FROM rag_snapshots s WHERE s.repo = $1 AND s.sha NOT IN (SELECT sha FROM reach)"),
-        &[&repo],
-    )?;
-    r.commits_unreachable = tx.execute(
-        &format!(
-            "{reachable} DELETE FROM rag_commits c WHERE c.repo = $1 AND c.sha NOT IN (SELECT sha FROM reach)"
-        ),
-        &[&repo],
-    )?;
-    // An older version of a path whose embedding nearly equals a newer one adds nothing:
-    // drop that path's snapshot rows of the old version, and the embedding once nothing else
-    // points at it. Embeddings are shared, so one that a chunk of any repository, a snapshot
-    // of another repository or another path's snapshot still uses is kept.
-    r.embeddings_near_duplicate = tx.execute(
-        "WITH old AS (
-            SELECT DISTINCT e.model, e.hash, s.path
-            FROM rag_snapshots s
-            JOIN rag_embeddings e ON e.hash = s.hash
-            WHERE s.repo = $1
-              AND NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.chunk->>'content_hash' = e.hash)
-              AND NOT EXISTS (SELECT 1 FROM rag_snapshots o WHERE o.hash = e.hash AND o.repo <> $1)
-              AND EXISTS (
-                SELECT 1 FROM rag_chunks c
-                JOIN rag_embeddings n ON n.model = e.model AND n.hash = c.chunk->>'content_hash'
-                WHERE c.repo = $1 AND c.path = s.path AND n.hash <> e.hash
-                  AND vector_dims(n.vec) = vector_dims(e.vec)
-                  AND (n.vec <=> e.vec) < $2)),
-         gone AS (
-            DELETE FROM rag_snapshots s USING old
-            WHERE s.repo = $1 AND s.path = old.path AND s.hash = old.hash)
-         DELETE FROM rag_embeddings e
-         WHERE (e.model, e.hash) IN (SELECT model, hash FROM old)
-           AND NOT EXISTS (
-             SELECT 1 FROM rag_snapshots s
-             WHERE s.hash = e.hash
-               AND NOT (s.repo = $1 AND EXISTS (
-                 SELECT 1 FROM old o WHERE o.path = s.path AND o.hash = s.hash)))",
-        &[&repo, &NEAR_DUPLICATE_DISTANCE],
-    )?;
-    r.embeddings_orphaned = tx.execute(
-        "DELETE FROM rag_embeddings e
-         WHERE NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.chunk->>'content_hash' = e.hash)
-           AND NOT EXISTS (SELECT 1 FROM rag_snapshots s WHERE s.hash = e.hash)",
-        &[],
-    )?;
-    for sql in [
-        "DELETE FROM rag_vectors v WHERE v.repo = $1
-           AND NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.repo = v.repo AND c.id = v.id)",
-        // Postings are the big table (about 200 per chunk): find the few orphan chunk ids
-        // first instead of probing every posting.
-        "DELETE FROM rag_postings p WHERE p.repo = $1 AND p.chunk IN (
-           SELECT DISTINCT chunk FROM rag_postings WHERE repo = $1
-           EXCEPT SELECT id FROM rag_chunks WHERE repo = $1)",
-        "DELETE FROM rag_docs d WHERE d.repo = $1
-           AND NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.repo = d.repo AND c.id = d.chunk)",
-        "DELETE FROM rag_community_chunks x WHERE x.repo = $1
-           AND NOT EXISTS (SELECT 1 FROM rag_chunks c WHERE c.repo = x.repo AND c.id = x.chunk)",
-    ] {
-        r.rows_orphaned += tx.execute(sql, &[&repo])?;
-    }
-    Ok(r)
+fn compact(tx: &mut PgConnection, repo: i32) -> Result<CompactionReport, DbError> {
+    Ok(CompactionReport {
+        snapshots_unreachable: sql::unreachable_snapshots(tx, repo)?,
+        commits_unreachable: sql::unreachable_commits(tx, repo)?,
+        embeddings_near_duplicate: sql::near_duplicate_embeddings(tx, repo, NEAR_DUPLICATE_DISTANCE)?,
+        embeddings_orphaned: sql::orphaned_embeddings(tx)?,
+        rows_orphaned: sql::orphaned_rows(tx, repo)?,
+    })
 }
 
 /// Run against PostgreSQL 16 + pgvector with `cargo test --features postgres`: a container
@@ -336,8 +306,12 @@ fn compact(tx: &mut Transaction<'_>, repo: i32) -> Result<CompactionReport, post
 mod tests {
     use std::path::Path;
 
+    use diesel::dsl::{exists, not};
+    use diesel::prelude::*;
+
     use crate::engine::Engine;
     use crate::store::StorageMode;
+    use crate::store::pg::schema::{rag_chunks, rag_commits, rag_embeddings, rag_repos, rag_snapshots};
     use crate::testutil::project;
 
     fn git(root: &Path, args: &[&str]) {
@@ -482,15 +456,16 @@ mod tests {
         a.index(false).unwrap();
         a.push(false).unwrap();
 
-        let mut client = postgres::Client::connect(&url, postgres::NoTls).unwrap();
-        let dangling: i64 = client
-            .query_one(
-                "SELECT count(*) FROM rag_snapshots s JOIN rag_repos r ON r.id = s.repo
-                 WHERE r.name = $1 AND NOT EXISTS (SELECT 1 FROM rag_embeddings e WHERE e.hash = s.hash)",
-                &[&b_repo],
-            )
-            .unwrap()
-            .get(0);
+        let mut conn = PgConnection::establish(&url).unwrap();
+        let dangling: i64 = rag_snapshots::table
+            .inner_join(rag_repos::table.on(rag_repos::id.eq(rag_snapshots::repo)))
+            .filter(rag_repos::name.eq(&b_repo))
+            .filter(not(exists(
+                rag_embeddings::table.filter(rag_embeddings::hash.eq(rag_snapshots::hash)),
+            )))
+            .count()
+            .get_result(&mut conn)
+            .unwrap();
         assert_eq!(dangling, 0, "repository B's snapshots lost their embeddings");
     }
 
@@ -528,53 +503,81 @@ mod tests {
         // An old version of p1.txt whose embedding equals the current p1.txt embedding (the
         // test embedder does not place near-identical text close together), and the same old
         // content at p2.txt in that commit.
-        let mut client = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        let mut conn = PgConnection::establish(&url).unwrap();
         let old_hash = format!("old{tag}");
-        let made = client
-            .execute(
-                "INSERT INTO rag_embeddings (model, hash, vec)
-                 SELECT n.model, $2, n.vec FROM rag_embeddings n, rag_chunks c, rag_repos r
-                 WHERE r.name = $1 AND c.repo = r.id AND c.path = 'p1.txt'
-                   AND n.hash = c.chunk->>'content_hash' LIMIT 1",
-                &[&repo, &old_hash],
-            )
+        let repo_id: i32 = rag_repos::table
+            .filter(rag_repos::name.eq(&repo))
+            .select(rag_repos::id)
+            .first(&mut conn)
             .unwrap();
-        assert_eq!(made, 1, "an embedding to copy exists");
-        let rows = client
-            .execute(
-                "INSERT INTO rag_snapshots (repo, sha, chunk, path, hash)
-                 SELECT r.id, c.sha, x.chunk, x.path, $2
-                 FROM rag_repos r, rag_commits c, (VALUES ('old-a', 'p1.txt'), ('old-b', 'p2.txt')) AS x(chunk, path)
-                 WHERE r.name = $1 AND c.repo = r.id AND cardinality(c.parents) = 0",
-                &[&repo, &old_hash],
-            )
+        let chunk: serde_json::Value = rag_chunks::table
+            .filter(rag_chunks::repo.eq(repo_id).and(rag_chunks::path.eq("p1.txt")))
+            .select(rag_chunks::chunk)
+            .first(&mut conn)
             .unwrap();
+        let current_hash = chunk["content_hash"].as_str().unwrap().to_string();
+        let (model, vec): (String, pgvector::Vector) = rag_embeddings::table
+            .filter(rag_embeddings::hash.eq(&current_hash))
+            .select((rag_embeddings::model, rag_embeddings::vec))
+            .first(&mut conn)
+            .unwrap();
+        diesel::insert_into(rag_embeddings::table)
+            .values((
+                rag_embeddings::model.eq(model),
+                rag_embeddings::hash.eq(&old_hash),
+                rag_embeddings::vec.eq(vec),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+        let roots: Vec<String> = rag_commits::table
+            .filter(rag_commits::repo.eq(repo_id))
+            .select((rag_commits::sha, rag_commits::parents))
+            .load::<(String, Vec<String>)>(&mut conn)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, parents)| parents.is_empty())
+            .map(|(sha, _)| sha)
+            .collect();
+        let mut rows = 0;
+        for sha in &roots {
+            for (chunk, path) in [("old-a", "p1.txt"), ("old-b", "p2.txt")] {
+                rows += diesel::insert_into(rag_snapshots::table)
+                    .values((
+                        rag_snapshots::repo.eq(repo_id),
+                        rag_snapshots::sha.eq(sha),
+                        rag_snapshots::chunk.eq(chunk),
+                        rag_snapshots::path.eq(path),
+                        rag_snapshots::hash.eq(&old_hash),
+                    ))
+                    .execute(&mut conn)
+                    .unwrap();
+            }
+        }
         assert_eq!(rows, 2);
         e.push(false).unwrap();
 
-        let snapshot = |client: &mut postgres::Client, chunk: &str| -> i64 {
-            client
-                .query_one(
-                    "SELECT count(*) FROM rag_snapshots s JOIN rag_repos r ON r.id = s.repo
-                     WHERE r.name = $1 AND s.chunk = $2",
-                    &[&repo, &chunk],
+        let snapshot = |conn: &mut PgConnection, chunk: &str| -> i64 {
+            rag_snapshots::table
+                .filter(
+                    rag_snapshots::repo
+                        .eq(repo_id)
+                        .and(rag_snapshots::chunk.eq(chunk)),
                 )
+                .count()
+                .get_result(conn)
                 .unwrap()
-                .get(0)
         };
         assert_eq!(
-            snapshot(&mut client, "old-a"),
+            snapshot(&mut conn, "old-a"),
             0,
             "the superseded p1.txt row is dropped"
         );
-        assert_eq!(snapshot(&mut client, "old-b"), 1, "p2.txt keeps its snapshot row");
-        let embedding: i64 = client
-            .query_one(
-                "SELECT count(*) FROM rag_embeddings WHERE hash = $1",
-                &[&old_hash],
-            )
-            .unwrap()
-            .get(0);
+        assert_eq!(snapshot(&mut conn, "old-b"), 1, "p2.txt keeps its snapshot row");
+        let embedding: i64 = rag_embeddings::table
+            .filter(rag_embeddings::hash.eq(&old_hash))
+            .count()
+            .get_result(&mut conn)
+            .unwrap();
         assert_eq!(embedding, 1, "p2.txt still uses the embedding");
     }
 }

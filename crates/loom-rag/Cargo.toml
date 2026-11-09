@@ -24,18 +24,20 @@ hf-hub = { version = "1.0.0", default-features = false, features = ["blocking", 
 tokenizers = { version = "1.0.0-rc.3", default-features = false, features = ["regex", "normalizers", "bpe", "wordpiece", "unigram", "wordlevel", "unicode-scripts", "parallelism"], optional = true }
 oxillama-runtime = { version = "0.1.4", default-features = false, features = ["qwen3", "llama", "gemma", "mistral", "phi", "tokenizer-wasm", "parallel", "mmap"], optional = true }
 blake3 = "1.8.7"
-dendrite-core-rs = { git = "https://github.com/yasuomaidana/dendrite-core-rs", branch = "develop", version = "0.1.0" }
-embedag = { git = "https://github.com/yasuomaidana/embedag", branch = "develop", version = "0.1.0", default-features = false, features = ["core"] }
+dendrite-core-rs = { git = "https://github.com/yasuomaidana/dendrite-core-rs", version = "0.1.0" }
+embedag = { version = "0.1.1", default-features = false, features = ["core"] }
 globset = "0.4.20"
 ignore = "0.4.33"
 lru = "0.19.0"
-pgvector = { version = "0.4.2", features = ["postgres"], optional = true }
-postgres = { version = "0.19.14", features = ["with-serde_json-1"], optional = true }
-model2vec-rs = { version = "0.3.0", default-features = false, features = ["fancy-regex", "hf-hub"], optional = true }
+diesel = { version = "2.3", default-features = false, features = ["serde_json"], optional = true }
+diesel_migrations = { version = "2.3", default-features = false, optional = true }
+pgvector = { version = "0.4.2", features = ["diesel"], optional = true }
+pq-sys = { version = "0.7", features = ["bundled"], optional = true }
+model2vec-rs = { version = "0.4.0", default-features = false, features = ["fancy-regex", "hf-hub"], optional = true }
 rayon = "1.12.0"
 redb = "4.4.0"
 regex = "1.13.1"
-rusqlite = { version = "=0.40.2", features = ["bundled"], optional = true }
+libsqlite3-sys = { version = "0.35", features = ["bundled"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 streaming-iterator = "0.1.9"
@@ -59,7 +61,7 @@ dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
-libc = "0.2.191"
+libc = "1.0.0-alpha.5"
 rstest = "0.28.0"
 tempfile = "3.27.0"
 testcontainers = { version = "0.28.0", features = ["blocking"] }
@@ -71,9 +73,9 @@ testutil = ["dep:tempfile"]
 # Heap profiling for the peak-heap gate (`tests/peak_heap.rs`).
 dhat = ["dep:dhat"]
 # Shared tier on PostgreSQL 16 + pgvector (`[storage] mode = "remote"`).
-postgres = ["dep:postgres", "dep:pgvector"]
+postgres = ["dep:diesel", "diesel/postgres", "dep:diesel_migrations", "diesel_migrations/postgres", "dep:pgvector", "dep:pq-sys"]
 # Local ledger in SQLite (`[storage] ledger = "sqlite"`).
-sqlite = ["dep:rusqlite"]
+sqlite = ["dep:diesel", "diesel/sqlite", "diesel/returning_clauses_for_sqlite_3_35", "dep:diesel_migrations", "diesel_migrations/sqlite", "dep:libsqlite3-sys"]
 # Approximate nearest-neighbour index for large corpora.
 hnsw = []
 # In-process static embeddings (model2vec), for fully offline indexing.

@@ -1,27 +1,63 @@
 //! The ledger on SQLite: files, chunks, embeddings, metadata and communities.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::{Connection, OptionalExtension, Params, TransactionBehavior, params};
+use diesel::prelude::*;
+use diesel::result::Error as DbError;
+use diesel::sqlite::SqliteConnection;
 
-use super::{SqliteResultExt, import, schema, split_key};
+use super::schema::{
+    chunks, communities, community_chunks, community_files, concepts, embeddings, files, llm_cache, meta,
+};
+use super::{SqliteResultExt, import, open, split_key};
 use crate::chunk::Chunk;
 use crate::graph::communities::Community;
 use crate::ledger::{FileEntry, Result, decode_f32, encode_f32};
 use crate::store::{LedgerStore, LedgerWrite};
 
+/// One column of the row of `t` with primary key `key`, if there is one.
+macro_rules! find {
+    ($self:expr, $t:ident, $col:ident, $key:expr) => {
+        $self.read(|c| {
+            $t::table
+                .find($key)
+                .select($t::$col)
+                .first(c)
+                .optional()
+                .or_backend()
+        })
+    };
+}
+
+/// `INSERT OR REPLACE` of one row.
+macro_rules! put {
+    ($conn:expr, $t:ident { $($c:ident : $v:expr),+ }) => {
+        diesel::replace_into($t::table)
+            .values(($($t::$c.eq($v)),+))
+            .execute($conn)?
+    };
+}
+
 /// Read connections beside the write connection.
 const READERS: usize = 4;
 
 /// The SQLite ledger: one write connection and a small pool of read connections.
-#[derive(Debug)]
 pub struct SqliteLedger {
-    writer: Mutex<Connection>,
-    readers: Vec<Mutex<Connection>>,
+    writer: Mutex<SqliteConnection>,
+    readers: Vec<Mutex<SqliteConnection>>,
     next: AtomicUsize,
+}
+
+impl fmt::Debug for SqliteLedger {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqliteLedger")
+            .field("readers", &self.readers.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SqliteLedger {
@@ -29,11 +65,11 @@ impl SqliteLedger {
     /// older content schema is cleared (embeddings are kept), and the first open next to a
     /// `ledger.redb` copies its embedding and LLM caches.
     pub fn open(path: &Path) -> Result<Self> {
-        let mut writer = schema::open_writer(path)?;
+        let mut writer = open::open_writer(path)?;
         import::import_redb(&mut writer, path)?;
         let mut readers = Vec::with_capacity(READERS);
         for _ in 0..READERS {
-            readers.push(Mutex::new(schema::open_reader(path)?));
+            readers.push(Mutex::new(open::open_reader(path)?));
         }
         Ok(Self {
             writer: Mutex::new(writer),
@@ -43,100 +79,76 @@ impl SqliteLedger {
     }
 
     /// A free read connection if there is one, else the next in turn.
-    fn reader(&self) -> MutexGuard<'_, Connection> {
+    fn reader(&self) -> MutexGuard<'_, SqliteConnection> {
         crate::store::pick_connection(&self.readers, &self.next, "sqlite reader")
     }
 
-    fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        f(&self.reader())
-    }
-
-    /// The one text column of the row `sql` selects with `params`, if there is one.
-    fn text(&self, sql: &str, params: impl Params) -> Result<Option<String>> {
-        self.read(|c| {
-            c.prepare_cached(sql)
-                .or_backend()?
-                .query_row(params, |r| r.get::<_, String>(0))
-                .optional()
-                .or_backend()
-        })
-    }
-
-    /// The number a `SELECT count(*)` returns.
-    fn count(&self, sql: &str) -> Result<u64> {
-        let n = self.read(|c| c.query_row(sql, [], |r| r.get::<_, i64>(0)).or_backend())?;
-        Ok(n as u64)
+    fn read<T>(&self, f: impl FnOnce(&mut SqliteConnection) -> Result<T>) -> Result<T> {
+        f(&mut self.reader())
     }
 }
 
 impl LedgerStore for SqliteLedger {
     fn files(&self) -> Result<BTreeMap<String, FileEntry>> {
-        self.read(|c| {
-            let mut stmt = c.prepare_cached("SELECT path, entry FROM files").or_backend()?;
-            let mut rows = stmt.query([]).or_backend()?;
-            let mut out: BTreeMap<String, FileEntry> = BTreeMap::new();
-            while let Some(row) = rows.next().or_backend()? {
-                let entry = row.get::<_, String>(1).or_backend()?;
-                out.insert(
-                    row.get::<_, String>(0).or_backend()?,
-                    serde_json::from_str(&entry)?,
-                );
-            }
-            Ok(out)
-        })
+        let rows: Vec<(String, String)> = self.read(|c| {
+            files::table
+                .select((files::path, files::entry))
+                .load(c)
+                .or_backend()
+        })?;
+        rows.into_iter()
+            .map(|(path, entry)| Ok((path, serde_json::from_str(&entry)?)))
+            .collect()
     }
 
     fn chunk(&self, id: &str) -> Result<Option<Chunk>> {
-        Ok(
-            match self.text("SELECT record FROM chunks WHERE id = ?1", params![id])? {
-                Some(s) => Some(serde_json::from_str(&s)?),
-                None => None,
-            },
-        )
+        let record: Option<String> = find!(self, chunks, record, id)?;
+        Ok(record.map(|s| serde_json::from_str(&s)).transpose()?)
     }
 
     /// Loads several chunks in one read transaction; missing ids are skipped.
     fn chunks(&self, ids: &[String]) -> Result<Vec<Chunk>> {
         self.read(|c| {
-            let tx = c.unchecked_transaction().or_backend()?;
-            let mut stmt = tx
-                .prepare_cached("SELECT record FROM chunks WHERE id = ?1")
+            let records = c
+                .transaction::<_, DbError, _>(|tx| {
+                    let mut out = Vec::with_capacity(ids.len());
+                    for id in ids {
+                        let record: Option<String> = chunks::table
+                            .find(id)
+                            .select(chunks::record)
+                            .first(tx)
+                            .optional()?;
+                        out.extend(record);
+                    }
+                    Ok(out)
+                })
                 .or_backend()?;
-            let mut out: Vec<Chunk> = Vec::with_capacity(ids.len());
-            for id in ids {
-                let record = stmt
-                    .query_row([id], |r| r.get::<_, String>(0))
-                    .optional()
-                    .or_backend()?;
-                if let Some(s) = record {
-                    out.push(serde_json::from_str(&s)?);
-                }
-            }
-            Ok(out)
+            records.iter().map(|s| Ok(serde_json::from_str(s)?)).collect()
         })
     }
 
-    /// Visits every stored chunk, in id order, one row at a time.
+    /// Visits every stored chunk, in id order.
     fn for_each_chunk(&self, f: &mut dyn FnMut(Chunk)) -> Result<()> {
         self.read(|c| {
-            let mut stmt = c
-                .prepare_cached("SELECT record FROM chunks ORDER BY id")
+            let rows = chunks::table
+                .order(chunks::id)
+                .select(chunks::record)
+                .load_iter::<String, diesel::connection::DefaultLoadingMode>(c)
                 .or_backend()?;
-            let mut rows = stmt.query([]).or_backend()?;
-            while let Some(row) = rows.next().or_backend()? {
-                let record = row.get::<_, String>(0).or_backend()?;
-                f(serde_json::from_str(&record)?);
+            for record in rows {
+                f(serde_json::from_str(&record.or_backend()?)?);
             }
             Ok(())
         })
     }
 
     fn chunk_count(&self) -> Result<u64> {
-        self.count("SELECT count(*) FROM chunks")
+        let n: i64 = self.read(|c| chunks::table.count().get_result(c).or_backend())?;
+        Ok(n as u64)
     }
 
     fn meta(&self, key: &str) -> Result<Option<String>> {
-        self.text("SELECT value FROM meta WHERE key = ?1", params![key])
+        find!(self, meta, value, key)
     }
 
     /// A cached embedding for `key` (`model ‖ content_hash`).
@@ -147,90 +159,76 @@ impl LedgerStore for SqliteLedger {
     /// Several cached embeddings in one read transaction, in the order of `keys`.
     fn embeddings(&self, keys: &[String]) -> Result<Vec<Option<Vec<f32>>>> {
         self.read(|c| {
-            let tx = c.unchecked_transaction().or_backend()?;
-            let mut stmt = tx
-                .prepare_cached("SELECT vec FROM embeddings WHERE model = ?1 AND hash = ?2")
-                .or_backend()?;
-            let mut out = Vec::with_capacity(keys.len());
-            for key in keys {
-                let (model, hash) = split_key(key);
-                let blob = stmt
-                    .query_row(params![model, hash], |r| r.get::<_, Vec<u8>>(0))
-                    .optional()
-                    .or_backend()?;
-                out.push(blob.map(|b| decode_f32(&b)));
-            }
-            Ok(out)
+            c.transaction::<_, DbError, _>(|tx| {
+                let mut out = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let (model, hash) = split_key(key);
+                    let blob: Option<Vec<u8>> = embeddings::table
+                        .find((model, hash))
+                        .select(embeddings::vec)
+                        .first(tx)
+                        .optional()?;
+                    out.push(blob.map(|b| decode_f32(&b)));
+                }
+                Ok(out)
+            })
+            .or_backend()
         })
     }
 
     fn embedding_count(&self) -> Result<u64> {
-        self.count("SELECT count(*) FROM embeddings")
+        let n: i64 = self.read(|c| embeddings::table.count().get_result(c).or_backend())?;
+        Ok(n as u64)
     }
 
     /// The community id of every file.
     fn community_files(&self) -> Result<BTreeMap<String, u32>> {
-        self.read(|c| {
-            let mut stmt = c
-                .prepare_cached("SELECT path, cid FROM community_files")
-                .or_backend()?;
-            let mut rows = stmt.query([]).or_backend()?;
-            let mut out = BTreeMap::new();
-            while let Some(row) = rows.next().or_backend()? {
-                out.insert(
-                    row.get::<_, String>(0).or_backend()?,
-                    row.get::<_, u32>(1).or_backend()?,
-                );
-            }
-            Ok(out)
-        })
+        let rows: Vec<(String, i32)> = self.read(|c| {
+            community_files::table
+                .select((community_files::path, community_files::cid))
+                .load(c)
+                .or_backend()
+        })?;
+        Ok(rows.into_iter().map(|(p, id)| (p, id as u32)).collect())
     }
 
     fn community_of_chunk(&self, chunk: &str) -> Result<Option<u32>> {
+        let cid: Option<i32> = find!(self, community_chunks, cid, chunk)?;
+        Ok(cid.map(|id| id as u32))
+    }
+
+    fn community(&self, id: u32) -> Result<Option<Community>> {
+        let record: Option<String> = find!(self, communities, record, id as i32)?;
+        Ok(record.map(|s| serde_json::from_str(&s)).transpose()?)
+    }
+
+    /// Every community, by id.
+    fn communities(&self) -> Result<Vec<Community>> {
+        let rows: Vec<String> = self.read(|c| {
+            communities::table
+                .order(communities::id)
+                .select(communities::record)
+                .load(c)
+                .or_backend()
+        })?;
+        rows.iter().map(|s| Ok(serde_json::from_str(s)?)).collect()
+    }
+
+    /// A cached LLM completion for `(model, prompt_hash)`.
+    fn llm_cache(&self, model: &str, prompt_hash: &str) -> Result<Option<String>> {
         self.read(|c| {
-            c.prepare_cached("SELECT cid FROM community_chunks WHERE chunk = ?1")
-                .or_backend()?
-                .query_row([chunk], |r| r.get::<_, u32>(0))
+            llm_cache::table
+                .find((model, prompt_hash))
+                .select(llm_cache::value)
+                .first(c)
                 .optional()
                 .or_backend()
         })
     }
 
-    fn community(&self, id: u32) -> Result<Option<Community>> {
-        Ok(
-            match self.text("SELECT record FROM communities WHERE id = ?1", params![id])? {
-                Some(s) => Some(serde_json::from_str(&s)?),
-                None => None,
-            },
-        )
-    }
-
-    /// Every community, by id.
-    fn communities(&self) -> Result<Vec<Community>> {
-        self.read(|c| {
-            let mut stmt = c
-                .prepare_cached("SELECT record FROM communities ORDER BY id")
-                .or_backend()?;
-            let mut rows = stmt.query([]).or_backend()?;
-            let mut out: Vec<Community> = Vec::new();
-            while let Some(row) = rows.next().or_backend()? {
-                out.push(serde_json::from_str(&row.get::<_, String>(0).or_backend()?)?);
-            }
-            Ok(out)
-        })
-    }
-
-    /// A cached LLM completion for `(model, prompt_hash)`.
-    fn llm_cache(&self, model: &str, prompt_hash: &str) -> Result<Option<String>> {
-        self.text(
-            "SELECT value FROM llm_cache WHERE model = ?1 AND prompt_hash = ?2",
-            params![model, prompt_hash],
-        )
-    }
-
     /// Extracted concepts for a file path (JSON list).
     fn concepts(&self, path: &str) -> Result<Option<String>> {
-        self.text("SELECT value FROM concepts WHERE path = ?1", params![path])
+        find!(self, concepts, value, path)
     }
 
     /// Starts a write batch; nothing is visible until it is committed.
@@ -361,86 +359,122 @@ impl LedgerWrite for SqliteLedgerWrite<'_> {
             return Ok(());
         }
         let mut conn = self.ledger.writer.lock().expect("sqlite writer lock");
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .or_backend()?;
-        for op in self.ops {
-            apply(&tx, op).or_backend()?;
-        }
-        tx.commit().or_backend()
-    }
-}
-
-/// Runs one cached statement.
-fn run(conn: &Connection, sql: &str, params: impl Params) -> rusqlite::Result<()> {
-    conn.prepare_cached(sql)?.execute(params)?;
-    Ok(())
-}
-
-fn apply(conn: &Connection, op: LedgerOp) -> rusqlite::Result<()> {
-    match op {
-        LedgerOp::PutFile(path, entry) => run(
-            conn,
-            "INSERT OR REPLACE INTO files (path, entry) VALUES (?1, ?2)",
-            params![path, entry],
-        ),
-        LedgerOp::RemoveFile(path) => run(conn, "DELETE FROM files WHERE path = ?1", params![path]),
-        LedgerOp::PutChunk(id, path, content_hash, record) => run(
-            conn,
-            "INSERT OR REPLACE INTO chunks (id, path, content_hash, record) VALUES (?1, ?2, ?3, ?4)",
-            params![id, path, content_hash, record],
-        ),
-        LedgerOp::RemoveChunk(id) => run(conn, "DELETE FROM chunks WHERE id = ?1", params![id]),
-        LedgerOp::PutEmbedding(model, hash, vec) => run(
-            conn,
-            "INSERT OR REPLACE INTO embeddings (model, hash, vec) VALUES (?1, ?2, ?3)",
-            params![model, hash, vec],
-        ),
-        LedgerOp::SetMeta(key, value) => run(
-            conn,
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        ),
-        LedgerOp::PutLlmCache(model, prompt_hash, value) => run(
-            conn,
-            "INSERT OR REPLACE INTO llm_cache (model, prompt_hash, value) VALUES (?1, ?2, ?3)",
-            params![model, prompt_hash, value],
-        ),
-        LedgerOp::PutConcepts(path, value) => run(
-            conn,
-            "INSERT OR REPLACE INTO concepts (path, value) VALUES (?1, ?2)",
-            params![path, value],
-        ),
-        LedgerOp::RemoveConcepts(path) => run(conn, "DELETE FROM concepts WHERE path = ?1", params![path]),
-        LedgerOp::PutCommunities(records, by_file, by_chunk) => {
-            conn.execute_batch(
-                "DELETE FROM communities; DELETE FROM community_files; DELETE FROM community_chunks;",
-            )?;
-            for (id, record) in records {
-                run(
-                    conn,
-                    "INSERT OR REPLACE INTO communities (id, record) VALUES (?1, ?2)",
-                    params![id, record],
-                )?;
-            }
-            for (path, id) in by_file {
-                run(
-                    conn,
-                    "INSERT OR REPLACE INTO community_files (path, cid) VALUES (?1, ?2)",
-                    params![path, id],
-                )?;
-            }
-            for (chunk, id) in by_chunk {
-                run(
-                    conn,
-                    "INSERT OR REPLACE INTO community_chunks (chunk, cid) VALUES (?1, ?2)",
-                    params![chunk, id],
-                )?;
+        conn.immediate_transaction::<_, DbError, _>(|tx| {
+            for op in self.ops {
+                apply(tx, op)?;
             }
             Ok(())
+        })
+        .or_backend()
+    }
+}
+
+fn apply(conn: &mut SqliteConnection, op: LedgerOp) -> diesel::QueryResult<()> {
+    match op {
+        LedgerOp::PutFile(path, entry) => {
+            put!(
+                conn,
+                files {
+                    path: path,
+                    entry: entry
+                }
+            );
+        }
+        LedgerOp::RemoveFile(path) => {
+            diesel::delete(files::table.find(path)).execute(conn)?;
+        }
+        LedgerOp::PutChunk(id, path, content_hash, record) => {
+            put!(
+                conn,
+                chunks {
+                    id: id,
+                    path: path,
+                    content_hash: content_hash,
+                    record: record
+                }
+            );
+        }
+        LedgerOp::RemoveChunk(id) => {
+            diesel::delete(chunks::table.find(id)).execute(conn)?;
+        }
+        LedgerOp::PutEmbedding(model, hash, vec) => {
+            put!(
+                conn,
+                embeddings {
+                    model: model,
+                    hash: hash,
+                    vec: vec
+                }
+            );
+        }
+        LedgerOp::SetMeta(key, value) => {
+            put!(
+                conn,
+                meta {
+                    key: key,
+                    value: value
+                }
+            );
+        }
+        LedgerOp::PutLlmCache(model, prompt_hash, value) => {
+            put!(
+                conn,
+                llm_cache {
+                    model: model,
+                    prompt_hash: prompt_hash,
+                    value: value
+                }
+            );
+        }
+        LedgerOp::PutConcepts(path, value) => {
+            put!(
+                conn,
+                concepts {
+                    path: path,
+                    value: value
+                }
+            );
+        }
+        LedgerOp::RemoveConcepts(path) => {
+            diesel::delete(concepts::table.find(path)).execute(conn)?;
+        }
+        LedgerOp::PutCommunities(records, by_file, by_chunk) => {
+            diesel::delete(communities::table).execute(conn)?;
+            diesel::delete(community_files::table).execute(conn)?;
+            diesel::delete(community_chunks::table).execute(conn)?;
+            for (id, record) in records {
+                put!(
+                    conn,
+                    communities {
+                        id: id as i32,
+                        record: record
+                    }
+                );
+            }
+            for (path, id) in by_file {
+                put!(
+                    conn,
+                    community_files {
+                        path: path,
+                        cid: id as i32
+                    }
+                );
+            }
+            for (chunk, id) in by_chunk {
+                put!(
+                    conn,
+                    community_chunks {
+                        chunk: chunk,
+                        cid: id as i32
+                    }
+                );
+            }
         }
         LedgerOp::ClearIndex => {
-            conn.execute_batch("DELETE FROM files; DELETE FROM chunks; DELETE FROM concepts;")
+            diesel::delete(files::table).execute(conn)?;
+            diesel::delete(chunks::table).execute(conn)?;
+            diesel::delete(concepts::table).execute(conn)?;
         }
     }
+    Ok(())
 }

@@ -1,85 +1,61 @@
 //! The ledger on PostgreSQL: files, chunks, embeddings, metadata and communities.
 
+use std::collections::HashSet;
+
+use super::dsl::{insert_rows, lookup, remove, rows, upsert};
+use super::schema::{
+    rag_chunks, rag_communities, rag_community_chunks, rag_community_files, rag_concepts, rag_embeddings,
+    rag_files, rag_llm_cache, rag_meta,
+};
 use super::*;
 
 pub(crate) struct PgLedger(pub(crate) Arc<Pg>);
 
 impl LedgerStore for PgLedger {
     fn files(&self) -> crate::ledger::Result<BTreeMap<String, FileEntry>> {
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT path, entry FROM rag_files WHERE repo = $1",
-                &[&self.0.repo],
-            )
-            .map_err(backend)?;
-        rows.into_iter()
-            .map(|r| Ok((r.get(0), serde_json::from_value(r.get::<_, Value>(1))?)))
-            .collect()
+        let rows: Vec<(String, Value)> = rows!(self.0, rag_files, (rag_files::path, rag_files::entry))?;
+        rows.into_iter().map(|(p, v)| Ok((p, decode(v)?))).collect()
     }
 
     fn chunk(&self, id: &str) -> crate::ledger::Result<Option<Chunk>> {
-        let row = self
-            .0
-            .client()
-            .query_opt(
-                "SELECT chunk FROM rag_chunks WHERE repo = $1 AND id = $2",
-                &[&self.0.repo, &id],
-            )
-            .map_err(backend)?;
-        Ok(match row {
-            Some(r) => Some(serde_json::from_value(r.get::<_, Value>(0))?),
-            None => None,
-        })
+        let row: Option<Value> = lookup!(self.0, rag_chunks, chunk, id = id)?;
+        Ok(row.map(decode).transpose()?)
     }
 
     fn chunks(&self, ids: &[String]) -> crate::ledger::Result<Vec<Chunk>> {
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT id, chunk FROM rag_chunks WHERE repo = $1 AND id = ANY($2)",
-                &[&self.0.repo, &ids],
-            )
-            .map_err(backend)?;
-        let mut by_id: HashMap<String, Value> = rows.into_iter().map(|r| (r.get(0), r.get(1))).collect();
+        let rows: Vec<(String, Value)> = self.0.run(|c| {
+            rag_chunks::table
+                .filter(rag_chunks::repo.eq(self.0.repo).and(rag_chunks::id.eq_any(ids)))
+                .select((rag_chunks::id, rag_chunks::chunk))
+                .load(c)
+        })?;
+        let mut by_id: HashMap<String, Value> = rows.into_iter().collect();
         ids.iter()
             .filter_map(|id| by_id.remove(id))
-            .map(|v| Ok(serde_json::from_value(v)?))
+            .map(|v| Ok(decode(v)?))
             .collect()
     }
 
     fn for_each_chunk(&self, f: &mut dyn FnMut(Chunk)) -> crate::ledger::Result<()> {
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT chunk FROM rag_chunks WHERE repo = $1 ORDER BY id",
-                &[&self.0.repo],
-            )
-            .map_err(backend)?;
+        let rows: Vec<Value> = rows!(self.0, rag_chunks, rag_chunks::chunk, order id)?;
         for r in rows {
-            f(serde_json::from_value(r.get::<_, Value>(0))?);
+            f(decode(r)?);
         }
         Ok(())
     }
 
     fn chunk_count(&self) -> crate::ledger::Result<u64> {
-        let n: i64 = self
-            .0
-            .client()
-            .query_one("SELECT count(*) FROM rag_chunks WHERE repo = $1", &[&self.0.repo])
-            .map_err(backend)?
-            .get(0);
+        let n: i64 = self.0.run(|c| {
+            rag_chunks::table
+                .filter(rag_chunks::repo.eq(self.0.repo))
+                .count()
+                .get_result(c)
+        })?;
         Ok(n as u64)
     }
 
     fn meta(&self, key: &str) -> crate::ledger::Result<Option<String>> {
-        self.0.text_opt(
-            "SELECT value FROM rag_meta WHERE repo = $1 AND key = $2",
-            &[&self.0.repo, &key],
-        )
+        lookup!(self.0, rag_meta, value, key = key)
     }
 
     fn embedding(&self, key: &str) -> crate::ledger::Result<Option<Vec<f32>>> {
@@ -87,21 +63,26 @@ impl LedgerStore for PgLedger {
     }
 
     fn embeddings(&self, keys: &[String]) -> crate::ledger::Result<Vec<Option<Vec<f32>>>> {
-        let (models, hashes): (Vec<&str>, Vec<&str>) = keys.iter().map(|k| split_key(k)).unzip();
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT e.model, e.hash, e.vec
-                 FROM unnest($1::text[], $2::text[]) AS k(model, hash)
-                 JOIN rag_embeddings e ON e.model = k.model AND e.hash = k.hash",
-                &[&models, &hashes],
-            )
-            .map_err(backend)?;
-        let mut found: HashMap<(String, String), Vec<f32>> = rows
-            .into_iter()
-            .map(|r| ((r.get(0), r.get(1)), r.get::<_, Vector>(2).to_vec()))
-            .collect();
+        // One query per model (in practice one): `hash = ANY(..)` within the model.
+        let mut by_model: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for k in keys {
+            let (m, h) = split_key(k);
+            by_model.entry(m).or_default().push(h);
+        }
+        let mut found: HashMap<(String, String), Vec<f32>> = HashMap::new();
+        for (model, hashes) in by_model {
+            let rows: Vec<(String, String, Vector)> = self.0.run(|c| {
+                rag_embeddings::table
+                    .filter(
+                        rag_embeddings::model
+                            .eq(model)
+                            .and(rag_embeddings::hash.eq_any(hashes)),
+                    )
+                    .select((rag_embeddings::model, rag_embeddings::hash, rag_embeddings::vec))
+                    .load(c)
+            })?;
+            found.extend(rows.into_iter().map(|(m, h, v)| ((m, h), v.to_vec())));
+        }
         Ok(keys
             .iter()
             .map(|k| {
@@ -112,83 +93,46 @@ impl LedgerStore for PgLedger {
     }
 
     fn embedding_count(&self) -> crate::ledger::Result<u64> {
-        let n: i64 = self
-            .0
-            .client()
-            .query_one("SELECT count(*) FROM rag_embeddings", &[])
-            .map_err(backend)?
-            .get(0);
+        let n: i64 = self.0.run(|c| rag_embeddings::table.count().get_result(c))?;
         Ok(n as u64)
     }
 
     fn community_files(&self) -> crate::ledger::Result<BTreeMap<String, u32>> {
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT path, cid FROM rag_community_files WHERE repo = $1",
-                &[&self.0.repo],
-            )
-            .map_err(backend)?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.get(0), r.get::<_, i32>(1) as u32))
-            .collect())
+        let rows: Vec<(String, i32)> = rows!(
+            self.0,
+            rag_community_files,
+            (rag_community_files::path, rag_community_files::cid)
+        )?;
+        Ok(rows.into_iter().map(|(p, c)| (p, c as u32)).collect())
     }
 
     fn community_of_chunk(&self, chunk: &str) -> crate::ledger::Result<Option<u32>> {
-        Ok(self
-            .0
-            .client()
-            .query_opt(
-                "SELECT cid FROM rag_community_chunks WHERE repo = $1 AND chunk = $2",
-                &[&self.0.repo, &chunk],
-            )
-            .map_err(backend)?
-            .map(|r| r.get::<_, i32>(0) as u32))
+        let cid: Option<i32> = lookup!(self.0, rag_community_chunks, cid, chunk = chunk)?;
+        Ok(cid.map(|c| c as u32))
     }
 
     fn community(&self, id: u32) -> crate::ledger::Result<Option<Community>> {
-        let row = self
-            .0
-            .client()
-            .query_opt(
-                "SELECT record FROM rag_communities WHERE repo = $1 AND id = $2",
-                &[&self.0.repo, &(id as i32)],
-            )
-            .map_err(backend)?;
-        Ok(match row {
-            Some(r) => Some(serde_json::from_value(r.get::<_, Value>(0))?),
-            None => None,
-        })
+        let row: Option<Value> = lookup!(self.0, rag_communities, record, id = id as i32)?;
+        Ok(row.map(decode).transpose()?)
     }
 
     fn communities(&self) -> crate::ledger::Result<Vec<Community>> {
-        let rows = self
-            .0
-            .client()
-            .query(
-                "SELECT record FROM rag_communities WHERE repo = $1 ORDER BY id",
-                &[&self.0.repo],
-            )
-            .map_err(backend)?;
-        rows.into_iter()
-            .map(|r| Ok(serde_json::from_value(r.get::<_, Value>(0))?))
-            .collect()
+        let rows: Vec<Value> = rows!(self.0, rag_communities, rag_communities::record, order id)?;
+        rows.into_iter().map(|r| Ok(decode(r)?)).collect()
     }
 
     fn llm_cache(&self, model: &str, prompt_hash: &str) -> crate::ledger::Result<Option<String>> {
-        self.0.text_opt(
-            "SELECT value FROM rag_llm_cache WHERE model = $1 AND prompt_hash = $2",
-            &[&model, &prompt_hash],
-        )
+        self.0.run(|c| {
+            rag_llm_cache::table
+                .find((model, prompt_hash))
+                .select(rag_llm_cache::value)
+                .first(c)
+                .optional()
+        })
     }
 
     fn concepts(&self, path: &str) -> crate::ledger::Result<Option<String>> {
-        self.0.text_opt(
-            "SELECT concepts FROM rag_concepts WHERE repo = $1 AND path = $2",
-            &[&self.0.repo, &path],
-        )
+        lookup!(self.0, rag_concepts, concepts, path = path)
     }
 
     fn batch(&self) -> crate::ledger::Result<Box<dyn LedgerWrite + '_>> {
@@ -197,6 +141,34 @@ impl LedgerStore for PgLedger {
             ops: Vec::new(),
         }))
     }
+}
+
+fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, serde_json::Error> {
+    serde_json::from_value(v)
+}
+
+/// Which of the `(model, hash)` pairs the embedding cache already holds.
+pub(crate) fn present_embeddings(
+    conn: &mut PgConnection,
+    pairs: &[(String, String)],
+) -> Result<HashSet<(String, String)>, DbError> {
+    let mut by_model: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (m, h) in pairs {
+        by_model.entry(m).or_default().push(h);
+    }
+    let mut present = HashSet::new();
+    for (model, hashes) in by_model {
+        let rows: Vec<(String, String)> = rag_embeddings::table
+            .filter(
+                rag_embeddings::model
+                    .eq(model)
+                    .and(rag_embeddings::hash.eq_any(hashes)),
+            )
+            .select((rag_embeddings::model, rag_embeddings::hash))
+            .load(conn)?;
+        present.extend(rows);
+    }
+    Ok(present)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -316,77 +288,102 @@ impl LedgerWrite for PgLedgerWrite<'_> {
     }
 }
 
-pub(crate) fn apply_ledger(tx: &mut Transaction<'_>, repo: i32, op: LedgerOp) -> Result<(), postgres::Error> {
+#[derive(Insertable)]
+#[diesel(table_name = rag_communities)]
+struct NewCommunity {
+    repo: i32,
+    id: i32,
+    record: Value,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = rag_community_files)]
+struct NewCommunityFile {
+    repo: i32,
+    path: String,
+    cid: i32,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = rag_community_chunks)]
+struct NewCommunityChunk {
+    repo: i32,
+    chunk: String,
+    cid: i32,
+}
+
+pub(crate) fn apply_ledger(tx: &mut PgConnection, repo: i32, op: LedgerOp) -> Result<(), DbError> {
     match op {
-        LedgerOp::PutFile(path, entry) => tx.execute(
-            "INSERT INTO rag_files (repo, path, entry) VALUES ($1, $2, $3)
-             ON CONFLICT (repo, path) DO UPDATE SET entry = EXCLUDED.entry",
-            &[&repo, &path, &entry],
-        )?,
-        LedgerOp::RemoveFile(path) => tx.execute(
-            "DELETE FROM rag_files WHERE repo = $1 AND path = $2",
-            &[&repo, &path],
-        )?,
-        LedgerOp::PutChunk(id, path, chunk) => tx.execute(
-            "INSERT INTO rag_chunks (repo, id, path, chunk) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (repo, id) DO UPDATE SET path = EXCLUDED.path, chunk = EXCLUDED.chunk",
-            &[&repo, &id, &path, &chunk],
-        )?,
-        LedgerOp::RemoveChunk(id) => tx.execute(
-            "DELETE FROM rag_chunks WHERE repo = $1 AND id = $2",
-            &[&repo, &id],
-        )?,
-        LedgerOp::PutEmbedding(model, hash, vec) => tx.execute(
-            "INSERT INTO rag_embeddings (model, hash, vec) VALUES ($1, $2, $3)
-             ON CONFLICT (model, hash) DO NOTHING",
-            &[&model, &hash, &Vector::from(vec)],
-        )?,
-        LedgerOp::SetMeta(key, value) => tx.execute(
-            "INSERT INTO rag_meta (repo, key, value) VALUES ($1, $2, $3)
-             ON CONFLICT (repo, key) DO UPDATE SET value = EXCLUDED.value",
-            &[&repo, &key, &value],
-        )?,
-        LedgerOp::PutLlmCache(model, hash, value) => tx.execute(
-            "INSERT INTO rag_llm_cache (model, prompt_hash, value) VALUES ($1, $2, $3)
-             ON CONFLICT (model, prompt_hash) DO UPDATE SET value = EXCLUDED.value",
-            &[&model, &hash, &value],
-        )?,
-        LedgerOp::PutConcepts(path, concepts) => tx.execute(
-            "INSERT INTO rag_concepts (repo, path, concepts) VALUES ($1, $2, $3)
-             ON CONFLICT (repo, path) DO UPDATE SET concepts = EXCLUDED.concepts",
-            &[&repo, &path, &concepts],
-        )?,
-        LedgerOp::RemoveConcepts(path) => tx.execute(
-            "DELETE FROM rag_concepts WHERE repo = $1 AND path = $2",
-            &[&repo, &path],
-        )?,
+        LedgerOp::PutFile(path, entry) => {
+            upsert!(tx, rag_files { repo: repo, path: path, entry: entry } on (repo, path) set [entry]);
+        }
+        LedgerOp::RemoveFile(path) => {
+            remove!(tx, rag_files, repo, path = path);
+        }
+        LedgerOp::PutChunk(id, path, chunk) => {
+            upsert!(tx, rag_chunks { repo: repo, id: id, path: path, chunk: chunk } on (repo, id) set [path, chunk]);
+        }
+        LedgerOp::RemoveChunk(id) => {
+            remove!(tx, rag_chunks, repo, id = id);
+        }
+        LedgerOp::PutEmbedding(model, hash, vec) => {
+            upsert!(
+                tx,
+                rag_embeddings {
+                    model: model,
+                    hash: hash,
+                    vec: Vector::from(vec)
+                }
+            );
+        }
+        LedgerOp::SetMeta(key, value) => {
+            upsert!(tx, rag_meta { repo: repo, key: key, value: value } on (repo, key) set [value]);
+        }
+        LedgerOp::PutLlmCache(model, hash, value) => {
+            upsert!(tx, rag_llm_cache { model: model, prompt_hash: hash, value: value } on (model, prompt_hash) set [value]);
+        }
+        LedgerOp::PutConcepts(path, concepts) => {
+            upsert!(tx, rag_concepts { repo: repo, path: path, concepts: concepts } on (repo, path) set [concepts]);
+        }
+        LedgerOp::RemoveConcepts(path) => {
+            remove!(tx, rag_concepts, repo, path = path);
+        }
         LedgerOp::PutCommunities(records, by_file, by_chunk) => {
-            for table in ["rag_communities", "rag_community_files", "rag_community_chunks"] {
-                tx.execute(&format!("DELETE FROM {table} WHERE repo = $1"), &[&repo])?;
-            }
-            for (id, record) in records {
-                tx.execute(
-                    "INSERT INTO rag_communities (repo, id, record) VALUES ($1, $2, $3)",
-                    &[&repo, &id, &record],
-                )?;
-            }
-            let (paths, ids): (Vec<String>, Vec<i32>) = by_file.into_iter().unzip();
-            tx.execute(
-                "INSERT INTO rag_community_files (repo, path, cid)
-                 SELECT $1, * FROM unnest($2::text[], $3::int[])",
-                &[&repo, &paths, &ids],
-            )?;
-            let (chunks, ids): (Vec<String>, Vec<i32>) = by_chunk.into_iter().unzip();
-            tx.execute(
-                "INSERT INTO rag_community_chunks (repo, chunk, cid)
-                 SELECT $1, * FROM unnest($2::text[], $3::int[]) ON CONFLICT DO NOTHING",
-                &[&repo, &chunks, &ids],
-            )?
+            put_communities(tx, repo, records, by_file, by_chunk)?;
         }
         LedgerOp::ClearIndex => {
-            tx.execute("DELETE FROM rag_files WHERE repo = $1", &[&repo])?;
-            tx.execute("DELETE FROM rag_chunks WHERE repo = $1", &[&repo])?
+            remove!(tx, rag_files, repo);
+            remove!(tx, rag_chunks, repo);
         }
-    };
+    }
+    Ok(())
+}
+
+/// Replaces the repository's communities and the community of each file and chunk.
+fn put_communities(
+    tx: &mut PgConnection,
+    repo: i32,
+    records: Vec<(i32, Value)>,
+    by_file: Vec<(String, i32)>,
+    by_chunk: Vec<(String, i32)>,
+) -> Result<(), DbError> {
+    remove!(tx, rag_communities, repo);
+    remove!(tx, rag_community_files, repo);
+    remove!(tx, rag_community_chunks, repo);
+    let records: Vec<NewCommunity> = records
+        .into_iter()
+        .map(|(id, record)| NewCommunity { repo, id, record })
+        .collect();
+    insert_rows!(tx, rag_communities, records);
+    let files: Vec<NewCommunityFile> = by_file
+        .into_iter()
+        .map(|(path, cid)| NewCommunityFile { repo, path, cid })
+        .collect();
+    insert_rows!(tx, rag_community_files, files);
+    let chunks: Vec<NewCommunityChunk> = by_chunk
+        .into_iter()
+        .map(|(chunk, cid)| NewCommunityChunk { repo, chunk, cid })
+        .collect();
+    insert_rows!(tx, rag_community_chunks, chunks, do_nothing);
     Ok(())
 }

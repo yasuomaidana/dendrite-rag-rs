@@ -1,5 +1,15 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests inspect the file with PRAGMAs and sqlite_master"
+)]
+
 use std::collections::BTreeMap;
 use std::path::Path;
+
+use diesel::connection::SimpleConnection;
+use diesel::prelude::*;
+use diesel::sql_types::Text;
+use diesel::sqlite::SqliteConnection;
 
 use super::*;
 use crate::chunk::{Chunk, ChunkOptions, chunk_file};
@@ -56,8 +66,18 @@ fn community(id: u32, files: &[&str]) -> Community {
     }
 }
 
-fn raw(dir: &Path) -> rusqlite::Connection {
-    rusqlite::Connection::open(dir.join(INDEX_FILE)).unwrap()
+fn raw(dir: &Path) -> SqliteConnection {
+    SqliteConnection::establish(dir.join(INDEX_FILE).to_str().unwrap()).unwrap()
+}
+
+/// The single text column `column` of the single row `sql` returns.
+fn text(conn: &mut SqliteConnection, sql: &str) -> String {
+    #[derive(QueryableByName)]
+    struct One {
+        #[diesel(sql_type = Text)]
+        v: String,
+    }
+    diesel::sql_query(sql).get_result::<One>(conn).unwrap().v
 }
 
 #[test]
@@ -317,18 +337,15 @@ fn reopening_reads_everything_back() {
 fn the_file_is_a_wal_database_at_the_current_ddl_version() {
     let dir = tempfile::tempdir().unwrap();
     drop(open(dir.path()));
-    let conn = raw(dir.path());
-    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, schema::DDL_VERSION);
-    let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+    let mut conn = raw(dir.path());
+    let version = raw::user_version(&mut conn).unwrap();
+    assert_eq!(version, open::DDL_VERSION);
+    let mode = text(&mut conn, "SELECT journal_mode AS v FROM pragma_journal_mode");
     assert_eq!(mode, "wal");
-    let indexes: String = conn
-        .query_row(
-            "SELECT group_concat(name) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chunks'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    let indexes = text(
+        &mut conn,
+        "SELECT group_concat(name) AS v FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chunks'",
+    );
     assert!(
         indexes.contains("chunks_path") && indexes.contains("chunks_content_hash"),
         "{indexes}"
@@ -342,21 +359,17 @@ fn a_newer_ddl_version_is_refused() {
         let ledger = open(dir.path());
         put(&ledger, |b| b.set_meta("merkle_root", "abc").unwrap());
     }
-    raw(dir.path()).execute_batch("PRAGMA user_version = 99").unwrap();
+    raw(dir.path()).batch_execute("PRAGMA user_version = 99").unwrap();
 
     let err = SqliteLedger::open(&dir.path().join(INDEX_FILE)).unwrap_err();
     assert!(
         matches!(&err, LedgerError::Backend(m) if m.contains("newer")),
         "{err}"
     );
-    let conn = raw(dir.path());
-    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    let mut conn = raw(dir.path());
+    let version = raw::user_version(&mut conn).unwrap();
     assert_eq!(version, 99, "the file is left as it was");
-    let root: String = conn
-        .query_row("SELECT value FROM meta WHERE key = 'merkle_root'", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
+    let root = text(&mut conn, "SELECT value AS v FROM meta WHERE key = 'merkle_root'");
     assert_eq!(root, "abc");
 }
 

@@ -74,18 +74,32 @@ impl VectorIndex for PgVectors {
     }
 }
 
-pub(crate) fn apply_vector(tx: &mut Transaction<'_>, repo: i32, op: VectorOp) -> Result<(), postgres::Error> {
+pub(crate) fn apply_vector(tx: &mut PgConnection, repo: i32, op: VectorOp) -> Result<(), DbError> {
+    use diesel::upsert::excluded;
     match op {
-        VectorOp::Upsert(id, tag, vec) => tx.execute(
-            "INSERT INTO rag_vectors (repo, id, tag, vec) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (repo, id) DO UPDATE SET tag = EXCLUDED.tag, vec = EXCLUDED.vec",
-            &[&repo, &id, &tag, &Vector::from(vec)],
-        )?,
-        VectorOp::Remove(id) => tx.execute(
-            "DELETE FROM rag_vectors WHERE repo = $1 AND id = $2",
-            &[&repo, &id],
-        )?,
-        VectorOp::Clear => tx.execute("DELETE FROM rag_vectors WHERE repo = $1", &[&repo])?,
-    };
+        VectorOp::Upsert(id, tag, vec) => {
+            diesel::insert_into(rag_vectors::table)
+                .values((
+                    rag_vectors::repo.eq(repo),
+                    rag_vectors::id.eq(id),
+                    rag_vectors::tag.eq(tag),
+                    rag_vectors::vec.eq(Vector::from(vec)),
+                ))
+                .on_conflict((rag_vectors::repo, rag_vectors::id))
+                .do_update()
+                .set((
+                    rag_vectors::tag.eq(excluded(rag_vectors::tag)),
+                    rag_vectors::vec.eq(excluded(rag_vectors::vec)),
+                ))
+                .execute(tx)?;
+        }
+        VectorOp::Remove(id) => {
+            diesel::delete(rag_vectors::table.filter(rag_vectors::repo.eq(repo).and(rag_vectors::id.eq(id))))
+                .execute(tx)?;
+        }
+        VectorOp::Clear => {
+            diesel::delete(rag_vectors::table.filter(rag_vectors::repo.eq(repo))).execute(tx)?;
+        }
+    }
     Ok(())
 }
