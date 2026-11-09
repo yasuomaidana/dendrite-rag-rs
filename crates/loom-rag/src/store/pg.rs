@@ -59,6 +59,30 @@ pub(crate) struct Pg {
     pub(crate) repo: i32,
 }
 
+/// Migrates under an advisory lock: concurrent openers would otherwise all see an unmigrated
+/// schema and race to record the same migration version.
+fn migrate(conn: &mut PgConnection) -> Result<(), String> {
+    const LOCK: i64 = 0x6c6f_6f6d_7261_67;
+    let pg = |e: DbError| format!("postgres: {e}");
+    diesel::sql_query("SELECT pg_advisory_lock($1)")
+        .bind::<diesel::sql_types::BigInt, _>(LOCK)
+        .execute(conn)
+        .map_err(pg)?;
+    let result = match raw::migrated(conn) {
+        Ok(true) => Ok(()),
+        Ok(false) => conn
+            .run_pending_migrations(MIGRATIONS)
+            .map(|_| ())
+            .map_err(|e| format!("postgres: migration: {e}")),
+        Err(e) => Err(pg(e)),
+    };
+    diesel::sql_query("SELECT pg_advisory_unlock($1)")
+        .bind::<diesel::sql_types::BigInt, _>(LOCK)
+        .execute(conn)
+        .map_err(pg)?;
+    result
+}
+
 impl Pg {
     /// Connects a pool, migrates the schema and registers repository `repo`.
     pub(crate) fn connect(url: &str, repo: &str) -> Result<Self, String> {
@@ -67,10 +91,7 @@ impl Pg {
         let mut conn = open()?;
         // The migration is one transaction, so the last table's presence means the schema is
         // complete; re-running it is skipped (see `raw::migrated`).
-        if !raw::migrated(&mut conn).map_err(pg)? {
-            conn.run_pending_migrations(MIGRATIONS)
-                .map_err(|e| format!("postgres: migration: {e}"))?;
-        }
+        migrate(&mut conn)?;
         let version: Option<i32> = rag_schema::table
             .select(rag_schema::version)
             .first(&mut conn)
