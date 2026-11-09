@@ -131,7 +131,7 @@ No feature is enabled by default.
 | `oxillama` | Enables in-process GGUF embedding models (Qwen3-Embedding and other decoder models) via the OxiLLaMa runtime; needs Rust 1.89. |
 | `model2vec` | Enables in-process static subword embeddings using `model2vec-rs`. |
 | `sqlite` | Enables SQLite as an alternative local ledger (`[storage] ledger = "sqlite"`). The default ledger is redb. |
-| `postgres` | Enables the PostgreSQL 16 + `pgvector` backend for the shared tier (`[storage] mode = "remote"` or `"edge"`). |
+| `postgres` | Enables the PostgreSQL 16 + `pgvector` backend for the shared tier (`[storage] mode = "remote"` or `"edge"`), through Diesel with a bundled libpq. |
 | `testutil` | Test fixtures and project scaffolding helpers (`loom_rag::testutil`). |
 | `dhat` | Enables DHAT heap profiling for the peak-heap test (`tests/peak_heap.rs`). |
 

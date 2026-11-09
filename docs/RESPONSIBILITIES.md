@@ -131,10 +131,12 @@ Per `docs/architecture/2026-10-quality-audit-execution-plan.md` (§5), `dendrite
 | `hf-hub` | `1.0.0` | Optional (features `candle`, `oxillama`) Hugging Face Hub client |
 | `tokenizers` | `1.0.0-rc.3` | Optional (feature `candle`) fast tokenizers |
 | `oxillama-runtime` | `0.1.4` | Optional (feature `oxillama`) in-process GGUF runtime |
-| `pgvector` | `0.4.2` | Optional (feature `postgres`) PostgreSQL vector support |
-| `postgres` | `0.19.14` | Optional (feature `postgres`) PostgreSQL client for shared tier |
+| `diesel` | `2.3.14` | Optional (features `postgres`, `sqlite`) the only database access layer: query DSL, connections, transactions |
+| `diesel_migrations` | `2.3.1` | Optional (features `postgres`, `sqlite`) embedded schema migrations (`migrations/`) |
+| `pgvector` | `0.4.2` | Optional (feature `postgres`, `features = ["diesel"]`) PostgreSQL vector type for Diesel |
+| `pq-sys` | `0.7` | Optional (feature `postgres`, `features = ["bundled"]`) libpq built from source, so no system library is needed |
 | `model2vec-rs` | `0.3.0` | Optional (feature `model2vec`) static token embeddings |
-| `rusqlite` | `=0.40.2` | Optional (feature `sqlite`, `features = ["bundled"]`) SQLite ledger |
+| `libsqlite3-sys` | `0.35` | Optional (feature `sqlite`, `features = ["bundled"]`) the bundled SQLite amalgamation Diesel links |
 | `tempfile` | `3.27.0` | Optional (feature `testutil`) temporary directory fixtures |
 | `dhat` | `0.3.3` | Optional (feature `dhat`) heap profiling |
 
@@ -231,6 +233,6 @@ Selection criteria: no system libraries (bundled C compiled by `cc` is accepted,
 | Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default), in-process **candle** (safetensors BERT/Nomic/Jina on Metal/CUDA/CPU), **ollama**, **hf**, **oxillama**, and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
 | Fusion | weighted **RRF** (k = 60) over lexical, dense and symbol-name lists, implemented locally (no adaptive fusion weights) | `embedag-rag::RrfRanker` (two lists only, `Uuid` keys, pulls in `oxirag`) |
 | Change detection | **embedag-core** BLAKE3 Merkle tree (`MerkleNode::from_paths` + `diff`, via git dependency `embedag`) | full rescans |
-| Ledger | **redb** (pure Rust, default); **SQLite** (`rusqlite` bundled, feature `sqlite`, `[storage] ledger = "sqlite"`, DRAG-49) as an opt-in; shared tier **PostgreSQL 16 + pgvector** (remote: DRAG-33; edge mode with `memory-wal.journal`: DRAG-34; push and compaction: DRAG-35) | Turso (async-only Rust API in a synchronous engine, pre-1.0 file format, mimalloc and Tantivy in its default features; its MVCC writers do not help a single-writer engine; revisit at 1.0 with a sync API or an ANN index); sqlite-vec for search (int8 `vec0` exact scan p95 43 ms at 49k × 256-d with 8 readers, against 0.2 ms for the in-memory scan) |
+| Ledger | **redb** (pure Rust, default); **SQLite** (Diesel over bundled `libsqlite3-sys`, feature `sqlite`, `[storage] ledger = "sqlite"`, DRAG-49) as an opt-in; shared tier **PostgreSQL 16 + pgvector** (remote: DRAG-33; edge mode with `memory-wal.journal`: DRAG-34; push and compaction: DRAG-35) | Turso (async-only Rust API in a synchronous engine, pre-1.0 file format, mimalloc and Tantivy in its default features; its MVCC writers do not help a single-writer engine; revisit at 1.0 with a sync API or an ANN index); sqlite-vec for search (int8 `vec0` exact scan p95 43 ms at 49k × 256-d with 8 readers, against 0.2 ms for the in-memory scan) |
 
 Benchmark gate (DRAG-15, DRAG-44): cold index peak memory footprint at 49k chunks is ~180-200 MB (DRAG-44: 512-file group commits and streaming graph builder); p95 query latency < 30 ms with 8 concurrent readers; quantized recall@10 ≥ 0.95 versus exact f32 search; hybrid recall@10 ≥ lexical-only on the golden query set.
