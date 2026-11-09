@@ -1,11 +1,11 @@
 # loom-eval
 
-[![Crate](https://img.shields.io/badge/crate-loom--eval-blue.svg)](Cargo.toml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../Cargo.toml)
+[![Crate](https://img.shields.io/badge/crate-loom--eval-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/crates/loom-eval/Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/Cargo.toml)
 
 `loom-eval` is the evaluation and statistical benchmarking harness for `dendrite-rag-rs`. It evaluates retrieval methods, token economics, latency, and baselines across golden question sets with **bootstrap confidence intervals** and paired comparison tests.
 
-Full evaluation findings and performance results on Apple Silicon are documented in [`eval/RESULTS.md`](../../eval/RESULTS.md).
+Full evaluation findings and performance results on Apple Silicon are documented in [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md).
 
 ---
 
@@ -197,7 +197,7 @@ loom-eval compare run-a.json run-b.json
 
 ## Golden Query Sets and External Benchmarks
 
-Golden evaluation sets are stored in [`eval/`](../../eval):
+Golden evaluation sets are stored in [`eval/`](https://github.com/yasuomaidana/dendrite-rag-rs/tree/main/eval):
 
 - `golden-dendrite-rag.json`: 25 natural-language queries testing the layout and components of this repository.
 - `golden-dendrite.json`: 37 natural-language code queries for the Dendrite Go codebase.
@@ -326,6 +326,6 @@ cargo run --example quick_eval -p loom-eval
 
 ## Specifications
 
-- [Evaluation Findings & Benchmark Results](../../eval/RESULTS.md): Full experimental results, baseline comparisons, and statistical analyses on Apple Silicon.
-- [System Architecture](../../docs/ARCHITECTURE.md): Retrieval pipeline, baselines, and design principles.
-- [Retrieval & Fusion Specification](../../docs/specs/retrieval.md): Ranking definitions, RRF fusion, and token-budgeted context packing.
+- [Evaluation Findings & Benchmark Results](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md): Full experimental results, baseline comparisons, and statistical analyses on Apple Silicon.
+- [System Architecture](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/ARCHITECTURE.md): Retrieval pipeline, baselines, and design principles.
+- [Retrieval & Fusion Specification](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/retrieval.md): Ranking definitions, RRF fusion, and token-budgeted context packing.

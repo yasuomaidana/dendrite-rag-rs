@@ -1,11 +1,11 @@
 //! Hybrid search and context packing (`docs/specs/retrieval.md` § Fusion, § Context packing
 //! and § Corpora).
 //!
-//! Two pipelines share the stores: [`code`] ranks source code with lexical, dense and
-//! symbol-name rankings and expands context packs through the symbol graph; [`docs`] ranks
+//! Two pipelines share the stores: `code` ranks source code with lexical, dense and
+//! symbol-name rankings and expands context packs through the symbol graph; `docs` ranks
 //! documentation with lexical and dense rankings only. A query names its corpus with
 //! [`CorpusFilter`]; `all` keeps code and documentation in one ranking for search, and
-//! context packs over both run each pipeline on its own corpus ([`mixed`]).
+//! context packs over both run each pipeline on its own corpus (`mixed`).
 
 mod code;
 mod docs;
@@ -293,14 +293,14 @@ impl Engine {
     }
 
     /// The most relevant spans for `query` from code and documentation, packed into
-    /// `token_budget` estimated tokens with part of it kept for documentation ([`mixed`]).
+    /// `token_budget` estimated tokens with part of it kept for documentation (`mixed`).
     pub fn context(&self, query: &str, token_budget: usize) -> Result<ContextPack> {
         self.context_for(query, token_budget, CorpusFilter::All)
     }
 
     /// A context pack from the corpora `corpus` admits: code packs are expanded through
-    /// the symbol graph ([`code`]), documentation packs are the best sections ([`docs`]), and
-    /// `all` packs hold both with part of the budget kept for documentation ([`mixed`]).
+    /// the symbol graph (`code`), documentation packs are the best sections (`docs`), and
+    /// `all` packs hold both with part of the budget kept for documentation (`mixed`).
     pub fn context_for(&self, query: &str, token_budget: usize, corpus: CorpusFilter) -> Result<ContextPack> {
         self.context_with(query, token_budget, corpus, Detail::Auto)
     }

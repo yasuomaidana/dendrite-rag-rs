@@ -221,7 +221,7 @@ impl LexicalIndex {
 
     /// BM25 search; returns `(chunk_id, score)` best first. Default parameters use
     /// Tantivy's query parser and scorer; others score the query's distinct code terms
-    /// with [`scorer::bag_of_terms`], as the PostgreSQL BM25 does.
+    /// with `scorer::bag_of_terms`, as the PostgreSQL BM25 does.
     pub fn search(
         &self,
         query: &str,

@@ -1,0 +1,12 @@
+# cargo release <level>            -> dry run
+# cargo release <level> --execute  -> bump, commit, tag, publish, push
+#
+# loom-eval is excluded (publish = false, metadata.release.release = false).
+# Publish order is resolved from the dependency graph: loom-rag, then
+# dendrite-rag and loom-gate.
+
+# One tag for the shared workspace version.
+tag-name = "v{{version}}"
+# One commit for the whole bump.
+consolidate-commits = true
+pre-release-commit-message = "chore: release v{{version}}"

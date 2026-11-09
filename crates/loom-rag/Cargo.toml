@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
+homepage = "https://github.com/yasuomaidana/dendrite-rag-rs"
+documentation = "https://docs.rs/loom-rag"
+keywords = ["rag","retrieval","code-search","bm25","embeddings"]
+categories = ["development-tools","text-processing","algorithms"]
 
 [lib]
 name = "loom_rag"

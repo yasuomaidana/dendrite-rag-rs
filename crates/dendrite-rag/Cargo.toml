@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
+homepage = "https://github.com/yasuomaidana/dendrite-rag-rs"
+documentation = "https://docs.rs/dendrite-rag"
+keywords = ["rag","json-rpc","code-search","cli","llm"]
+categories = ["development-tools","command-line-utilities"]
 
 [lib]
 name = "dendrite_rag"
@@ -20,13 +24,13 @@ anyhow = "1"
 blake3 = "1.8.7"
 thiserror = "2.0.21"
 clap = { version = "4.6.7", features = ["derive"] }
-loom-rag = { path = "../loom-rag" }
+loom-rag = { path = "../loom-rag", version = "0.1.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "display", "serde"] }
 
 [dev-dependencies]
-loom-rag = { path = "../loom-rag", features = ["testutil"] }
+loom-rag = { path = "../loom-rag", version = "0.1.0", features = ["testutil"] }
 libc = "0.2.191"
 tempfile = "3.27.0"
 rstest = "0.28.0"

@@ -1,7 +1,7 @@
 # loom-rag
 
-[![Crate](https://img.shields.io/badge/crate-loom--rag-blue.svg)](Cargo.toml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../Cargo.toml)
+[![Crate](https://img.shields.io/badge/crate-loom--rag-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/crates/loom-rag/Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/Cargo.toml)
 
 `loom-rag` is a retrieval engine for source code repositories and technical documentation. It provides incremental AST-aware chunking, code-tokenized BM25 search, dense vector embeddings with an int8 flat index scan (and an optional HNSW index), code graph community detection, symbol ranking, and token-budgeted context packing.
 
@@ -28,7 +28,7 @@ It does not depend on Dendrite, so it can be used as an embedded library in any 
 ## Key Capabilities
 
 - **cAST Syntax-Tree Chunking**: Tree-sitter split-then-merge chunker that respects semantic language structures (functions, methods, classes, impl blocks, markdown headings) rather than arbitrary line windows. Each chunk carries its qualified scope chain, the symbols it defines and the names it references, and is indexed with a header of its path and scope.
-- **Code-Aware BM25**: Backed by [Tantivy](https://github.com/quickwit-oss/tantivy), using a specialized `CodeTokenizer` that indexes whole identifiers alongside sub-tokens split across `camelCase`, `snake_case`, and digit boundaries. The BM25 parameters `k1`, `b` and `q` are configurable (`Config::bm25`, `Bm25Params`); the defaults are 1.2, 0.75 and 1, and `q` below 1 scored worse in the evaluation (see [`eval/RESULTS.md`](../../eval/RESULTS.md)).
+- **Code-Aware BM25**: Backed by [Tantivy](https://github.com/quickwit-oss/tantivy), using a specialized `CodeTokenizer` that indexes whole identifiers alongside sub-tokens split across `camelCase`, `snake_case`, and digit boundaries. The BM25 parameters `k1`, `b` and `q` are configurable (`Config::bm25`, `Bm25Params`); the defaults are 1.2, 0.75 and 1, and `q` below 1 scored worse in the evaluation (see [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md)).
 - **Pluggable Vector Embeddings**: Unified `Embedder` trait supporting:
   - **In-process**: [Candle](https://github.com/huggingface/candle) (BERT, JinaBERT, NomicBERT with Metal/CUDA/Accelerate support), OxiLLaMa (GGUF Qwen3-Embedding, CPU only for embeddings), [Model2Vec](https://github.com/MinishLab/model2vec) (static embeddings).
   - **Local/Remote Gateways**: Ollama, Hugging Face Inference or Text Embeddings Inference (TEI) (`hf`), OpenAI-compatible gateways (`openai`, e.g. LiteLLM).
@@ -36,7 +36,7 @@ It does not depend on Dendrite, so it can be used as an embedded library in any 
   - **Settings**: `EmbedConfig` also takes `dimensions` (target vector size, Matryoshka models) and `budget_tokens` (a token budget that caps one indexing run; the next run continues where it stopped).
 - **Int8 Quantized Flat Scan & HNSW**:
   - Each vector is stored as int8 components plus an `f32` scale. The scan computes integer dot products over the rows in parallel (rayon), then rescores the shortlist (at least 40 candidates) with the exact `f32` vectors from the ledger.
-  - Optional Hierarchical Navigable Small World (`hnsw` feature) index, chosen with `Config::vector_index`. The default `auto` always picks the flat scan: in the benchmark (768-d vectors, [`eval/RESULTS.md`](../../eval/RESULTS.md)) HNSW lost to the flat scan on build time, latency and recall.
+  - Optional Hierarchical Navigable Small World (`hnsw` feature) index, chosen with `Config::vector_index`. The default `auto` always picks the flat scan: in the benchmark (768-d vectors, [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md)) HNSW lost to the flat scan on build time, latency and recall.
 - **Code Graph & Leiden Community Detection**:
   - Builds typed call, import, and type reference graphs across symbols and files.
   - Runs the Leiden modularity optimization algorithm to cluster files into communities.
@@ -54,7 +54,7 @@ It does not depend on Dendrite, so it can be used as an embedded library in any 
   - Uses BLAKE3 file hashing and Merkle tree diffing (`embedag`) to re-index only changed files.
   - Caches embeddings in the ledger, keyed by model and chunk content hash: chunk embeddings are not recomputed if the content did not change.
 - **Storage Backends**:
-  - The local ledger is [redb](https://github.com/cberner/redb) by default. SQLite is opt-in: build with the `sqlite` feature and set `[storage] ledger = "sqlite"` (`StorageConfig::ledger`). The SQLite, sqlite-vec and Turso decisions are in [`docs/specs/store.md`](../../docs/specs/store.md).
+  - The local ledger is [redb](https://github.com/cberner/redb) by default. SQLite is opt-in: build with the `sqlite` feature and set `[storage] ledger = "sqlite"` (`StorageConfig::ledger`). The SQLite, sqlite-vec and Turso decisions are in [`docs/specs/store.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/store.md).
   - PostgreSQL 16 with pgvector (`postgres` feature) serves the shared tier (`remote` and `edge` storage modes).
 - **Git History Search**:
   - Full-text Tantivy index over commit messages and per-file diffs.
@@ -143,7 +143,7 @@ Add `loom-rag` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-loom-rag = { version = "0.1.0", path = "path/to/crates/loom-rag" }
+loom-rag = "0.1"
 ```
 
 ### Basic Indexing and Hybrid Search
@@ -230,7 +230,7 @@ cargo run --release --example probe -p loom-rag -- <root> "<query>"
 ```
 
 ### 4. `vector_bench`
-Compares the build time, single-reader latency, 8-reader concurrent latency, and recall@10 of the `FlatIndex` int8 scan against `HnswIndex` graph search on clustered synthetic vectors, across corpus sizes. Arguments are the vector dimension followed by the sizes; `BENCH_FLAT_ONLY=1` skips HNSW. Measured results are in [`eval/RESULTS.md`](../../eval/RESULTS.md).
+Compares the build time, single-reader latency, 8-reader concurrent latency, and recall@10 of the `FlatIndex` int8 scan against `HnswIndex` graph search on clustered synthetic vectors, across corpus sizes. Arguments are the vector dimension followed by the sizes; `BENCH_FLAT_ONLY=1` skips HNSW. Measured results are in [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md).
 
 ```bash
 # Requires --features hnsw
@@ -270,12 +270,12 @@ cargo bench -p loom-rag --features testutil
 
 ## Specifications
 
-- [System Architecture](../../docs/ARCHITECTURE.md): Complete retrieval pipeline and module boundaries.
-- [Walking & Chunking](../../docs/specs/chunking.md): File discovery, cAST syntax-tree chunking, and contextual headers.
-- [Retrieval & Fusion](../../docs/specs/retrieval.md): Tantivy BM25, vector search, symbol ranking, weighted RRF, and token packing.
-- [Embedders](../../docs/specs/embedders.md): Embedding backend options, model conventions, and auto-detection rules.
-- [Storage & Ledger](../../docs/specs/store.md): redb schema, Merkle diffing, SQLite ledger, and PostgreSQL tier.
-- [Symbol Graph & Communities](../../docs/specs/graph.md): Typed code graph, Leiden clustering, and graph queries.
-- [Memory Synchronization](../../docs/specs/memory-sync.md): Local-only, edge mode with journal, and push compaction topologies.
-- [Git History Search](../../docs/specs/history.md): Commit messages and per-file diff indexing.
-- [Quality Gates](../../docs/specs/quality.md): Quality gate specifications and counting rules implemented in `loom_rag::quality`.
+- [System Architecture](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/ARCHITECTURE.md): Complete retrieval pipeline and module boundaries.
+- [Walking & Chunking](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/chunking.md): File discovery, cAST syntax-tree chunking, and contextual headers.
+- [Retrieval & Fusion](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/retrieval.md): Tantivy BM25, vector search, symbol ranking, weighted RRF, and token packing.
+- [Embedders](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/embedders.md): Embedding backend options, model conventions, and auto-detection rules.
+- [Storage & Ledger](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/store.md): redb schema, Merkle diffing, SQLite ledger, and PostgreSQL tier.
+- [Symbol Graph & Communities](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/graph.md): Typed code graph, Leiden clustering, and graph queries.
+- [Memory Synchronization](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/memory-sync.md): Local-only, edge mode with journal, and push compaction topologies.
+- [Git History Search](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/history.md): Commit messages and per-file diff indexing.
+- [Quality Gates](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/quality.md): Quality gate specifications and counting rules implemented in `loom_rag::quality`.

@@ -1,9 +1,19 @@
 # dendrite-rag
 
-[![Crate](https://img.shields.io/badge/crate-dendrite--rag-blue.svg)](Cargo.toml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../Cargo.toml)
+[![Crate](https://img.shields.io/badge/crate-dendrite--rag-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/crates/dendrite-rag/Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/Cargo.toml)
 
-`dendrite-rag` is the retrieval sidecar and command-line tool for the Dendrite AI developer platform. It sits on the [`loom-rag`](../loom-rag) engine library and provides a line-delimited **JSON-RPC 2.0** server over stdio, a **CLI**, project settings from `.dendrite/rag.toml` with `DENDRITE_RAG_*` environment overrides, and the `ask` question-answering workflow.
+`dendrite-rag` is the retrieval sidecar and command-line tool for the Dendrite AI developer platform. It sits on the [`loom-rag`](https://crates.io/crates/loom-rag) engine library and provides a line-delimited **JSON-RPC 2.0** server over stdio, a **CLI**, project settings from `.dendrite/rag.toml` with `DENDRITE_RAG_*` environment overrides, and the `ask` question-answering workflow.
+
+---
+
+## Installation
+
+```bash
+cargo install dendrite-rag
+```
+
+This builds the `dendrite-rag` binary into `~/.cargo/bin`. Build from a checkout with `cargo build --release -p dendrite-rag`.
 
 ---
 
@@ -154,7 +164,7 @@ Empty variables are ignored.
 
 ## JSON-RPC 2.0 Protocol
 
-The server reads newline-delimited JSON-RPC 2.0 from `stdin` and writes responses to `stdout`; logs go to `stderr`. Requests are handled one at a time in the order received. Full specification: [`docs/specs/protocol.md`](../../docs/specs/protocol.md); JSON Schemas are in [`proto/`](../../proto).
+The server reads newline-delimited JSON-RPC 2.0 from `stdin` and writes responses to `stdout`; logs go to `stderr`. Requests are handled one at a time in the order received. Full specification: [`docs/specs/protocol.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/protocol.md); JSON Schemas are in [`proto/`](https://github.com/yasuomaidana/dendrite-rag-rs/tree/main/proto).
 
 ### Protocol version 1.13.0 and the Dendrite Go client
 
@@ -218,7 +228,7 @@ Errors use the standard JSON-RPC codes (`-32700`, `-32600`, `-32601`, `-32602`).
 
 ## The `ask` Workflow
 
-`ask` answers a question from the project. It calls models only through the LiteLLM gateway (`LITELLM_PROXY_URL`, `LITELLM_MASTER_KEY`). Details: [`docs/specs/ask.md`](../../docs/specs/ask.md).
+`ask` answers a question from the project. It calls models only through the LiteLLM gateway (`LITELLM_PROXY_URL`, `LITELLM_MASTER_KEY`). Details: [`docs/specs/ask.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/ask.md).
 
 1. **Context**: the context pack for the question (2,500 estimated tokens), or the top `top_k` hits. With `paths`, the top hits among those paths (4 unless `top_k` is set). Both come from the corpora in `corpus` (default `all`, which keeps `docs_share` of the budget for documentation).
 2. **Abstention**: when `[rerank] abstain` is set and the reranker finds nothing likely to answer, no model is called and the result has `abstained: true`.
@@ -256,7 +266,7 @@ Reports hit@1, hit@5, hit@10 and MRR@10 per mode (lexical, dense when vectors ex
 cargo run --example eval -p dendrite-rag -- . eval/golden-dendrite-rag.json
 ```
 
-Arguments: `<root> <golden file> [index-dir]`. `EVAL_FULL=1` re-indexes from scratch (the embedding cache is kept). Measured results are in [`eval/RESULTS.md`](../../eval/RESULTS.md).
+Arguments: `<root> <golden file> [index-dir]`. `EVAL_FULL=1` re-indexes from scratch (the embedding cache is kept). Measured results are in [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md).
 
 To sweep fusion weights (`EVAL_SWEEP=1` prints the best ten combinations, `EVAL_SWEEP=all` every one):
 ```bash
@@ -310,7 +320,7 @@ fn main() -> anyhow::Result<()> {
 
 ## Cargo Features
 
-Feature flags forward directly to corresponding features in the [`loom-rag`](../loom-rag) engine library:
+Feature flags forward directly to corresponding features in the [`loom-rag`](https://crates.io/crates/loom-rag) engine library:
 
 | Feature | Forwards To | Description |
 |---|---|---|
@@ -361,9 +371,9 @@ cargo test -p dendrite-rag --features sqlite
 
 ## Specifications
 
-- [System Architecture](../../docs/ARCHITECTURE.md): System design, component boundaries, and module layout.
-- [Responsibilities & Ticket Map](../../docs/RESPONSIBILITIES.md): Ownership boundaries with `dendrite-control` and sibling repositories.
-- [JSON-RPC Protocol Specification](../../docs/specs/protocol.md): JSON-RPC 2.0 stdio protocol catalog, parameters, and error codes.
-- [Ask & Multi-Tier Workflow](../../docs/specs/ask.md): Prompt construction, local drafting, paid refinement, answer caching, and token ceilings.
-- [Quality Gates Specification](../../docs/specs/quality.md): Verification algorithms for `quality.loc`, `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest`.
-- [Embedding Backends](../../docs/specs/embedders.md): Embedding backend options, configuration hierarchy, and model defaults.
+- [System Architecture](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/ARCHITECTURE.md): System design, component boundaries, and module layout.
+- [Responsibilities & Ticket Map](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/RESPONSIBILITIES.md): Ownership boundaries with `dendrite-control` and sibling repositories.
+- [JSON-RPC Protocol Specification](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/protocol.md): JSON-RPC 2.0 stdio protocol catalog, parameters, and error codes.
+- [Ask & Multi-Tier Workflow](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/ask.md): Prompt construction, local drafting, paid refinement, answer caching, and token ceilings.
+- [Quality Gates Specification](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/quality.md): Verification algorithms for `quality.loc`, `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest`.
+- [Embedding Backends](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/embedders.md): Embedding backend options, configuration hierarchy, and model defaults.

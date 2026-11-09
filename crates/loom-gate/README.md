@@ -1,9 +1,19 @@
 # loom-gate
 
-[![Crate](https://img.shields.io/badge/crate-loom--gate-blue.svg)](Cargo.toml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../Cargo.toml)
+[![Crate](https://img.shields.io/badge/crate-loom--gate-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/crates/loom-gate/Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/Cargo.toml)
 
 `loom-gate` is a command-line tool that evaluates source code trees against project quality directives. Built for continuous integration pipelines and autonomous developer agents, it checks five code-health gates: production lines of code per file (`loc`), structural code duplication (`clones`), cyclomatic and cognitive function complexity (`complexity`), directory organization and module grouping (`structure`), and Rust test organization (`rstest`).
+
+---
+
+## Installation
+
+```bash
+cargo install loom-gate
+```
+
+This builds the `loom-gate` binary into `~/.cargo/bin`. Build from a checkout with `cargo build --release -p loom-gate`.
 
 ---
 
@@ -220,6 +230,6 @@ cargo test -p loom-gate --test cli
 
 ## Specifications
 
-- [Quality Gates Specification](../../docs/specs/quality.md): Gate algorithms, syntax rules, counting definitions, and reporting schema.
-- [JSON-RPC Protocol Specification](../../docs/specs/protocol.md): JSON-RPC 2.0 stdio signatures for `quality.loc`, `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest`.
-- [Directives Schema](../../docs/specs/directives.example.toml): Schema and default values for `.github/dendrite/directives.toml`.
+- [Quality Gates Specification](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/quality.md): Gate algorithms, syntax rules, counting definitions, and reporting schema.
+- [JSON-RPC Protocol Specification](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/protocol.md): JSON-RPC 2.0 stdio signatures for `quality.loc`, `quality.clones`, `quality.complexity`, `quality.structure`, and `quality.rstest`.
+- [Directives Schema](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/docs/specs/directives.example.toml): Schema and default values for `.github/dendrite/directives.toml`.

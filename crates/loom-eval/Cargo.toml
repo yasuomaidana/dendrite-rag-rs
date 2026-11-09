@@ -25,3 +25,7 @@ tempfile = "3.27.0"
 
 [dev-dependencies]
 rstest = "0.28.0"
+
+# Internal evaluation harness: never released by `cargo release`.
+[package.metadata.release]
+release = false

@@ -32,7 +32,7 @@ fn best(r: &Ranking) -> Option<f32> {
 }
 
 impl Engine {
-    /// Rank-weighted share of documentation among the top [`PROBE`] hybrid candidates.
+    /// Rank-weighted share of documentation among the top `PROBE` hybrid candidates.
     pub fn docs_share(&self, query: &str, t: &mut Timings) -> Result<f32> {
         let w = self.fusion_weights();
         let ranked = self.code_ranking(query, PROBE, Mode::Hybrid, w, CorpusFilter::All, t)?;
