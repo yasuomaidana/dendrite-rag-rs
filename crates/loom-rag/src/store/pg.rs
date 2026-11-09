@@ -63,7 +63,7 @@ pub(crate) struct Pg {
 /// schema and race to record the same migration version.
 fn migrate(conn: &mut PgConnection) -> Result<(), String> {
     let pg = |e: DbError| format!("postgres: {e}");
-    raw::lock_migrations(conn).map_err(pg)?;
+    raw::migration_lock(conn, true).map_err(pg)?;
     let result = match raw::migrated(conn) {
         Ok(true) => Ok(()),
         Ok(false) => conn
@@ -72,7 +72,7 @@ fn migrate(conn: &mut PgConnection) -> Result<(), String> {
             .map_err(|e| format!("postgres: migration: {e}")),
         Err(e) => Err(pg(e)),
     };
-    raw::unlock_migrations(conn).map_err(pg)?;
+    raw::migration_lock(conn, false).map_err(pg)?;
     result
 }
 

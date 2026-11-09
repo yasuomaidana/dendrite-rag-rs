@@ -32,17 +32,14 @@ pub(crate) fn migrated(conn: &mut PgConnection) -> QueryResult<bool> {
 /// Advisory-lock key serializing migrations across connections.
 const MIGRATION_LOCK: i64 = 0x006c_6f6f_6d72_6167;
 
-/// Blocks until this session holds the migration lock.
-pub(crate) fn lock_migrations(conn: &mut PgConnection) -> QueryResult<()> {
-    diesel::sql_query("SELECT pg_advisory_lock($1)")
-        .bind::<BigInt, _>(MIGRATION_LOCK)
-        .execute(conn)?;
-    Ok(())
-}
-
-/// Releases the migration lock.
-pub(crate) fn unlock_migrations(conn: &mut PgConnection) -> QueryResult<()> {
-    diesel::sql_query("SELECT pg_advisory_unlock($1)")
+/// Takes (`held`) or releases the migration lock; taking blocks until this session holds it.
+pub(crate) fn migration_lock(conn: &mut PgConnection, held: bool) -> QueryResult<()> {
+    let sql = if held {
+        "SELECT pg_advisory_lock($1)"
+    } else {
+        "SELECT pg_advisory_unlock($1)"
+    };
+    diesel::sql_query(sql)
         .bind::<BigInt, _>(MIGRATION_LOCK)
         .execute(conn)?;
     Ok(())
