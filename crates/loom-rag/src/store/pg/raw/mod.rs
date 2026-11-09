@@ -29,6 +29,25 @@ pub(crate) fn migrated(conn: &mut PgConnection) -> QueryResult<bool> {
         .present)
 }
 
+/// Advisory-lock key serializing migrations across connections.
+const MIGRATION_LOCK: i64 = 0x006c_6f6f_6d72_6167;
+
+/// Blocks until this session holds the migration lock.
+pub(crate) fn lock_migrations(conn: &mut PgConnection) -> QueryResult<()> {
+    diesel::sql_query("SELECT pg_advisory_lock($1)")
+        .bind::<BigInt, _>(MIGRATION_LOCK)
+        .execute(conn)?;
+    Ok(())
+}
+
+/// Releases the migration lock.
+pub(crate) fn unlock_migrations(conn: &mut PgConnection) -> QueryResult<()> {
+    diesel::sql_query("SELECT pg_advisory_unlock($1)")
+        .bind::<BigInt, _>(MIGRATION_LOCK)
+        .execute(conn)?;
+    Ok(())
+}
+
 /// Refreshes the planner statistics the BM25 query plan depends on.
 pub(crate) fn analyze(conn: &mut PgConnection) -> QueryResult<()> {
     diesel::sql_query("ANALYZE rag_docs, rag_postings, rag_chunks").execute(conn)?;

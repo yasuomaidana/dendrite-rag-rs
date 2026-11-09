@@ -62,12 +62,8 @@ pub(crate) struct Pg {
 /// Migrates under an advisory lock: concurrent openers would otherwise all see an unmigrated
 /// schema and race to record the same migration version.
 fn migrate(conn: &mut PgConnection) -> Result<(), String> {
-    const LOCK: i64 = 0x6c6f_6f6d_7261_67;
     let pg = |e: DbError| format!("postgres: {e}");
-    diesel::sql_query("SELECT pg_advisory_lock($1)")
-        .bind::<diesel::sql_types::BigInt, _>(LOCK)
-        .execute(conn)
-        .map_err(pg)?;
+    raw::lock_migrations(conn).map_err(pg)?;
     let result = match raw::migrated(conn) {
         Ok(true) => Ok(()),
         Ok(false) => conn
@@ -76,10 +72,7 @@ fn migrate(conn: &mut PgConnection) -> Result<(), String> {
             .map_err(|e| format!("postgres: migration: {e}")),
         Err(e) => Err(pg(e)),
     };
-    diesel::sql_query("SELECT pg_advisory_unlock($1)")
-        .bind::<diesel::sql_types::BigInt, _>(LOCK)
-        .execute(conn)
-        .map_err(pg)?;
+    raw::unlock_migrations(conn).map_err(pg)?;
     result
 }
 
