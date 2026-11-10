@@ -118,3 +118,19 @@ fn a_torn_journal_tail_does_not_swallow_the_next_batch() {
     assert_eq!(text, "{\"cut\n{}\n");
     assert_eq!(edge.pending(), 2);
 }
+
+#[test]
+fn an_unparsable_journal_line_is_kept_with_everything_after_it() {
+    let Some(pg) = crate::testutil::test_pg() else {
+        return;
+    };
+    let dir = project();
+    let journal = dir.path().join(super::JOURNAL_FILE);
+    let content = "{\"cut\n{\"later\":1}\n";
+    std::fs::write(&journal, content).unwrap();
+    let edge = super::Edge::new(&pg.url, &unique("replay"), journal.clone());
+    // The tier is up, so the replay reaches the bad line: it stops there and keeps it.
+    assert_eq!(edge.replay().unwrap(), 2, "both lines stay pending");
+    assert_eq!(std::fs::read_to_string(&journal).unwrap(), content);
+    assert_eq!(edge.pending(), 2);
+}
