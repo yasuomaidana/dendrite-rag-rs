@@ -4,6 +4,14 @@ on:
     branches: [develop, main]
   pull_request:
 jobs:
+  db-access:
+    # SQL goes through Diesel only (docs/specs/store.md); runs on every pull request and push.
+    name: db-access (diesel only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh scripts/tests/check-db-access.test.sh
+      - run: sh scripts/check-db-access.sh
   rust:
     runs-on: ubuntu-latest
     steps:

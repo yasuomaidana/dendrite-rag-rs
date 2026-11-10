@@ -1,0 +1,2 @@
+# Exceptions to scripts/check-db-access.sh: `path: reason`. A directory ends in /.
+crates/loom-rag/tests/db_access.rs: the test that guards the rule names the forbidden crates as strings

@@ -232,6 +232,10 @@ Comprehensive architectural documentation and specifications are maintained in t
 
 ---
 
+## Database access
+
+SQL databases are reached through Diesel only. `scripts/check-db-access.sh` rejects other SQL crates and hand-written SQL outside `raw` modules; CI runs it as `db-access (diesel only)` on every pull request. Details and the exception file: [docs/specs/store.md](docs/specs/store.md#database-access-diesel).
+
 ## Quality Verification
 
 Run tests across the entire workspace:

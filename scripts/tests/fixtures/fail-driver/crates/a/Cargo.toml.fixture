@@ -1,0 +1,4 @@
+[package]
+name = "a"
+[dependencies.tokio-postgres]
+version = "0.7"
