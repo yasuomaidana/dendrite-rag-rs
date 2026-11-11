@@ -65,32 +65,22 @@ impl HnswIndex {
         }
 
         while let Some(Reverse((c_dist, c))) = candidates.pop() {
-            if let Some(&(furthest_dist, _)) = w.peek()
-                && c_dist > furthest_dist
-                && w.len() >= ef
-            {
+            if converged(&w, c_dist, ef) {
                 break;
             }
-
-            if let Some(neighbors) = self.nodes[c as usize].neighbors.get(level) {
-                for &e in neighbors {
-                    if visited.insert(e) {
-                        let d = self.dist_to_q(q_i8, q_scale, e);
-                        let can_insert = if w.len() < ef {
-                            true
-                        } else if let Some(&(furthest_dist, _)) = w.peek() {
-                            OrderedF32(d) < furthest_dist
-                        } else {
-                            false
-                        };
-
-                        if can_insert {
-                            candidates.push(Reverse((OrderedF32(d), e)));
-                            w.push((OrderedF32(d), e));
-                            if w.len() > ef {
-                                w.pop();
-                            }
-                        }
+            let Some(neighbors) = self.nodes[c as usize].neighbors.get(level) else {
+                continue;
+            };
+            for &e in neighbors {
+                if !visited.insert(e) {
+                    continue;
+                }
+                let d = self.dist_to_q(q_i8, q_scale, e);
+                if admits(&w, ef, d) {
+                    candidates.push(Reverse((OrderedF32(d), e)));
+                    w.push((OrderedF32(d), e));
+                    if w.len() > ef {
+                        w.pop();
                     }
                 }
             }
@@ -310,4 +300,14 @@ impl HnswIndex {
         }
         scored
     }
+}
+
+/// The nearest candidate is further than every member of a full result set: nothing closer can follow.
+fn converged(w: &BinaryHeap<(OrderedF32, u32)>, c_dist: OrderedF32, ef: usize) -> bool {
+    w.len() >= ef && w.peek().is_some_and(|&(furthest, _)| c_dist > furthest)
+}
+
+/// A candidate at distance `d` enters the result set while it is not full, or when it beats its furthest member.
+fn admits(w: &BinaryHeap<(OrderedF32, u32)>, ef: usize, d: f32) -> bool {
+    w.len() < ef || w.peek().is_some_and(|&(furthest, _)| OrderedF32(d) < furthest)
 }

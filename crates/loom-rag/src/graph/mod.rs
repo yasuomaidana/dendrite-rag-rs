@@ -143,75 +143,97 @@ impl<'a> GraphBuilder<'a> {
     pub fn finish(self, go_mods: impl IntoIterator<Item = (String, String)>) -> CodeGraph {
         let GraphBuilder { mut g, files, uses } = self;
         // Imports first: they decide which definitions a name may link to.
-        let resolver = Resolver::new(files.keys().map(String::as_str), go_mods);
-        let mut imported: Vec<HashSet<u32>> = vec![HashSet::new(); g.files.len()];
-        for (path, entry) in files {
-            let Some(lang) = Lang::from_path(std::path::Path::new(path)) else {
-                continue;
-            };
-            let from = g.file_ids[path];
-            for spec in &entry.imports {
-                let targets = resolver.resolve(path, lang, spec);
-                if targets.is_empty() {
-                    g.external.entry(from).or_default().push(spec.clone());
-                }
-                for t in targets {
-                    if let Some(&to) = g.file_ids.get(&t) {
-                        imported[from as usize].insert(to);
-                        g.add_file_edge(from, to, EdgeKind::Import, EdgeKind::Import.weight());
-                    }
-                }
-            }
-        }
+        let imported = g.link_imports(files, go_mods);
         for u in uses {
-            let Uses {
-                file,
-                owners,
-                calls,
-                method_calls,
-                types,
-            } = u;
-            let go = g.files[file as usize].ends_with(".go");
-            for (names, kind) in [(calls, EdgeKind::Call), (types, EdgeKind::Type)] {
-                for name in names {
-                    let targets = g.visible_defs(file, &name, &imported[file as usize]);
-                    if targets.is_empty() || targets.len() > MAX_DEF_FANOUT {
-                        continue;
-                    }
-                    // `x.len()` names a method of a value whose type is unknown here: link
-                    // it only when the project defines that name once and it is not a
-                    // standard container method. (Go selectors are package-qualified and
-                    // already filtered by imports.)
-                    if !go
-                        && method_calls.contains(&name)
-                        && (COMMON_METHODS.split_whitespace().any(|m| m == name)
-                            || g.symbols_named(&name)
-                                .iter()
-                                .filter(|&&s| !g.sites[s as usize].is_empty())
-                                .count()
-                                != 1)
-                    {
-                        continue;
-                    }
-                    let share = kind.weight() / targets.len() as f32;
-                    for target in targets {
-                        let to = g.symbols[target as usize].1;
-                        g.add_file_edge(file, to, kind, share);
-                        for &o in &owners {
-                            if o != target {
-                                g.sym_out[o as usize].insert((target, kind));
-                                g.sym_in[target as usize].insert((o, kind));
-                            }
-                        }
-                    }
-                }
-            }
+            let file = u.file as usize;
+            g.link_uses(u, &imported[file]);
         }
         g
     }
 }
 
 impl CodeGraph {
+    /// Adds the import edges and returns, per file, the files it imports.
+    fn link_imports(
+        &mut self,
+        files: &BTreeMap<String, FileEntry>,
+        go_mods: impl IntoIterator<Item = (String, String)>,
+    ) -> Vec<HashSet<u32>> {
+        let resolver = Resolver::new(files.keys().map(String::as_str), go_mods);
+        let mut imported: Vec<HashSet<u32>> = vec![HashSet::new(); self.files.len()];
+        for (path, entry) in files {
+            let Some(lang) = Lang::from_path(std::path::Path::new(path)) else {
+                continue;
+            };
+            let from = self.file_ids[path];
+            for spec in &entry.imports {
+                let targets = resolver.resolve(path, lang, spec);
+                if targets.is_empty() {
+                    self.external.entry(from).or_default().push(spec.clone());
+                }
+                for t in targets {
+                    if let Some(&to) = self.file_ids.get(&t) {
+                        imported[from as usize].insert(to);
+                        self.add_file_edge(from, to, EdgeKind::Import, EdgeKind::Import.weight());
+                    }
+                }
+            }
+        }
+        imported
+    }
+
+    /// Adds the call and type edges of one chunk's uses.
+    fn link_uses(&mut self, u: Uses, imported: &HashSet<u32>) {
+        let Uses {
+            file,
+            owners,
+            calls,
+            method_calls,
+            types,
+        } = u;
+        let go = self.files[file as usize].ends_with(".go");
+        for (names, kind) in [(calls, EdgeKind::Call), (types, EdgeKind::Type)] {
+            for name in names {
+                let targets = self.visible_defs(file, &name, imported);
+                if targets.is_empty() || targets.len() > MAX_DEF_FANOUT {
+                    continue;
+                }
+                if !go && method_calls.contains(&name) && self.ambiguous_method(&name) {
+                    continue;
+                }
+                self.link_targets(file, &owners, &targets, kind);
+            }
+        }
+    }
+
+    /// `x.len()` names a method of a value whose type is unknown here: it links only when the
+    /// project defines that name once and it is not a standard container method. (Go selectors
+    /// are package-qualified and already filtered by imports.)
+    fn ambiguous_method(&self, name: &str) -> bool {
+        COMMON_METHODS.split_whitespace().any(|m| m == name)
+            || self
+                .symbols_named(name)
+                .iter()
+                .filter(|&&s| !self.sites[s as usize].is_empty())
+                .count()
+                != 1
+    }
+
+    /// Links `file` and the `owners` of a use to the definitions it may mean, sharing the edge weight.
+    fn link_targets(&mut self, file: u32, owners: &[u32], targets: &[u32], kind: EdgeKind) {
+        let share = kind.weight() / targets.len() as f32;
+        for &target in targets {
+            let to = self.symbols[target as usize].1;
+            self.add_file_edge(file, to, kind, share);
+            for &o in owners {
+                if o != target {
+                    self.sym_out[o as usize].insert((target, kind));
+                    self.sym_in[target as usize].insert((o, kind));
+                }
+            }
+        }
+    }
+
     /// The files defining `sym` that a use in `from` can mean: the same directory (package
     /// or module) or a file `from` imports. Names are not qualified, so without this a call
     /// to `time.Now` would link to any project function named `Now`. Go cannot use a name

@@ -1,6 +1,7 @@
 //! Index runs: walk, hash, Merkle diff, chunk, and update the lexical index and ledger.
 
 use super::*;
+use crate::store::{LedgerWrite, LexicalWrite};
 
 fn merkle<'a>(entries: impl Iterator<Item = (&'a str, &'a str)>) -> MerkleNode {
     MerkleNode::from_paths("", entries.map(|(p, h)| (p.to_string(), h.as_bytes().to_vec())))
@@ -118,6 +119,16 @@ impl Engine {
     ) -> Result<IndexReport> {
         let started = Instant::now();
         let deadline = embed_budget.map(|b| started + b);
+        let plan = self.plan_index(full)?;
+        let mut report = plan.report(std::mem::take(&mut self.open_ms));
+        self.write_index(&plan, full, &mut report)?;
+        self.refresh_derived(&plan, full, deadline, focus, &mut report)?;
+        report.duration_ms = started.elapsed().as_millis() as u64;
+        Ok(report)
+    }
+
+    /// Walks and hashes the project and diffs it against the ledger.
+    fn plan_index(&self, full: bool) -> Result<Plan> {
         let walked = Instant::now();
         let files = walk(&self.root, &self.cfg.walk)?;
         let old = if full {
@@ -139,94 +150,85 @@ impl Engine {
             .into_iter()
             .filter_map(|h| Some((h.file, h.hash?)))
             .collect();
+        let new_paths: BTreeSet<String> = scanned.iter().map(|(f, _)| f.path.clone()).collect();
 
         let old_tree = merkle(old.iter().map(|(p, e)| (p.as_str(), e.hash.as_str())));
         let new_tree = merkle(scanned.iter().map(|(f, h)| (f.path.as_str(), h.as_str())));
-        let new_paths: BTreeSet<&str> = scanned.iter().map(|(f, _)| f.path.as_str()).collect();
         let delta = diff(&old_tree, &new_tree);
-
         let mut removed: BTreeSet<String> = BTreeSet::new();
         let mut added: BTreeSet<String> = BTreeSet::new();
         for p in delta.removed.iter().chain(&delta.changed) {
             removed.extend(expand(p, old.keys().map(String::as_str)));
         }
         for p in delta.added.iter().chain(&delta.changed) {
-            added.extend(expand(p, new_paths.iter().copied()));
+            added.extend(expand(p, new_paths.iter().map(String::as_str)));
         }
+        Ok(Plan {
+            old,
+            scanned,
+            unreadable,
+            new_paths,
+            removed,
+            added,
+            new_tree,
+            walk_ms: walked.elapsed().as_millis() as u64,
+        })
+    }
 
-        let walk_ms = walked.elapsed().as_millis() as u64;
-        let mut report = IndexReport {
-            open_ms: std::mem::take(&mut self.open_ms),
-            walk_ms,
-            files_scanned: scanned.len(),
-            files_unreadable: unreadable,
-            files_changed: added.len(),
-            files_removed: removed.iter().filter(|p| !new_paths.contains(p.as_str())).count(),
-            ..IndexReport::default()
-        };
-
-        // Lexical index first: replaying a half-finished run is idempotent, because files
-        // are removed by path before their chunks are added again.
+    /// Updates the lexical index and the ledger from `plan`, lexical index first: replaying a
+    /// half-finished run is idempotent, because files are removed by path before their chunks
+    /// are added again.
+    fn write_index(&self, plan: &Plan, full: bool, report: &mut IndexReport) -> Result<()> {
         let mut lw = self.lexical.writer()?;
         // An empty file table (first run, or a ledger cleared by a schema change) must not
         // keep the lexical documents of an earlier run: they would be duplicated.
-        if full || old.is_empty() {
+        if full || plan.old.is_empty() {
             lw.clear()?;
         }
-        for p in &removed {
+        for p in &plan.removed {
             lw.remove_file(p);
         }
         let mut batch = self.ledger.batch()?;
         if full {
             batch.clear_index()?;
         }
-        // Removals before additions: a modified file's unchanged chunks keep their ids.
-        // A modified file loses its entry too, so after a crash before its group commits
-        // the next run sees it as added even if its content went back to the old hash.
-        for p in &removed {
-            if let Some(e) = old.get(p) {
-                for id in &e.chunk_ids {
-                    batch.remove_chunk(id)?;
-                    report.chunks_removed += 1;
-                }
-            }
-            batch.remove_file(p)?;
-            if !new_paths.contains(p.as_str()) {
-                batch.remove_concepts(p)?;
-            }
-        }
-        // Chunk the added and modified files a group at a time and commit each group to both
-        // stores, lexical index first, before the next is chunked: holding every chunk of a
-        // cold index at once, and one ledger transaction over all of them, was its peak
-        // memory (DRAG-44). A crash between groups leaves the committed groups current;
-        // the next run re-chunks the rest, removing each file from the lexical index by
-        // path first so a group committed only there is not duplicated.
-        let opts = self.cfg.chunk;
-        let contexts = self.cfg.chunk_contexts.clone();
-        let changed_files: Vec<&(SourceFile, String)> =
-            scanned.iter().filter(|(f, _)| added.contains(&f.path)).collect();
-        let groups: Vec<_> = changed_files.chunks(CHUNK_GROUP_FILES).collect();
-        for (i, group) in groups.iter().enumerate() {
+        plan.drop_removed(&mut *batch, report)?;
+        let (lw, mut batch) = self.write_groups(plan, lw, batch, report)?;
+        // Lexical index first: the ledger commit below is what makes the run count.
+        lw.commit()?;
+        plan.refresh_unchanged(&mut *batch)?;
+        batch.set_meta("merkle_root", &hex(&plan.new_tree.hash))?;
+        batch.set_meta("last_indexed", &now_secs().to_string())?;
+        batch.commit()?;
+        Ok(())
+    }
+
+    /// Chunks the added and modified files a group at a time and commits each group to both
+    /// stores, lexical index first, before the next is chunked: holding every chunk of a
+    /// cold index at once, and one ledger transaction over all of them, was its peak
+    /// memory (DRAG-44). A crash between groups leaves the committed groups current;
+    /// the next run re-chunks the rest, removing each file from the lexical index by
+    /// path first so a group committed only there is not duplicated.
+    fn write_groups<'a>(
+        &'a self,
+        plan: &Plan,
+        mut lw: Box<dyn LexicalWrite + 'a>,
+        mut batch: Box<dyn LedgerWrite + 'a>,
+        report: &mut IndexReport,
+    ) -> Result<(Box<dyn LexicalWrite + 'a>, Box<dyn LedgerWrite + 'a>)> {
+        let changed_files: Vec<&(SourceFile, String)> = plan
+            .scanned
+            .iter()
+            .filter(|(f, _)| plan.added.contains(&f.path))
+            .collect();
+        for (i, group) in changed_files.chunks(CHUNK_GROUP_FILES).enumerate() {
             if i > 0 {
                 lw.commit()?;
                 batch.commit()?;
                 lw = self.lexical.writer()?;
                 batch = self.ledger.batch()?;
             }
-            let fresh: Vec<(&SourceFile, &String, Vec<Chunk>, Vec<String>)> = group
-                .par_iter()
-                .map(|(f, h)| {
-                    let (mut chunks, imports): (Vec<Chunk>, Vec<String>) = read_text(&f.abs)
-                        .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
-                    if let Some(ctx) = &contexts {
-                        for c in &mut chunks {
-                            c.context = ctx.get(&c.id).cloned();
-                        }
-                    }
-                    (f, h, chunks, imports)
-                })
-                .collect();
-            for (f, h, chunks, imports) in fresh {
+            for (f, h, chunks, imports) in self.chunk_group(group) {
                 lw.remove_file(&f.path);
                 for c in &chunks {
                     lw.add(c)?;
@@ -243,17 +245,119 @@ impl Engine {
                 batch.put_file(&f.path, &entry)?;
             }
         }
-        // Lexical index first: the ledger commit below is what makes the run count.
-        lw.commit()?;
+        Ok((lw, batch))
+    }
 
-        // Unchanged content with a new mtime: refresh the entry so the next run skips it. An unreadable file
-        // keeps its old size and mtime, or the next run would trust the stale hash it carries.
-        let unreadable: BTreeSet<&str> = report.files_unreadable.iter().map(String::as_str).collect();
-        for (f, h) in &scanned {
-            if added.contains(&f.path) || unreadable.contains(f.path.as_str()) {
+    /// Reads and chunks one group of files in parallel.
+    fn chunk_group<'g>(&self, group: &[&'g (SourceFile, String)]) -> Vec<Fresh<'g>> {
+        let opts = self.cfg.chunk;
+        let contexts = &self.cfg.chunk_contexts;
+        group
+            .par_iter()
+            .map(|&(f, h)| {
+                let (mut chunks, imports): (Vec<Chunk>, Vec<String>) = read_text(&f.abs)
+                    .map_or_else(Default::default, |src| analyze_file(&f.path, f.lang, &src, opts));
+                if let Some(ctx) = contexts {
+                    for c in &mut chunks {
+                        c.context = ctx.get(&c.id).cloned();
+                    }
+                }
+                (f, h, chunks, imports)
+            })
+            .collect()
+    }
+
+    /// What follows a write: stale caches dropped, communities, concepts and vectors brought up to date.
+    fn refresh_derived(
+        &mut self,
+        plan: &Plan,
+        full: bool,
+        deadline: Option<Instant>,
+        focus: Option<&str>,
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        let changed = full || report.files_changed > 0 || report.files_removed > 0;
+        if changed {
+            *self.symbols.write().expect("symbols lock") = None;
+            *self.graph.write().expect("graph lock") = None;
+        }
+        // Communities follow the graph; a ledger from before communities gets them now.
+        let mut communities = self.ledger.communities()?.len();
+        if changed || (communities == 0 && !plan.scanned.is_empty()) {
+            let t = Instant::now();
+            communities = self.update_communities(report)?;
+            report.graph_ms = t.elapsed().as_millis() as u64;
+        }
+        report.communities = communities;
+        self.enrich_concepts(&plan.scanned, &plan.added, report)?;
+        let embedding = Instant::now();
+        self.sync_vectors(changed, deadline, focus, report)?;
+        report.embed_ms = embedding.elapsed().as_millis() as u64;
+        Ok(())
+    }
+}
+
+/// A chunked file: the file, its hash, its chunks and the imports found in it.
+type Fresh<'a> = (&'a SourceFile, &'a String, Vec<Chunk>, Vec<String>);
+
+/// The walked project compared with the ledger: what to remove, add and refresh.
+struct Plan {
+    old: BTreeMap<String, FileEntry>,
+    scanned: Vec<(SourceFile, String)>,
+    unreadable: Vec<String>,
+    new_paths: BTreeSet<String>,
+    removed: BTreeSet<String>,
+    added: BTreeSet<String>,
+    new_tree: MerkleNode,
+    walk_ms: u64,
+}
+
+impl Plan {
+    fn report(&self, open_ms: u64) -> IndexReport {
+        IndexReport {
+            open_ms,
+            walk_ms: self.walk_ms,
+            files_scanned: self.scanned.len(),
+            files_unreadable: self.unreadable.clone(),
+            files_changed: self.added.len(),
+            files_removed: self
+                .removed
+                .iter()
+                .filter(|p| !self.new_paths.contains(p.as_str()))
+                .count(),
+            ..IndexReport::default()
+        }
+    }
+
+    /// Removals before additions: a modified file's unchanged chunks keep their ids. A modified
+    /// file loses its entry too, so after a crash before its group commits the next run sees it
+    /// as added even if its content went back to the old hash.
+    fn drop_removed(&self, batch: &mut dyn LedgerWrite, report: &mut IndexReport) -> Result<()> {
+        for p in &self.removed {
+            if let Some(e) = self.old.get(p) {
+                for id in &e.chunk_ids {
+                    batch.remove_chunk(id)?;
+                    report.chunks_removed += 1;
+                }
+            }
+            batch.remove_file(p)?;
+            if !self.new_paths.contains(p.as_str()) {
+                batch.remove_concepts(p)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Unchanged content with a new mtime: refreshes the entry so the next run skips it. An unreadable file
+    /// keeps its old size and mtime, or the next run would trust the stale hash it carries.
+    fn refresh_unchanged(&self, batch: &mut dyn LedgerWrite) -> Result<()> {
+        let unreadable: BTreeSet<&str> = self.unreadable.iter().map(String::as_str).collect();
+        for (f, h) in &self.scanned {
+            if self.added.contains(&f.path) || unreadable.contains(f.path.as_str()) {
                 continue;
             }
-            if let Some(e) = old
+            if let Some(e) = self
+                .old
                 .get(&f.path)
                 .filter(|e| e.size != f.size || e.mtime_ns != f.mtime_ns)
             {
@@ -266,28 +370,6 @@ impl Engine {
                 batch.put_file(&f.path, &entry)?;
             }
         }
-        batch.set_meta("merkle_root", &hex(&new_tree.hash))?;
-        batch.set_meta("last_indexed", &now_secs().to_string())?;
-        batch.commit()?;
-
-        let changed = full || report.files_changed > 0 || report.files_removed > 0;
-        if changed {
-            *self.symbols.write().expect("symbols lock") = None;
-            *self.graph.write().expect("graph lock") = None;
-        }
-        // Communities follow the graph; a ledger from before communities gets them now.
-        let mut communities = self.ledger.communities()?.len();
-        if changed || (communities == 0 && !scanned.is_empty()) {
-            let t = Instant::now();
-            communities = self.update_communities(&mut report)?;
-            report.graph_ms = t.elapsed().as_millis() as u64;
-        }
-        report.communities = communities;
-        self.enrich_concepts(&scanned, &added, &mut report)?;
-        let embedding = Instant::now();
-        self.sync_vectors(changed, deadline, focus, &mut report)?;
-        report.embed_ms = embedding.elapsed().as_millis() as u64;
-        report.duration_ms = started.elapsed().as_millis() as u64;
-        Ok(report)
+        Ok(())
     }
 }

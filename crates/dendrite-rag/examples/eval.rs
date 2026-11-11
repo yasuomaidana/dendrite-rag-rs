@@ -160,8 +160,8 @@ fn print_scores(engine: &Engine, modes: &[Mode], queries: &[&Query], label: &str
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// Opens the project, indexes it and prints the corpus line.
+fn prepare(args: &[String]) -> anyhow::Result<(Engine, Golden)> {
     let root = args.first().map(String::as_str).unwrap_or(".");
     let golden: Golden = serde_json::from_slice(&std::fs::read(
         args.get(1)
@@ -183,27 +183,59 @@ fn main() -> anyhow::Result<()> {
         "corpus: {} files, {} chunks, {} vectors, model {:?}\n",
         status.files, status.chunks, status.vectors, status.embed_model
     );
+    Ok((engine, golden))
+}
 
-    if std::env::var_os("EVAL_SWEEP").is_some() {
-        return sweep(&engine, &golden.queries);
-    }
-
-    // Quality per mode.
+/// Quality per mode, for all queries and for the broad subset.
+fn quality(engine: &Engine, golden: &Golden) -> anyhow::Result<()> {
     let mut modes = vec![Mode::Lexical, Mode::Hybrid];
     if engine.has_vectors() {
         modes.insert(1, Mode::Dense);
     }
     let all: Vec<&Query> = golden.queries.iter().collect();
-    print_scores(&engine, &modes, &all, "")?;
+    print_scores(engine, &modes, &all, "")?;
     let broad: Vec<&Query> = golden.queries.iter().filter(|q| q.broad).collect();
     if !broad.is_empty() {
         println!("\nbroad subset ({} queries):", broad.len());
-        print_scores(&engine, &modes, &broad, "broad ")?;
+        print_scores(engine, &modes, &broad, "broad ")?;
     }
+    Ok(())
+}
 
-    eprintln!("rss after quality: {:.0} MB", max_rss_mb());
-    // Latency with 8 concurrent readers. Query embeddings are computed once up front, so
-    // the numbers measure retrieval, not the embedding model.
+/// One reader's share of the latency run: lexical and vector search times.
+fn read_rounds(
+    engine: &Engine,
+    queries: &[&str],
+    embedded: &[Option<Vec<f32>>],
+    t: usize,
+    rounds: usize,
+) -> (Vec<Duration>, Vec<Duration>) {
+    let mut lex = Vec::new();
+    let mut vec = Vec::new();
+    for r in 0..rounds {
+        for (i, q) in queries.iter().enumerate() {
+            if (i + t + r).is_multiple_of(2) {
+                let start = Instant::now();
+                let opts = SearchOpts {
+                    mode: Mode::Lexical,
+                    ..SearchOpts::default()
+                };
+                let _ = engine.search(q, &opts);
+                lex.push(start.elapsed());
+            }
+            if let Some(v) = &embedded[i] {
+                let start = Instant::now();
+                let _ = engine.search_vector(v, 50);
+                vec.push(start.elapsed());
+            }
+        }
+    }
+    (lex, vec)
+}
+
+/// Latency with 8 concurrent readers. Query embeddings are computed once up front, so the
+/// numbers measure retrieval, not the embedding model.
+fn latency(engine: &Engine, golden: &Golden) {
     let queries: Vec<&str> = golden.queries.iter().map(|q| q.q.as_str()).collect();
     let embedded: Vec<Option<Vec<f32>>> = queries
         .iter()
@@ -212,37 +244,11 @@ fn main() -> anyhow::Result<()> {
     let rounds = 10;
     let mut lexical = Vec::new();
     let mut vector = Vec::new();
-    let engine_ref = &engine;
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..8)
             .map(|t| {
-                let queries = &queries;
-                let embedded = &embedded;
-                scope.spawn(move || {
-                    let mut lex = Vec::new();
-                    let mut vec = Vec::new();
-                    for r in 0..rounds {
-                        for (i, q) in queries.iter().enumerate() {
-                            if (i + t + r) % 2 == 0 {
-                                let start = Instant::now();
-                                let _ = engine_ref.search(
-                                    q,
-                                    &SearchOpts {
-                                        mode: Mode::Lexical,
-                                        ..SearchOpts::default()
-                                    },
-                                );
-                                lex.push(start.elapsed());
-                            }
-                            if let Some(v) = &embedded[i] {
-                                let start = Instant::now();
-                                let _ = engine_ref.search_vector(v, 50);
-                                vec.push(start.elapsed());
-                            }
-                        }
-                    }
-                    (lex, vec)
-                })
+                let (queries, embedded) = (&queries, &embedded);
+                scope.spawn(move || read_rounds(engine, queries, embedded, t, rounds))
             })
             .collect();
         for h in handles {
@@ -270,45 +276,59 @@ fn main() -> anyhow::Result<()> {
             percentile(&vector, 0.95)
         );
     }
+}
 
+/// Rescored int8 search against exact f32 search over the real cached vectors (this check loads
+/// every vector, so it runs after the RSS measurement).
+fn recall_vs_exact(engine: &Engine, model: &str) -> anyhow::Result<()> {
+    let mut exact: Vec<(String, Vec<f32>)> = Vec::new();
+    engine.ledger().for_each_chunk(&mut |c| {
+        if let Ok(Some(v)) = engine.ledger().embedding(&cache_key(model, &c.content_hash)) {
+            exact.push((c.id, v));
+        }
+    })?;
+    let sample: Vec<usize> = (0..exact.len())
+        .step_by((exact.len() / 100).max(1))
+        .take(100)
+        .collect();
+    let mut overlap = 0;
+    for &i in &sample {
+        let q = &exact[i].1;
+        let mut scored: Vec<(&str, f32)> = exact
+            .iter()
+            .map(|(id, v)| (id.as_str(), v.iter().zip(q).map(|(a, b)| a * b).sum()))
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let truth: HashMap<&str, ()> = scored.iter().take(10).map(|(id, _)| (*id, ())).collect();
+        overlap += engine
+            .search_vector(q, 10)?
+            .iter()
+            .filter(|(id, _)| truth.contains_key(id.as_str()))
+            .count();
+    }
+    println!(
+        "\nvector search vs exact f32 recall@10 over {} real query vectors: {:.3}",
+        sample.len(),
+        overlap as f32 / (sample.len() * 10) as f32
+    );
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (engine, golden) = prepare(&args)?;
+    if std::env::var_os("EVAL_SWEEP").is_some() {
+        return sweep(&engine, &golden.queries);
+    }
+    quality(&engine, &golden)?;
+    eprintln!("rss after quality: {:.0} MB", max_rss_mb());
+    latency(&engine, &golden);
     println!(
         "max RSS after indexing and the latency run: {:.0} MB",
         max_rss_mb()
     );
-
-    // Rescored int8 search against exact f32 search over the real cached vectors (this
-    // check loads every vector, so it runs after the RSS measurement).
-    if let Some(model) = &status.embed_model {
-        let mut exact: Vec<(String, Vec<f32>)> = Vec::new();
-        engine.ledger().for_each_chunk(&mut |c| {
-            if let Ok(Some(v)) = engine.ledger().embedding(&cache_key(model, &c.content_hash)) {
-                exact.push((c.id, v));
-            }
-        })?;
-        let sample: Vec<usize> = (0..exact.len())
-            .step_by((exact.len() / 100).max(1))
-            .take(100)
-            .collect();
-        let mut overlap = 0;
-        for &i in &sample {
-            let q = &exact[i].1;
-            let mut scored: Vec<(&str, f32)> = exact
-                .iter()
-                .map(|(id, v)| (id.as_str(), v.iter().zip(q).map(|(a, b)| a * b).sum()))
-                .collect();
-            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let truth: HashMap<&str, ()> = scored.iter().take(10).map(|(id, _)| (*id, ())).collect();
-            overlap += engine
-                .search_vector(q, 10)?
-                .iter()
-                .filter(|(id, _)| truth.contains_key(id.as_str()))
-                .count();
-        }
-        println!(
-            "\nvector search vs exact f32 recall@10 over {} real query vectors: {:.3}",
-            sample.len(),
-            overlap as f32 / (sample.len() * 10) as f32
-        );
+    if let Some(model) = &engine.status()?.embed_model {
+        recall_vs_exact(&engine, model)?;
     }
     Ok(())
 }

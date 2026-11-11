@@ -70,39 +70,49 @@ def extract_gold_files(patch: str) -> list[str]:
     return files
 
 
+def _module_names(path: str) -> list[str]:
+    """Dotted module paths of a .py path: the module itself and, for __init__, its package."""
+    mod = path[:-3]
+    names = [mod.replace("/", ".")]
+    if mod.endswith("/__init__"):
+        names.append(mod[:-9].replace("/", "."))
+    return names
+
+
+def _file_identifiers(p: str) -> list[str]:
+    """Full path, basename and dotted module paths (also without a src/ prefix) of one file."""
+    found = [p]
+    base = os.path.basename(p)
+    if base:
+        found.append(base)
+    if not p.endswith(".py"):
+        return found
+    found.extend(_module_names(p))
+    if p.startswith("src/"):
+        no_src = p[4:]
+        found.append(no_src)
+        no_src_base = os.path.basename(no_src)
+        if no_src_base:
+            found.append(no_src_base)
+        if no_src.endswith(".py"):
+            found.extend(_module_names(no_src))
+    return found
+
+
+def _normalized(path: str) -> str:
+    p = path.strip()
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def gold_identifiers(gold_files: list[str]) -> list[str]:
     """Collects full paths, basenames, and dotted module paths for gold files."""
     candidates = []
     for f in gold_files:
-        p = f.strip()
-        while p.startswith("./"):
-            p = p[2:]
-        if not p:
-            continue
-        # 1. Full path
-        candidates.append(p)
-        # 2. Basename
-        base = os.path.basename(p)
-        if base:
-            candidates.append(base)
-        # 3. Dotted module paths
-        if p.endswith(".py"):
-            mod = p[:-3]
-            candidates.append(mod.replace("/", "."))
-            if mod.endswith("/__init__"):
-                candidates.append(mod[:-9].replace("/", "."))
-            # Also handle src/ prefix
-            if p.startswith("src/"):
-                no_src = p[4:]
-                candidates.append(no_src)
-                no_src_base = os.path.basename(no_src)
-                if no_src_base:
-                    candidates.append(no_src_base)
-                if no_src.endswith(".py"):
-                    no_src_mod = no_src[:-3]
-                    candidates.append(no_src_mod.replace("/", "."))
-                    if no_src_mod.endswith("/__init__"):
-                        candidates.append(no_src_mod[:-9].replace("/", "."))
+        p = _normalized(f)
+        if p:
+            candidates.extend(_file_identifiers(p))
     # Deduplicate preserving order, keep identifiers of length >= 3
     seen = set()
     result = []

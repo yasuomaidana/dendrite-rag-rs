@@ -77,28 +77,34 @@ fn slopes(n: usize) -> Vec<f32> {
     s
 }
 
+impl Layer {
+    fn load(vb: &VarBuilder, cfg: &Config, i: usize) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let eps = cfg.layer_norm_eps;
+        let l = vb.pp(format!("encoder.layer.{i}"));
+        let a = l.pp("attention");
+        Ok(Layer {
+            query: linear(h, h, a.pp("self.query"))?,
+            key: linear(h, h, a.pp("self.key"))?,
+            value: linear(h, h, a.pp("self.value"))?,
+            norm_q: layer_norm(h, eps, a.pp("self.layer_norm_q"))?,
+            norm_k: layer_norm(h, eps, a.pp("self.layer_norm_k"))?,
+            out: linear(h, h, a.pp("output.dense"))?,
+            norm_out: layer_norm(h, eps, a.pp("output.LayerNorm"))?,
+            norm_1: layer_norm(h, eps, l.pp("layer_norm_1"))?,
+            norm_2: layer_norm(h, eps, l.pp("layer_norm_2"))?,
+            up_gated: linear_no_bias(h, 2 * cfg.intermediate_size, l.pp("mlp.up_gated_layer"))?,
+            down: linear(cfg.intermediate_size, h, l.pp("mlp.down_layer"))?,
+        })
+    }
+}
+
 impl JinaCodeModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let eps = cfg.layer_norm_eps;
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| {
-                let l = vb.pp(format!("encoder.layer.{i}"));
-                let a = l.pp("attention");
-                Ok(Layer {
-                    query: linear(h, h, a.pp("self.query"))?,
-                    key: linear(h, h, a.pp("self.key"))?,
-                    value: linear(h, h, a.pp("self.value"))?,
-                    norm_q: layer_norm(h, eps, a.pp("self.layer_norm_q"))?,
-                    norm_k: layer_norm(h, eps, a.pp("self.layer_norm_k"))?,
-                    out: linear(h, h, a.pp("output.dense"))?,
-                    norm_out: layer_norm(h, eps, a.pp("output.LayerNorm"))?,
-                    norm_1: layer_norm(h, eps, l.pp("layer_norm_1"))?,
-                    norm_2: layer_norm(h, eps, l.pp("layer_norm_2"))?,
-                    up_gated: linear_no_bias(h, 2 * cfg.intermediate_size, l.pp("mlp.up_gated_layer"))?,
-                    down: linear(cfg.intermediate_size, h, l.pp("mlp.down_layer"))?,
-                })
-            })
+            .map(|i| Layer::load(&vb, cfg, i))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             words: embedding(cfg.vocab_size, h, vb.pp("embeddings.word_embeddings"))?,
@@ -119,8 +125,15 @@ impl JinaCodeModel {
         let mut x = self
             .norm
             .forward(&(self.words.forward(ids)? + self.types.forward(&ids.zeros_like()?)?)?)?;
+        let bias = self.attention_bias(mask, b, n)?;
+        for l in &self.layers {
+            x = self.layer(l, &x, &bias, (b, n))?;
+        }
+        Ok(x)
+    }
 
-        // Additive bias [b, heads, n, n]: padding mask plus ALiBi.
+    /// Additive bias [b, heads, n, n]: padding mask plus ALiBi.
+    fn attention_bias(&self, mask: &Tensor, b: usize, n: usize) -> Result<Tensor> {
         let pos: Vec<f32> = (0..n * n)
             .map(|k| ((k % n) as f32 - (k / n) as f32).abs())
             .collect();
@@ -128,38 +141,48 @@ impl JinaCodeModel {
         let s = Tensor::from_vec(slopes(self.heads), (1, self.heads, 1, 1), &self.device)?;
         let alibi = dist.broadcast_mul(&s.neg()?)?;
         let pad = ((mask.to_dtype(DType::F32)? - 1.0)? * 1e9f64)?.reshape((b, 1, 1, n))?;
-        let bias = alibi.broadcast_add(&pad)?;
+        alibi.broadcast_add(&pad)
+    }
 
-        let split = |t: Tensor| -> Result<Tensor> {
-            t.reshape((b, n, self.heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()
-        };
+    fn split_heads(&self, t: Tensor, (b, n): (usize, usize)) -> Result<Tensor> {
+        t.reshape((b, n, self.heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()
+    }
+
+    /// One encoder layer: attention with a residual, then the gated feed-forward with another.
+    fn layer(&self, l: &Layer, x: &Tensor, bias: &Tensor, dims: (usize, usize)) -> Result<Tensor> {
+        let attn = self.attention(l, x, bias, dims)?;
+        let r = l.norm_1.forward(&(x + attn)?)?;
+        let mlp = self.feed_forward(l, &r)?;
+        l.norm_2.forward(&(r + mlp)?)
+    }
+
+    fn attention(&self, l: &Layer, x: &Tensor, bias: &Tensor, dims: (usize, usize)) -> Result<Tensor> {
+        let (b, n) = dims;
         let scale = (self.head_dim as f64).powf(-0.5);
-        for l in &self.layers {
-            let q = split(l.norm_q.forward(&l.query.forward(&x)?)?)?;
-            let k = split(l.norm_k.forward(&l.key.forward(&x)?)?)?;
-            let v = split(l.value.forward(&x)?)?;
-            let scores = (q.matmul(&k.t()?)? * scale)?.broadcast_add(&bias)?;
-            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-            let ctx = probs
-                .matmul(&v)?
-                .transpose(1, 2)?
-                .reshape((b, n, self.heads * self.head_dim))?;
-            let attn = l.norm_out.forward(&(l.out.forward(&ctx)? + &x)?)?;
-            let r = l.norm_1.forward(&(&x + attn)?)?;
-            let ug = l.up_gated.forward(&r)?;
-            let up = ug.narrow(D::Minus1, 0, self.intermediate)?;
-            let gate = ug.narrow(D::Minus1, self.intermediate, self.intermediate)?;
-            let act = if self.reglu {
-                gate.relu()?
-            } else {
-                gate.gelu_erf()?
-            };
-            let mlp = l.down.forward(&(up * act)?)?;
-            x = l.norm_2.forward(&(r + mlp)?)?;
-        }
-        Ok(x)
+        let q = self.split_heads(l.norm_q.forward(&l.query.forward(x)?)?, dims)?;
+        let k = self.split_heads(l.norm_k.forward(&l.key.forward(x)?)?, dims)?;
+        let v = self.split_heads(l.value.forward(x)?, dims)?;
+        let scores = (q.matmul(&k.t()?)? * scale)?.broadcast_add(bias)?;
+        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+        let ctx = probs
+            .matmul(&v)?
+            .transpose(1, 2)?
+            .reshape((b, n, self.heads * self.head_dim))?;
+        l.norm_out.forward(&(l.out.forward(&ctx)? + x)?)
+    }
+
+    fn feed_forward(&self, l: &Layer, r: &Tensor) -> Result<Tensor> {
+        let ug = l.up_gated.forward(r)?;
+        let up = ug.narrow(D::Minus1, 0, self.intermediate)?;
+        let gate = ug.narrow(D::Minus1, self.intermediate, self.intermediate)?;
+        let act = if self.reglu {
+            gate.relu()?
+        } else {
+            gate.gelu_erf()?
+        };
+        l.down.forward(&(up * act)?)
     }
 }
 
