@@ -30,30 +30,75 @@ impl Engine {
         focus: Option<&str>,
         report: &mut IndexReport,
     ) -> Result<()> {
-        let Some(embedder) = &self.embedder else {
+        let Some(model) = self.embedder.as_ref().map(|e| e.model_id().to_string()) else {
             if !self.vectors.is_empty() {
                 self.vectors.clear();
                 self.vectors.persist()?;
             }
             return Ok(());
         };
-        let model = embedder.model_id().to_string();
-        let chunk_count = self.ledger.chunk_count()? as usize;
-        let same_model = self.ledger.meta("embed_model")?.as_deref() == Some(model.as_str());
-        if !changed && same_model && self.vectors.len() == chunk_count {
-            // Equal counts can still hide a stale file: compare ids too. The file table
-            // lists every chunk id without loading chunk texts.
-            let files = self.ledger.files()?;
-            if files
-                .values()
-                .flat_map(|f| &f.chunk_ids)
-                .all(|id| self.vectors.contains(id))
-            {
-                return Ok(());
-            }
+        if !changed && self.vectors_are_current(&model)? {
+            return Ok(());
         }
+        let live = self.drop_stale_vectors()?;
+        let mut todo = self.uncached_chunks(&live, &model)?;
+        if let Some(q) = focus.filter(|_| deadline.is_some()) {
+            let first: HashSet<String> = self
+                .lexical
+                .search(q, FOCUS_CANDIDATES, &self.cfg.bm25)?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            todo.sort_by_key(|id| !first.contains(id));
+        }
+        let budget_tokens = self.cfg.embed.budget_tokens;
+        if let Some(b) = budget_tokens {
+            report.budget_tokens_remaining = Some(b);
+        }
+        if let Some(embedder) = self.embedder.as_deref() {
+            let mut pass = EmbedPass {
+                embedder,
+                ledger: self.ledger.as_ref(),
+                vectors: self.vectors.as_mut(),
+                model: &model,
+                deadline,
+                budget_tokens,
+                // Under a budget (time or tokens), small groups keep the overshoot small.
+                group_size: if deadline.is_some() || budget_tokens.is_some() {
+                    EMBED_GROUP_BUDGETED
+                } else {
+                    EMBED_GROUP
+                },
+                tokens_spent: 0,
+            };
+            pass.run(&todo, report)?;
+        }
+        let mut batch = self.ledger.batch()?;
+        batch.set_meta("embed_model", &model)?;
+        batch.commit()?;
+        self.vectors.persist()?;
+        Ok(())
+    }
 
-        // Only ids and content hashes are kept in memory; texts are loaded per group.
+    /// True when the vector index already holds exactly the stored chunks for `model`.
+    fn vectors_are_current(&self, model: &str) -> Result<bool> {
+        let chunk_count = self.ledger.chunk_count()? as usize;
+        let same_model = self.ledger.meta("embed_model")?.as_deref() == Some(model);
+        if !same_model || self.vectors.len() != chunk_count {
+            return Ok(false);
+        }
+        // Equal counts can still hide a stale file: compare ids too. The file table
+        // lists every chunk id without loading chunk texts.
+        let files = self.ledger.files()?;
+        Ok(files
+            .values()
+            .flat_map(|f| &f.chunk_ids)
+            .all(|id| self.vectors.contains(id)))
+    }
+
+    /// Removes the vectors of chunks that no longer exist; returns the live chunks' ids and
+    /// content hashes (only those are kept in memory; texts are loaded per group).
+    fn drop_stale_vectors(&mut self) -> Result<BTreeMap<String, String>> {
         let mut live: BTreeMap<String, String> = BTreeMap::new();
         self.ledger.for_each_chunk(&mut |c| {
             live.insert(c.id, c.content_hash);
@@ -67,89 +112,22 @@ impl Engine {
         for id in &stale {
             self.vectors.remove(id);
         }
+        Ok(live)
+    }
 
+    /// Takes the cached embedding of every chunk without a vector; the chunks the cache does
+    /// not have are returned to be embedded.
+    fn uncached_chunks(&mut self, live: &BTreeMap<String, String>, model: &str) -> Result<Vec<String>> {
         let mut todo: Vec<String> = Vec::new();
         let missing: Vec<(&String, &String)> =
             live.iter().filter(|(id, _)| !self.vectors.contains(id)).collect();
         for (id, hash) in missing {
-            match self.ledger.embedding(&cache_key(&model, hash))? {
+            match self.ledger.embedding(&cache_key(model, hash))? {
                 Some(v) => self.vectors.upsert(id, hash, &v),
                 None => todo.push(id.clone()),
             }
         }
-
-        if let Some(q) = focus.filter(|_| deadline.is_some()) {
-            let first: HashSet<String> = self
-                .lexical
-                .search(q, FOCUS_CANDIDATES, &self.cfg.bm25)?
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect();
-            todo.sort_by_key(|id| !first.contains(id));
-        }
-
-        // Embed in groups, committing each group's cache entries so progress survives
-        // interruptions.
-        // Under a budget (time or tokens), small groups keep the overshoot small.
-        let budget_tokens = self.cfg.embed.budget_tokens;
-        if let Some(b) = budget_tokens {
-            report.budget_tokens_remaining = Some(b);
-        }
-        let group_size = if deadline.is_some() || budget_tokens.is_some() {
-            EMBED_GROUP_BUDGETED
-        } else {
-            EMBED_GROUP
-        };
-        let mut tokens_spent = 0;
-        for (n, ids) in todo.chunks(group_size).enumerate() {
-            if deadline.is_some_and(|d| Instant::now() >= d)
-                || budget_tokens.is_some_and(|b| tokens_spent >= b)
-            {
-                report.embed_pending = todo.len() - n * group_size;
-                break;
-            }
-            let group = self.ledger.chunks(ids)?;
-            let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
-            let estimated_tokens: usize = texts
-                .iter()
-                .map(|t| (t.chars().count() as f32 / 4.0 * 1.15).ceil() as usize + 8)
-                .sum();
-            if let Some(b) = budget_tokens
-                && n > 0
-                && tokens_spent + estimated_tokens > b
-            {
-                report.embed_pending = todo.len() - n * group_size;
-                break;
-            }
-            let vectors = match embedder.embed_documents(&texts) {
-                Ok(v) => v,
-                Err(e) => {
-                    // Clients decide whether to report coverage from `embed_pending`, so a
-                    // failed group must count as pending, not as done.
-                    report.embed_error = Some(e.to_string());
-                    report.embed_pending = todo.len() - n * group_size;
-                    break;
-                }
-            };
-            tokens_spent += estimated_tokens;
-            report.embed_tokens = tokens_spent;
-            if let Some(b) = budget_tokens {
-                report.budget_tokens_remaining = Some(b.saturating_sub(tokens_spent));
-            }
-            let mut batch = self.ledger.batch()?;
-            for (c, v) in group.iter().zip(&vectors) {
-                batch.put_embedding(&cache_key(&model, &c.content_hash), v)?;
-                self.vectors.upsert(&c.id, &c.content_hash, v);
-            }
-            batch.commit()?;
-            report.embedded += group.len();
-        }
-
-        let mut batch = self.ledger.batch()?;
-        batch.set_meta("embed_model", &model)?;
-        batch.commit()?;
-        self.vectors.persist()?;
-        Ok(())
+        Ok(todo)
     }
 
     /// Dense-only search; empty when no embedder is configured.
@@ -263,5 +241,84 @@ impl Engine {
             cached: available,
             vectors: self.vectors.len(),
         })
+    }
+}
+
+/// Whether the embedding loop goes on after a group.
+enum Step {
+    Next,
+    Stop,
+}
+
+/// One embedding run over the chunks that have no vector: groups of chunks are embedded and committed
+/// until the time or token budget runs out.
+struct EmbedPass<'a> {
+    embedder: &'a dyn Embedder,
+    ledger: &'a dyn LedgerStore,
+    vectors: &'a mut dyn VectorIndex,
+    model: &'a str,
+    deadline: Option<Instant>,
+    budget_tokens: Option<usize>,
+    group_size: usize,
+    tokens_spent: usize,
+}
+
+impl EmbedPass<'_> {
+    /// Embeds in groups, committing each group's cache entries so progress survives interruptions.
+    fn run(&mut self, todo: &[String], report: &mut IndexReport) -> Result<()> {
+        for (n, ids) in todo.chunks(self.group_size).enumerate() {
+            let pending = todo.len() - n * self.group_size;
+            if self.exhausted() {
+                report.embed_pending = pending;
+                break;
+            }
+            if let Step::Stop = self.group(ids, n, report)? {
+                report.embed_pending = pending;
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn exhausted(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
+            || self.budget_tokens.is_some_and(|b| self.tokens_spent >= b)
+    }
+
+    fn group(&mut self, ids: &[String], n: usize, report: &mut IndexReport) -> Result<Step> {
+        let group = self.ledger.chunks(ids)?;
+        let texts: Vec<String> = group.iter().map(|c| c.indexed_text()).collect();
+        let estimated_tokens: usize = texts
+            .iter()
+            .map(|t| (t.chars().count() as f32 / 4.0 * 1.15).ceil() as usize + 8)
+            .sum();
+        if let Some(b) = self.budget_tokens
+            && n > 0
+            && self.tokens_spent + estimated_tokens > b
+        {
+            return Ok(Step::Stop);
+        }
+        let vectors = match self.embedder.embed_documents(&texts) {
+            Ok(v) => v,
+            Err(e) => {
+                // Clients decide whether to report coverage from `embed_pending`, so a
+                // failed group must count as pending, not as done.
+                report.embed_error = Some(e.to_string());
+                return Ok(Step::Stop);
+            }
+        };
+        self.tokens_spent += estimated_tokens;
+        report.embed_tokens = self.tokens_spent;
+        if let Some(b) = self.budget_tokens {
+            report.budget_tokens_remaining = Some(b.saturating_sub(self.tokens_spent));
+        }
+        let mut batch = self.ledger.batch()?;
+        for (c, v) in group.iter().zip(&vectors) {
+            batch.put_embedding(&cache_key(self.model, &c.content_hash), v)?;
+            self.vectors.upsert(&c.id, &c.content_hash, v);
+        }
+        batch.commit()?;
+        report.embedded += group.len();
+        Ok(Step::Next)
     }
 }

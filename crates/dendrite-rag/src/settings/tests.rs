@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use super::*;
+use loom_rag::embed::Pooling;
+use loom_rag::rerank::RerankBackend;
 use rstest::rstest;
 
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {

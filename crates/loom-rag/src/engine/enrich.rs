@@ -31,67 +31,21 @@ impl Engine {
 
         let mut summaries: Vec<Chunk> = Vec::new();
         let mut new_cache: Vec<(String, String, String)> = Vec::new();
-
         let use_llm_summaries =
             self.cfg.graph_llm.enabled && self.cfg.graph_llm.summaries && self.llm.is_some();
-
         for c in &mut communities {
             let Some(mut chunk) = summary::summary_chunk(c) else {
                 continue;
             };
-
-            if use_llm_summaries {
-                let llm = self.llm.as_ref().unwrap();
-                let model = llm.model();
-                let mut top_symbol_lines = Vec::new();
-                for sym in &c.top_symbols {
-                    if let Ok(Some(sc)) = self.ledger.chunk(&sym.chunk)
-                        && let Some(first_line) = sc.content.lines().find(|l| !l.trim().is_empty())
-                    {
-                        top_symbol_lines.push(format!("{}: {}", sym.name, first_line.trim()));
-                    }
-                }
-                let prompt = crate::llm::build_community_summary_prompt(&chunk.content, &top_symbol_lines);
-                let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
-
-                // After one failure the gateway is not asked again in this run: a down
-                // gateway must not cost one timeout per community.
-                let desc_res = match self.ledger.llm_cache(model, &prompt_hash)? {
-                    Some(cached) => Ok(cached),
-                    None if report.llm_error.is_some() => Err(()),
-                    None => match llm.complete(&prompt) {
-                        Ok(desc) => {
-                            new_cache.push((model.to_string(), prompt_hash, desc.clone()));
-                            Ok(desc)
-                        }
-                        Err(e) => {
-                            report.llm_error = Some(e.to_string());
-                            Err(())
-                        }
-                    },
-                };
-
-                if let Ok(desc) = desc_res {
-                    summary::append_llm_description(&mut chunk, &desc);
-                }
+            if use_llm_summaries
+                && let Some(desc) = self.describe_community(c, &chunk, report, &mut new_cache)?
+            {
+                summary::append_llm_description(&mut chunk, &desc);
             }
-
             c.summary_chunk = Some(chunk.id.clone());
             summaries.push(chunk);
         }
-
-        let mut lw = self.lexical.writer()?;
-        for id in &old_summaries {
-            if let Some(cid) = summary::community_of(id) {
-                lw.remove_file(&format!("{}{cid}", summary::SUMMARY_PREFIX));
-            }
-        }
-        for c in &summaries {
-            lw.remove_file(&c.path);
-            lw.add(c)?;
-        }
-        lw.commit()?;
-
+        self.store_summaries(&old_summaries, &summaries)?;
         let mut batch = self.ledger.batch()?;
         for (model, prompt_hash, desc) in new_cache {
             batch.put_llm_cache(&model, &prompt_hash, &desc)?;
@@ -105,6 +59,63 @@ impl Engine {
         batch.put_communities(&communities, &self.ledger.files()?)?;
         batch.commit()?;
         Ok(communities.len())
+    }
+
+    /// The gateway's one-paragraph description of a community, from the cache or a new request
+    /// (queued in `new_cache`). After one failure the gateway is not asked again in this run: a
+    /// down gateway must not cost one timeout per community.
+    fn describe_community(
+        &self,
+        c: &crate::graph::communities::Community,
+        chunk: &Chunk,
+        report: &mut IndexReport,
+        new_cache: &mut Vec<(String, String, String)>,
+    ) -> Result<Option<String>> {
+        let llm = self.llm.as_ref().expect("checked by the caller");
+        let model = llm.model();
+        let mut top_symbol_lines = Vec::new();
+        for sym in &c.top_symbols {
+            if let Ok(Some(sc)) = self.ledger.chunk(&sym.chunk)
+                && let Some(first_line) = sc.content.lines().find(|l| !l.trim().is_empty())
+            {
+                top_symbol_lines.push(format!("{}: {}", sym.name, first_line.trim()));
+            }
+        }
+        let prompt = crate::llm::build_community_summary_prompt(&chunk.content, &top_symbol_lines);
+        let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
+        if let Some(cached) = self.ledger.llm_cache(model, &prompt_hash)? {
+            return Ok(Some(cached));
+        }
+        if report.llm_error.is_some() {
+            return Ok(None);
+        }
+        match llm.complete(&prompt) {
+            Ok(desc) => {
+                new_cache.push((model.to_string(), prompt_hash, desc.clone()));
+                Ok(Some(desc))
+            }
+            Err(e) => {
+                report.llm_error = Some(e.to_string());
+                Ok(None)
+            }
+        }
+    }
+
+    /// Replaces the last run's summary chunks in the lexical index, which is written before the ledger.
+    fn store_summaries(&self, old_summaries: &[String], summaries: &[Chunk]) -> Result<()> {
+        use crate::graph::summary;
+        let mut lw = self.lexical.writer()?;
+        for id in old_summaries {
+            if let Some(cid) = summary::community_of(id) {
+                lw.remove_file(&format!("{}{cid}", summary::SUMMARY_PREFIX));
+            }
+        }
+        for c in summaries {
+            lw.remove_file(&c.path);
+            lw.add(c)?;
+        }
+        lw.commit()?;
+        Ok(())
     }
 
     /// Extracts up to 8 concepts per Markdown/text file when `concepts` is enabled.

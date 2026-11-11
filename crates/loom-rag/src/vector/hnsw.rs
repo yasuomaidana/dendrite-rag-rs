@@ -5,7 +5,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::vector::{FlatIndex, VectorIndex, dot_i8, quantize};

@@ -151,13 +151,54 @@ pub struct HttpStub {
     requests: std::sync::Arc<std::sync::Mutex<Vec<Captured>>>,
 }
 
+/// Reads a request's head: the head text, its content length and whether the body is chunked.
+fn read_head(reader: &mut impl std::io::BufRead) -> (String, usize, bool) {
+    let mut head = String::new();
+    let mut len = 0;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+            break;
+        }
+        let lower = line.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
+            len = v.trim().parse().unwrap_or(0);
+        }
+        chunked |= lower.starts_with("transfer-encoding:") && lower.contains("chunked");
+        head.push_str(&line);
+    }
+    (head, len, chunked)
+}
+
+/// Reads a request's body: `len` bytes, or chunks until the empty one.
+fn read_body(reader: &mut impl std::io::BufRead, len: usize, chunked: bool) -> Vec<u8> {
+    let mut body = Vec::new();
+    if !chunked {
+        body.resize(len, 0);
+        reader.read_exact(&mut body).unwrap();
+        return body;
+    }
+    loop {
+        let mut size = String::new();
+        reader.read_line(&mut size).unwrap();
+        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+        let mut part = vec![0; n + 2];
+        reader.read_exact(&mut part).unwrap();
+        if n == 0 {
+            return body;
+        }
+        body.extend_from_slice(&part[..n]);
+    }
+}
+
 impl HttpStub {
     pub fn serve(response: &'static str) -> Self {
         Self::serve_status(200, "OK", response)
     }
 
     pub fn serve_status(status: u16, status_text: &'static str, response: &'static str) -> Self {
-        use std::io::{BufRead, BufReader, Read, Write};
+        use std::io::{BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -166,38 +207,8 @@ impl HttpStub {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut head = String::new();
-                let mut len = 0;
-                let mut chunked = false;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    let lower = line.to_ascii_lowercase();
-                    if let Some(v) = lower.strip_prefix("content-length:") {
-                        len = v.trim().parse().unwrap_or(0);
-                    }
-                    chunked |= lower.starts_with("transfer-encoding:") && lower.contains("chunked");
-                    head.push_str(&line);
-                }
-                let mut body = Vec::new();
-                if chunked {
-                    loop {
-                        let mut size = String::new();
-                        reader.read_line(&mut size).unwrap();
-                        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
-                        let mut part = vec![0; n + 2];
-                        reader.read_exact(&mut part).unwrap();
-                        if n == 0 {
-                            break;
-                        }
-                        body.extend_from_slice(&part[..n]);
-                    }
-                } else {
-                    body.resize(len, 0);
-                    reader.read_exact(&mut body).unwrap();
-                }
+                let (head, len, chunked) = read_head(&mut reader);
+                let body = read_body(&mut reader, len, chunked);
                 seen.lock().unwrap().push(Captured {
                     head,
                     body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),

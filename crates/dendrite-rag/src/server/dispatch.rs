@@ -9,6 +9,16 @@ fn unknown(method: &str) -> RpcError {
     RpcError::new(code::METHOD_NOT_FOUND, format!("unknown method {method}"))
 }
 
+/// A method whose params name a project and whose answer is `{ key: result }` of one engine call.
+macro_rules! keyed_rpc {
+    ($name:ident, $params:ty, $key:literal, indexed: $indexed:literal, |$p:ident, $e:ident| $call:expr) => {
+        fn $name(&mut self, params: Value) -> Reply {
+            let $p: $params = rpc::params(params)?;
+            self.keyed_call(($key, &$p.root, $indexed), |$e| $call)
+        }
+    };
+}
+
 impl Server {
     pub(super) fn dispatch(&mut self, method: &str, params: Value) -> Reply {
         match method {
@@ -79,6 +89,20 @@ impl Server {
         }
     }
 
+    /// `{ key: result }` of `call` on the project's engine; `indexed` demands that the project has been indexed.
+    fn keyed_call<T: serde::Serialize>(
+        &mut self,
+        (key, root, indexed): (&str, &str, bool),
+        call: impl FnOnce(&mut Engine) -> Result<T, RpcError>,
+    ) -> Reply {
+        let engine = if indexed {
+            self.indexed(root)?
+        } else {
+            self.engine(root)?
+        };
+        keyed(key, call(engine))
+    }
+
     fn rpc_settings(&mut self, params: Value) -> Reply {
         let p: RootParams = rpc::params(params)?;
         let root = Path::new(&p.root);
@@ -100,11 +124,6 @@ impl Server {
                 .index_focused_budgeted(p.full, budget, p.embed_budget_tokens, p.focus.as_deref())
                 .map_err(engine_error)?,
         )
-    }
-
-    fn rpc_sync(&mut self, params: Value) -> Reply {
-        let p: RootParams = rpc::params(params)?;
-        keyed("pending", self.engine(&p.root)?.sync().map_err(engine_error))
     }
 
     #[cfg(feature = "postgres")]
@@ -172,34 +191,6 @@ impl Server {
         )
     }
 
-    fn rpc_chunks(&mut self, params: Value) -> Reply {
-        let p: ChunksParams = rpc::params(params)?;
-        keyed(
-            "hits",
-            self.indexed(&p.root)?.chunks(&p.ids).map_err(engine_error),
-        )
-    }
-
-    fn rpc_rank(&mut self, params: Value) -> Reply {
-        let p: RankParams = rpc::params(params)?;
-        keyed(
-            "ranked",
-            self.engine(&p.root)?
-                .rank(&p.documents, &p.query, p.top_k)
-                .map_err(engine_error),
-        )
-    }
-
-    fn rpc_grep(&mut self, params: Value) -> Reply {
-        let p: GrepParams = rpc::params(params)?;
-        keyed(
-            "matches",
-            self.engine(&p.root)?
-                .grep(&p.pattern, &p.paths, p.max_results)
-                .map_err(grep_error),
-        )
-    }
-
     fn rpc_ask(&mut self, params: Value) -> Reply {
         let p: AskParams = rpc::params(params)?;
         check_docs_share(p.request.docs_share)?;
@@ -241,26 +232,6 @@ impl Server {
         Ok(json!({ "hits": hits }))
     }
 
-    fn rpc_communities(&mut self, params: Value) -> Reply {
-        let p: GraphListParams = rpc::params(params)?;
-        keyed(
-            "communities",
-            self.indexed(&p.root)?
-                .graph_communities(p.limit, p.min_size)
-                .map_err(engine_error),
-        )
-    }
-
-    fn rpc_god_nodes(&mut self, params: Value) -> Reply {
-        let p: GraphListParams = rpc::params(params)?;
-        keyed(
-            "nodes",
-            self.indexed(&p.root)?
-                .graph_god_nodes(p.min_in_degree, p.limit)
-                .map_err(engine_error),
-        )
-    }
-
     fn rpc_graph_path(&mut self, params: Value) -> Reply {
         let p: PathParams = rpc::params(params)?;
         to_value(
@@ -270,15 +241,23 @@ impl Server {
         )
     }
 
-    fn rpc_explain(&mut self, params: Value) -> Reply {
-        let p: ExplainParams = rpc::params(params)?;
-        keyed(
-            "matches",
-            self.indexed(&p.root)?
-                .graph_explain(&p.target)
-                .map_err(engine_error),
-        )
-    }
+    keyed_rpc!(rpc_sync, RootParams, "pending", indexed: false, |p, e| e.sync().map_err(engine_error));
+    keyed_rpc!(rpc_chunks, ChunksParams, "hits", indexed: true, |p, e| e.chunks(&p.ids).map_err(engine_error));
+    keyed_rpc!(rpc_rank, RankParams, "ranked", indexed: false, |p, e| {
+        e.rank(&p.documents, &p.query, p.top_k).map_err(engine_error)
+    });
+    keyed_rpc!(rpc_grep, GrepParams, "matches", indexed: false, |p, e| {
+        e.grep(&p.pattern, &p.paths, p.max_results).map_err(grep_error)
+    });
+    keyed_rpc!(rpc_communities, GraphListParams, "communities", indexed: true, |p, e| {
+        e.graph_communities(p.limit, p.min_size).map_err(engine_error)
+    });
+    keyed_rpc!(rpc_god_nodes, GraphListParams, "nodes", indexed: true, |p, e| {
+        e.graph_god_nodes(p.min_in_degree, p.limit).map_err(engine_error)
+    });
+    keyed_rpc!(rpc_explain, ExplainParams, "matches", indexed: true, |p, e| {
+        e.graph_explain(&p.target).map_err(engine_error)
+    });
 }
 
 /// `grep` reports a bad pattern as invalid params and every other failure as an engine error.

@@ -3,6 +3,160 @@
 
 use super::*;
 
+fn corrupt() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt hnsw index")
+}
+
+/// Writes the graph file, hashing everything but the trailing checksum.
+struct HashedWriter<W: Write> {
+    out: W,
+    hasher: blake3::Hasher,
+}
+
+impl<W: Write> HashedWriter<W> {
+    fn put(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.out.write_all(buf)?;
+        self.hasher.update(buf);
+        Ok(())
+    }
+
+    fn put_u32(&mut self, v: u32) -> std::io::Result<()> {
+        self.put(&v.to_le_bytes())
+    }
+
+    /// Appends the checksum of everything written so far and flushes.
+    fn finish(mut self) -> std::io::Result<()> {
+        let checksum = self.hasher.finalize();
+        self.out.write_all(checksum.as_bytes())?;
+        self.out.flush()
+    }
+}
+
+/// Reads the graph file's fields in order; running out of bytes is a corrupt file.
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> std::io::Result<&'a [u8]> {
+        if self.0.len() < n {
+            return Err(corrupt());
+        }
+        let (head, rest) = self.0.split_at(n);
+        self.0 = rest;
+        Ok(head)
+    }
+
+    fn u8(&mut self) -> std::io::Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> std::io::Result<u16> {
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().map_err(|_| corrupt())?,
+        ))
+    }
+
+    fn u32(&mut self) -> std::io::Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().map_err(|_| corrupt())?,
+        ))
+    }
+
+    fn i64(&mut self) -> std::io::Result<i64> {
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().map_err(|_| corrupt())?,
+        ))
+    }
+
+    fn f32(&mut self) -> std::io::Result<f32> {
+        Ok(f32::from_le_bytes(
+            self.take(4)?.try_into().map_err(|_| corrupt())?,
+        ))
+    }
+}
+
+/// The part of the file after the magic and the version, once the checksum, the magic and the
+/// version are right.
+fn verified_body(bytes: &[u8]) -> std::io::Result<&[u8]> {
+    if bytes.len() < 64 {
+        return Err(corrupt());
+    }
+    let payload_len = bytes.len() - 32;
+    let payload = &bytes[..payload_len];
+    if blake3::hash(payload).as_bytes() != &bytes[payload_len..] || &payload[0..4] != HNSW_MAGIC {
+        return Err(corrupt());
+    }
+    let version = u32::from_le_bytes(payload[4..8].try_into().map_err(|_| corrupt())?);
+    if version != 1 {
+        return Err(corrupt());
+    }
+    Ok(&payload[8..])
+}
+
+fn write_node<W: Write>(w: &mut HashedWriter<W>, node: &HnswNode) -> std::io::Result<()> {
+    w.put(&(node.id.len() as u16).to_le_bytes())?;
+    w.put(node.id.as_bytes())?;
+    w.put_u32(node.level as u32)?;
+    w.put(&[u8::from(node.deleted)])?;
+    if node.deleted {
+        write_tombstone(w, node.tombstone_vector.as_ref())?;
+    }
+    for neighbors in &node.neighbors[..=node.level] {
+        w.put_u32(neighbors.len() as u32)?;
+        for &n in neighbors {
+            w.put(&n.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_tombstone<W: Write>(
+    w: &mut HashedWriter<W>,
+    tombstone: Option<&(Vec<i8>, f32)>,
+) -> std::io::Result<()> {
+    let Some((v, scale)) = tombstone else {
+        return w.put(&[0u8]);
+    };
+    w.put(&[1u8])?;
+    w.put_u32(v.len() as u32)?;
+    w.put(&scale.to_le_bytes())?;
+    let raw_bytes: Vec<u8> = v.iter().map(|&x| x as u8).collect();
+    w.put(&raw_bytes)
+}
+
+fn read_node(r: &mut Reader) -> std::io::Result<HnswNode> {
+    let id_len = r.u16()? as usize;
+    let id = String::from_utf8(r.take(id_len)?.to_vec()).map_err(|_| corrupt())?;
+    let level = r.u32()? as usize;
+    let deleted = r.u8()? != 0;
+    let tombstone_vector = if deleted { read_tombstone(r)? } else { None };
+    let mut neighbors = Vec::with_capacity(level + 1);
+    for _ in 0..=level {
+        let n_count = r.u32()? as usize;
+        let mut layer = Vec::with_capacity(n_count);
+        for _ in 0..n_count {
+            layer.push(r.u32()?);
+        }
+        neighbors.push(layer);
+    }
+    Ok(HnswNode {
+        id,
+        level,
+        deleted,
+        neighbors,
+        tombstone_vector,
+    })
+}
+
+fn read_tombstone(r: &mut Reader) -> std::io::Result<Option<(Vec<i8>, f32)>> {
+    if r.u8()? == 0 {
+        return Ok(None);
+    }
+    let dim = r.u32()? as usize;
+    let scale = r.f32()?;
+    let v = r.take(dim)?.iter().map(|&x| x as i8).collect();
+    Ok(Some((v, scale)))
+}
+
 impl HnswIndex {
     pub fn save_hnsw(&self, path: &Path) -> std::io::Result<()> {
         for node in &self.nodes {
@@ -13,59 +167,10 @@ impl HnswIndex {
                 ));
             }
         }
-
         let tmp = path.with_extension("tmp");
         {
             let mut file = std::fs::File::create(&tmp)?;
-            let mut hasher = blake3::Hasher::new();
-            {
-                let mut w = std::io::BufWriter::new(&mut file);
-                let mut write_hashed = |buf: &[u8]| -> std::io::Result<()> {
-                    w.write_all(buf)?;
-                    hasher.update(buf);
-                    Ok(())
-                };
-
-                write_hashed(HNSW_MAGIC)?;
-                write_hashed(&1u32.to_le_bytes())?;
-                write_hashed(&(self.m as u32).to_le_bytes())?;
-                write_hashed(&(self.ef_construction as u32).to_le_bytes())?;
-                let ep = self.entry_point.map(|e| e as i64).unwrap_or(-1);
-                write_hashed(&ep.to_le_bytes())?;
-                write_hashed(&(self.max_level as u32).to_le_bytes())?;
-                write_hashed(&(self.nodes.len() as u32).to_le_bytes())?;
-
-                for node in &self.nodes {
-                    write_hashed(&(node.id.len() as u16).to_le_bytes())?;
-                    write_hashed(node.id.as_bytes())?;
-                    write_hashed(&(node.level as u32).to_le_bytes())?;
-                    write_hashed(&[if node.deleted { 1u8 } else { 0u8 }])?;
-
-                    if node.deleted {
-                        if let Some((v, scale)) = &node.tombstone_vector {
-                            write_hashed(&1u8.to_le_bytes())?;
-                            write_hashed(&(v.len() as u32).to_le_bytes())?;
-                            write_hashed(&scale.to_le_bytes())?;
-                            let raw_bytes: Vec<u8> = v.iter().map(|&x| x as u8).collect();
-                            write_hashed(&raw_bytes)?;
-                        } else {
-                            write_hashed(&0u8.to_le_bytes())?;
-                        }
-                    }
-
-                    for lc in 0..=node.level {
-                        let neighbors = &node.neighbors[lc];
-                        write_hashed(&(neighbors.len() as u32).to_le_bytes())?;
-                        for &n in neighbors {
-                            write_hashed(&n.to_le_bytes())?;
-                        }
-                    }
-                }
-
-                let checksum = hasher.finalize();
-                w.write_all(checksum.as_bytes())?;
-                w.flush()?;
-            }
+            self.write_graph(&mut file)?;
             file.sync_all()?;
         }
         std::fs::rename(&tmp, path)?;
@@ -79,109 +184,48 @@ impl HnswIndex {
         Ok(())
     }
 
+    fn write_graph(&self, file: &mut std::fs::File) -> std::io::Result<()> {
+        let mut w = HashedWriter {
+            out: std::io::BufWriter::new(file),
+            hasher: blake3::Hasher::new(),
+        };
+        w.put(HNSW_MAGIC)?;
+        w.put_u32(1)?;
+        w.put_u32(self.m as u32)?;
+        w.put_u32(self.ef_construction as u32)?;
+        let ep = self.entry_point.map(|e| e as i64).unwrap_or(-1);
+        w.put(&ep.to_le_bytes())?;
+        w.put_u32(self.max_level as u32)?;
+        w.put_u32(self.nodes.len() as u32)?;
+        for node in &self.nodes {
+            write_node(&mut w, node)?;
+        }
+        w.finish()
+    }
+
     pub(super) fn load_hnsw_file(&mut self, path: &Path) -> std::io::Result<()> {
         let bytes = std::fs::read(path)?;
-        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt hnsw index");
-
-        if bytes.len() < 64 {
-            return Err(bad());
-        }
-
-        let payload_len = bytes.len() - 32;
-        let expected_checksum = &bytes[payload_len..];
-        let computed_checksum = blake3::hash(&bytes[..payload_len]);
-        if computed_checksum.as_bytes() != expected_checksum {
-            return Err(bad());
-        }
-
-        let payload = &bytes[..payload_len];
-        if &payload[0..4] != HNSW_MAGIC {
-            return Err(bad());
-        }
-        let version = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-        if version != 1 {
-            return Err(bad());
-        }
-
-        let mut r = &payload[8..];
-        let mut u32_buf = [0u8; 4];
-        let mut u64_buf = [0u8; 8];
-
-        r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-        let m = u32::from_le_bytes(u32_buf) as usize;
-        r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-        let ef_c = u32::from_le_bytes(u32_buf) as usize;
-        r.read_exact(&mut u64_buf).map_err(|_| bad())?;
-        let ep = i64::from_le_bytes(u64_buf);
-        r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-        let max_level = u32::from_le_bytes(u32_buf) as usize;
-        r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-        let count = u32::from_le_bytes(u32_buf) as usize;
+        let mut r = Reader(verified_body(&bytes)?);
+        let m = r.u32()? as usize;
+        let ef_c = r.u32()? as usize;
+        let ep = r.i64()?;
+        let max_level = r.u32()? as usize;
+        let count = r.u32()? as usize;
 
         let mut nodes = Vec::with_capacity(count);
         let mut id_to_node = HashMap::with_capacity(count);
         let mut deleted_count = 0;
-
         for node_idx in 0..count {
-            let mut u16_buf = [0u8; 2];
-            r.read_exact(&mut u16_buf).map_err(|_| bad())?;
-            let id_len = u16::from_le_bytes(u16_buf) as usize;
-            let mut id_bytes = vec![0u8; id_len];
-            r.read_exact(&mut id_bytes).map_err(|_| bad())?;
-            let id = String::from_utf8(id_bytes).map_err(|_| bad())?;
-
-            r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-            let level = u32::from_le_bytes(u32_buf) as usize;
-
-            let mut u8_buf = [0u8; 1];
-            r.read_exact(&mut u8_buf).map_err(|_| bad())?;
-            let deleted = u8_buf[0] != 0;
-
-            let tombstone_vector = if deleted {
+            let node = read_node(&mut r)?;
+            if node.deleted {
                 deleted_count += 1;
-                r.read_exact(&mut u8_buf).map_err(|_| bad())?;
-                let has_tombstone = u8_buf[0] != 0;
-                if has_tombstone {
-                    r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-                    let dim = u32::from_le_bytes(u32_buf) as usize;
-                    let mut f32_buf = [0u8; 4];
-                    r.read_exact(&mut f32_buf).map_err(|_| bad())?;
-                    let scale = f32::from_le_bytes(f32_buf);
-                    let mut raw_data = vec![0u8; dim];
-                    r.read_exact(&mut raw_data).map_err(|_| bad())?;
-                    let v = raw_data.into_iter().map(|x| x as i8).collect();
-                    Some((v, scale))
-                } else {
-                    None
-                }
             } else {
-                id_to_node.insert(id.clone(), node_idx as u32);
-                None
-            };
-
-            let mut neighbors = Vec::with_capacity(level + 1);
-            for _ in 0..=level {
-                r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-                let n_count = u32::from_le_bytes(u32_buf) as usize;
-                let mut layer_neighbors = Vec::with_capacity(n_count);
-                for _ in 0..n_count {
-                    r.read_exact(&mut u32_buf).map_err(|_| bad())?;
-                    layer_neighbors.push(u32::from_le_bytes(u32_buf));
-                }
-                neighbors.push(layer_neighbors);
+                id_to_node.insert(node.id.clone(), node_idx as u32);
             }
-
-            nodes.push(HnswNode {
-                id,
-                level,
-                deleted,
-                neighbors,
-                tombstone_vector,
-            });
+            nodes.push(node);
         }
-
-        if !r.is_empty() {
-            return Err(bad());
+        if !r.0.is_empty() {
+            return Err(corrupt());
         }
 
         self.m = m;
@@ -192,7 +236,6 @@ impl HnswIndex {
         self.nodes = nodes;
         self.id_to_node = id_to_node;
         self.deleted_count = deleted_count;
-
         Ok(())
     }
 

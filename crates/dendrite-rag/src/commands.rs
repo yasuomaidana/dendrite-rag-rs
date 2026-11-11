@@ -52,7 +52,7 @@ impl Command {
                 detail,
                 docs_share,
             } => context(&root, &query, budget, corpus, detail, docs_share, json),
-            Command::Show { root, ids } => print_hits(&open(&root)?.chunks(&ids)?, json, true),
+            Command::Show { root, ids } => show(&root, &ids, json),
             Command::Symbols { root, name, refs } => symbols(&root, &name, refs, json),
             Command::Grep {
                 root,
@@ -62,23 +62,44 @@ impl Command {
             } => grep(&root, &pattern, &paths, max, json),
             Command::History { root, query, top_k } => history(&root, &query, top_k, json),
             Command::Graph { op } => graph(op),
-            Command::Sync { root } => {
-                let pending = open(&root)?.sync()?;
-                print_value(&serde_json::json!({ "pending": pending }), json)
-            }
+            Command::Sync { root } => sync(&root, json),
             #[cfg(feature = "postgres")]
-            Command::Push { root, dry_run } => print_value(&open(&root)?.push(dry_run)?, json),
-            Command::Pull { root } => print_value(&open(&root)?.pull()?, json),
-            Command::Status { root } => print_value(&open(&root)?.status()?, json),
+            Command::Push { root, dry_run } => push(&root, dry_run, json),
+            Command::Pull { root } => pull(&root, json),
+            Command::Status { root } => status(&root, json),
             Command::Embedders => embedders(json),
             Command::Settings { root } => settings(&root, json),
-            Command::Purge { root } => {
-                open(&root)?.purge()?;
-                println!("removed");
-                Ok(())
-            }
+            Command::Purge { root } => purge(&root),
         }
     }
+}
+
+fn show(root: &Path, ids: &[String], json: bool) -> Done {
+    print_hits(&open(root)?.chunks(ids)?, json, true)
+}
+
+fn sync(root: &Path, json: bool) -> Done {
+    let pending = open(root)?.sync()?;
+    print_value(&serde_json::json!({ "pending": pending }), json)
+}
+
+#[cfg(feature = "postgres")]
+fn push(root: &Path, dry_run: bool, json: bool) -> Done {
+    print_value(&open(root)?.push(dry_run)?, json)
+}
+
+fn pull(root: &Path, json: bool) -> Done {
+    print_value(&open(root)?.pull()?, json)
+}
+
+fn status(root: &Path, json: bool) -> Done {
+    print_value(&open(root)?.status()?, json)
+}
+
+fn purge(root: &Path) -> Done {
+    open(root)?.purge()?;
+    println!("removed");
+    Ok(())
 }
 
 fn serve() -> Done {

@@ -140,38 +140,7 @@ impl CandleEmbedder {
         // SAFETY: the weights file is not modified while it is mapped.
         let vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device) }.map_err(model_err)?;
-        let parse = |what| move |e: serde_json::Error| EmbedError::Model(format!("{what} config: {e}"));
-        let jina = probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
-            || probe.position_embedding_type.as_deref() == Some("alibi");
-        let arch = match probe.model_type.as_deref() {
-            Some("nomic_bert") => {
-                let c: nomic_bert::Config = serde_json::from_str(&config_text).map_err(parse("NomicBERT"))?;
-                Arch::Nomic(nomic_bert::NomicBertModel::load(vb, &c).map_err(model_err)?)
-            }
-            Some("bert") if jina && jina_code::Config::is_qk_post_norm(&vb) => {
-                let c: jina_code::Config =
-                    serde_json::from_str(&config_text).map_err(parse("JinaBERT qk-post-norm"))?;
-                Arch::JinaCode(jina_code::JinaCodeModel::load(vb, &c).map_err(model_err)?)
-            }
-            Some("bert") if jina => {
-                let c: jina_bert::Config = serde_json::from_str(&config_text).map_err(parse("JinaBERT"))?;
-                Arch::Jina(jina_bert::BertModel::new(vb, &c).map_err(model_err)?)
-            }
-            Some("qwen3") => {
-                let tokenizer = Tokenizer::load(&tokenizer_path, MAX_TOKENS)?;
-                Arch::Qwen3(qwen3::Qwen3Encoder::load(vb, &config_text, &tokenizer)?)
-            }
-            Some("bert") | Some("roberta") | Some("xlm-roberta") => {
-                let c: bert::Config = serde_json::from_str(&config_text).map_err(parse("BERT"))?;
-                Arch::Bert(bert::BertModel::load(vb, &c).map_err(model_err)?)
-            }
-            other => {
-                return Err(EmbedError::Model(format!(
-                    "{model}: model_type {other:?} is not supported by the candle backend \
-                     (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
-                )));
-            }
-        };
+        let arch = load_arch(&model, &probe, &config_text, vb, &tokenizer_path)?;
         let tokenizer = Tokenizer::load(&tokenizer_path, MAX_TOKENS)?;
         let (document_prefix, query_prefix) = cfg.prefixes();
         Ok(Self {
@@ -226,6 +195,48 @@ impl CandleEmbedder {
         }
         Ok(out)
     }
+}
+
+/// Builds the architecture `probe` names from the weights in `vb`.
+fn load_arch(
+    model: &str,
+    probe: &Probe,
+    config_text: &str,
+    vb: VarBuilder,
+    tokenizer_path: &std::path::Path,
+) -> Result<Arch> {
+    let parse = |what| move |e: serde_json::Error| EmbedError::Model(format!("{what} config: {e}"));
+    let jina = probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
+        || probe.position_embedding_type.as_deref() == Some("alibi");
+    Ok(match probe.model_type.as_deref() {
+        Some("nomic_bert") => {
+            let c: nomic_bert::Config = serde_json::from_str(config_text).map_err(parse("NomicBERT"))?;
+            Arch::Nomic(nomic_bert::NomicBertModel::load(vb, &c).map_err(model_err)?)
+        }
+        Some("bert") if jina && jina_code::Config::is_qk_post_norm(&vb) => {
+            let c: jina_code::Config =
+                serde_json::from_str(config_text).map_err(parse("JinaBERT qk-post-norm"))?;
+            Arch::JinaCode(jina_code::JinaCodeModel::load(vb, &c).map_err(model_err)?)
+        }
+        Some("bert") if jina => {
+            let c: jina_bert::Config = serde_json::from_str(config_text).map_err(parse("JinaBERT"))?;
+            Arch::Jina(jina_bert::BertModel::new(vb, &c).map_err(model_err)?)
+        }
+        Some("qwen3") => {
+            let tokenizer = Tokenizer::load(tokenizer_path, MAX_TOKENS)?;
+            Arch::Qwen3(qwen3::Qwen3Encoder::load(vb, config_text, &tokenizer)?)
+        }
+        Some("bert") | Some("roberta") | Some("xlm-roberta") => {
+            let c: bert::Config = serde_json::from_str(config_text).map_err(parse("BERT"))?;
+            Arch::Bert(bert::BertModel::load(vb, &c).map_err(model_err)?)
+        }
+        other => {
+            return Err(EmbedError::Model(format!(
+                "{model}: model_type {other:?} is not supported by the candle backend \
+                 (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
+            )));
+        }
+    })
 }
 
 /// `[batch, tokens, dim]` → `[batch, dim]`, ignoring padding.

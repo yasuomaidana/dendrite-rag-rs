@@ -63,27 +63,9 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 use loom_rag::config::{GraphLlmSettings, VectorIndexChoice};
-use loom_rag::embed::{Backend, EmbedConfig, Pooling};
+use loom_rag::embed::{Backend, EmbedConfig};
 use loom_rag::engine::Config;
-use loom_rag::rerank::{RerankBackend, RerankConfig};
-
-/// [`apply_backend_by`] for a section whose backend enum has `parse`, `ALL` and `as_str`.
-macro_rules! apply_backend {
-    ($var:expr, $key:expr, $backend:ident, $cfg:ident, $section:expr) => {
-        apply_backend_by(
-            $var,
-            $key,
-            $backend::parse,
-            $backend::ALL.iter().map(|b| b.as_str()).collect(),
-            $section,
-            |c| c.backend,
-            |backend| $cfg {
-                backend,
-                ..Default::default()
-            },
-        )?
-    };
-}
+use loom_rag::rerank::RerankConfig;
 
 use loom_rag::retrieve::DEFAULT_DOCS_SHARE;
 
@@ -185,152 +167,6 @@ impl Settings {
         Ok(s)
     }
 
-    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> anyhow::Result<()> {
-        apply_backend!(
-            &var,
-            "DENDRITE_RAG_EMBED_BACKEND",
-            Backend,
-            EmbedConfig,
-            &mut self.embed
-        );
-        let e = &mut self.embed;
-        let set = |field: &mut Option<String>, key: &str| {
-            if let Some(v) = var(key) {
-                *field = Some(v);
-            }
-        };
-        set(&mut e.model, "DENDRITE_RAG_EMBED_MODEL");
-        set(&mut e.url, "DENDRITE_RAG_EMBED_URL");
-        set(&mut e.api_key_env, "DENDRITE_RAG_EMBED_API_KEY_ENV");
-        set(&mut e.document_prefix, "DENDRITE_RAG_EMBED_DOCUMENT_PREFIX");
-        set(&mut e.query_prefix, "DENDRITE_RAG_EMBED_QUERY_PREFIX");
-        if let Some(p) = var("DENDRITE_RAG_EMBED_POOLING") {
-            e.pooling = Some(
-                serde_json::from_value::<Pooling>(serde_json::Value::String(p.to_ascii_lowercase()))
-                    .with_context(|| {
-                        format!("DENDRITE_RAG_EMBED_POOLING={p:?}: expected mean, cls or last")
-                    })?,
-            );
-        }
-        env_parse(&var, &mut e.batch, "DENDRITE_RAG_EMBED_BATCH")?;
-        env_parse(&var, &mut e.dimensions, "DENDRITE_RAG_EMBED_DIMENSIONS")?;
-        env_parse(&var, &mut e.budget_tokens, "DENDRITE_RAG_EMBED_BUDGET_TOKENS")?;
-        apply_backend!(
-            &var,
-            "DENDRITE_RAG_RERANK_BACKEND",
-            RerankBackend,
-            RerankConfig,
-            &mut self.rerank
-        );
-        set(&mut self.rerank.model, "DENDRITE_RAG_RERANK_MODEL");
-        set(&mut self.rerank.url, "DENDRITE_RAG_RERANK_URL");
-        set(&mut self.rerank.api_key_env, "DENDRITE_RAG_RERANK_API_KEY_ENV");
-        env_parse(&var, &mut self.rerank.abstain, "DENDRITE_RAG_RERANK_ABSTAIN")?;
-        if let Some(a) = self.rerank.abstain
-            && !(0.0..=1.0).contains(&a)
-        {
-            bail!("rerank.abstain must be within 0..=1, got {a}");
-        }
-        env_parse(&var, &mut self.rerank.batch, "DENDRITE_RAG_RERANK_BATCH")?;
-        env_parse(
-            &var,
-            &mut self.index.max_file_bytes,
-            "DENDRITE_RAG_MAX_FILE_BYTES",
-        )?;
-        env_parse(&var, &mut self.index.query_cache, "DENDRITE_RAG_QUERY_CACHE")?;
-        for (key, field) in [
-            ("DENDRITE_RAG_FUSION_LEXICAL", &mut self.fusion.lexical),
-            ("DENDRITE_RAG_FUSION_DENSE", &mut self.fusion.dense),
-            ("DENDRITE_RAG_FUSION_SYMBOL", &mut self.fusion.symbol),
-            ("DENDRITE_RAG_FUSION_COMMUNITY", &mut self.fusion.community),
-        ] {
-            if let Some(v) = var(key) {
-                *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
-            }
-        }
-        let f = &self.fusion;
-        for (name, w) in [
-            ("lexical", f.lexical),
-            ("dense", f.dense),
-            ("symbol", f.symbol),
-            ("community", f.community),
-        ] {
-            if let Some(w) = w
-                && !(w >= 0.0 && w.is_finite())
-            {
-                bail!("fusion.{name} must be a non-negative number, got {w}");
-            }
-        }
-        for (key, field) in [
-            ("DENDRITE_RAG_BM25_K1", &mut self.lexical.k1),
-            ("DENDRITE_RAG_BM25_B", &mut self.lexical.b),
-            ("DENDRITE_RAG_BM25_Q", &mut self.lexical.q),
-        ] {
-            if let Some(v) = var(key) {
-                *field = v.parse().with_context(|| format!("{key}={v:?}"))?;
-            }
-        }
-        if let Err(e) = self.lexical.validate() {
-            bail!("lexical: {e}");
-        }
-        env_choice(
-            &var,
-            &mut self.storage.mode,
-            "DENDRITE_RAG_STORAGE_MODE",
-            loom_rag::store::StorageMode::parse,
-            "local, remote or edge",
-        )?;
-        env_choice(
-            &var,
-            &mut self.storage.ledger,
-            "DENDRITE_RAG_STORAGE_LEDGER",
-            loom_rag::store::LedgerChoice::parse,
-            "redb or sqlite",
-        )?;
-        set(&mut self.storage.repo, "DENDRITE_RAG_STORAGE_REPO");
-        set(&mut self.ask.local_model, "DENDRITE_RAG_ASK_LOCAL_MODEL");
-        set(&mut self.ask.paid_model, "DENDRITE_RAG_ASK_PAID_MODEL");
-        env_parse(&var, &mut self.ask.docs_share, "DENDRITE_RAG_ASK_DOCS_SHARE")?;
-        set(&mut self.pg_url, "DENDRITE_RAG_PG_URL");
-        env_parse(&var, &mut self.graph.resolution, "DENDRITE_RAG_GRAPH_RESOLUTION")?;
-        let parse_bool = |v: &str, name: &str| -> anyhow::Result<bool> {
-            match v.trim().to_ascii_lowercase().as_str() {
-                "true" | "1" | "yes" | "on" => Ok(true),
-                "false" | "0" | "no" | "off" => Ok(false),
-                _ => bail!("{name}={v:?}: expected true or false"),
-            }
-        };
-        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_ENABLED") {
-            self.graph.llm.enabled = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_ENABLED")?;
-        }
-        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_MODEL") {
-            self.graph.llm.model = Some(v);
-        }
-        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_SUMMARIES") {
-            self.graph.llm.summaries = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_SUMMARIES")?;
-        }
-        if let Some(v) = var("DENDRITE_RAG_GRAPH_LLM_CONCEPTS") {
-            self.graph.llm.concepts = parse_bool(&v, "DENDRITE_RAG_GRAPH_LLM_CONCEPTS")?;
-        }
-        if let Some(v) = var("DENDRITE_RAG_VECTOR_INDEX") {
-            let Some(choice) = VectorIndexChoice::parse(&v) else {
-                let names: Vec<_> = VectorIndexChoice::ALL.iter().map(|c| c.as_str()).collect();
-                bail!(
-                    "DENDRITE_RAG_VECTOR_INDEX={v:?}: expected one of {}",
-                    names.join(", ")
-                );
-            };
-            self.index.vector_index = Some(choice);
-        }
-        env_parse(
-            &var,
-            &mut self.index.hnsw_ef_search,
-            "DENDRITE_RAG_HNSW_EF_SEARCH",
-        )?;
-        self.validate()?;
-        Ok(())
-    }
-
     /// Validates the settings consistency.
     pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(s) = self.ask.docs_share
@@ -421,56 +257,7 @@ pub fn resolve(root: &Path) -> anyhow::Result<Config> {
     Ok(Settings::load(root)?.config_at(root))
 }
 
-/// Reads `key` from the environment into `field` when it is set.
-fn env_parse<T: std::str::FromStr>(
-    var: &impl Fn(&str) -> Option<String>,
-    field: &mut Option<T>,
-    key: &str,
-) -> anyhow::Result<()>
-where
-    T::Err: std::error::Error + Send + Sync + 'static,
-{
-    if let Some(v) = var(key) {
-        *field = Some(v.parse().with_context(|| format!("{key}={v:?}"))?);
-    }
-    Ok(())
-}
-
-/// Applies a `*_BACKEND` variable to `section`: naming a different backend restarts the section
-/// from that backend's defaults. An error lists the `names` `key` accepts.
-fn apply_backend_by<C, B: PartialEq>(
-    var: &impl Fn(&str) -> Option<String>,
-    key: &str,
-    parse: fn(&str) -> Option<B>,
-    names: Vec<&str>,
-    section: &mut C,
-    backend_of: fn(&C) -> B,
-    restart: fn(B) -> C,
-) -> anyhow::Result<()> {
-    let Some(raw) = var(key) else {
-        return Ok(());
-    };
-    let backend =
-        parse(&raw).ok_or_else(|| anyhow::anyhow!("{key}={raw:?}: expected one of {}", names.join(", ")))?;
-    if backend != backend_of(section) {
-        *section = restart(backend);
-    }
-    Ok(())
-}
-
-/// Reads `key` into `field` through `parse` when it is set; `expected` names the accepted values.
-fn env_choice<T>(
-    var: &impl Fn(&str) -> Option<String>,
-    field: &mut Option<T>,
-    key: &str,
-    parse: fn(&str) -> Option<T>,
-    expected: &str,
-) -> anyhow::Result<()> {
-    if let Some(raw) = var(key) {
-        *field = Some(parse(&raw).ok_or_else(|| anyhow::anyhow!("{key}={raw:?}: expected {expected}"))?);
-    }
-    Ok(())
-}
+mod env;
 
 #[cfg(test)]
 mod tests;
