@@ -8,27 +8,7 @@ use super::*;
 /// Splits Markdown by headings outside code fences; returns spans with their heading path.
 pub(super) fn markdown_sections(src: &str, opts: ChunkOptions) -> Vec<(Range<usize>, Vec<String>)> {
     let bytes = src.as_bytes();
-    let mut sections: Vec<(usize, Vec<String>)> = vec![(0, Vec::new())];
-    let mut stack: Vec<(usize, String)> = Vec::new();
-    let mut in_fence = false;
-    let mut pos = 0;
-    for line in src.split_inclusive('\n') {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            in_fence = !in_fence;
-        } else if !in_fence && t.starts_with('#') {
-            let level = t.bytes().take_while(|&b| b == b'#').count();
-            let rest = &t[level..];
-            if level <= 6 && (rest.starts_with(' ') || rest.trim().is_empty()) {
-                let title = rest.trim().trim_end_matches('#').trim().to_string();
-                stack.retain(|(l, _)| *l < level);
-                stack.push((level, title));
-                sections.push((pos, stack.iter().map(|(_, t)| t.clone()).collect()));
-            }
-        }
-        pos += line.len();
-    }
-
+    let sections = heading_sections(src);
     let mut out: Vec<(Range<usize>, Vec<String>, usize)> = Vec::new();
     for (i, (start, scope)) in sections.iter().enumerate() {
         let end = sections.get(i + 1).map_or(src.len(), |s| s.0);
@@ -41,19 +21,62 @@ pub(super) fn markdown_sections(src: &str, opts: ChunkOptions) -> Vec<(Range<usi
                 let s = nonws(&bytes[r.clone()]);
                 out.push((r, scope.clone(), s));
             }
-            continue;
+        } else if !merge_into_last(&mut out, end, size, opts) {
+            out.push((*start..end, scope.clone(), size));
         }
-        if let Some((last, _, last_size)) = out.last_mut()
-            && (*last_size < opts.min_chars || size < opts.min_chars)
-            && *last_size + size <= opts.max_chars
-        {
-            last.end = end;
-            *last_size += size;
-            continue;
-        }
-        out.push((*start..end, scope.clone(), size));
     }
     out.into_iter().map(|(r, s, _)| (r, s)).collect()
+}
+
+/// Extends the last span to `end` when it or the new one is too small to stand alone and both fit together.
+fn merge_into_last(
+    out: &mut [(Range<usize>, Vec<String>, usize)],
+    end: usize,
+    size: usize,
+    opts: ChunkOptions,
+) -> bool {
+    let Some((last, _, last_size)) = out.last_mut() else {
+        return false;
+    };
+    if (*last_size < opts.min_chars || size < opts.min_chars) && *last_size + size <= opts.max_chars {
+        last.end = end;
+        *last_size += size;
+        return true;
+    }
+    false
+}
+
+/// The byte offset where each heading starts, with its heading path (the start of the text has none).
+fn heading_sections(src: &str) -> Vec<(usize, Vec<String>)> {
+    let mut sections: Vec<(usize, Vec<String>)> = vec![(0, Vec::new())];
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut in_fence = false;
+    let mut pos = 0;
+    for line in src.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence && let Some((level, title)) = heading(t) {
+            stack.retain(|(l, _)| *l < level);
+            stack.push((level, title));
+            sections.push((pos, stack.iter().map(|(_, t)| t.clone()).collect()));
+        }
+        pos += line.len();
+    }
+    sections
+}
+
+/// The level and title of an ATX heading line (`#` to `######`, then a space or nothing).
+fn heading(t: &str) -> Option<(usize, String)> {
+    if !t.starts_with('#') {
+        return None;
+    }
+    let level = t.bytes().take_while(|&b| b == b'#').count();
+    let rest = &t[level..];
+    if level <= 6 && (rest.starts_with(' ') || rest.trim().is_empty()) {
+        return Some((level, rest.trim().trim_end_matches('#').trim().to_string()));
+    }
+    None
 }
 
 /// Packs blank-line-separated paragraphs of `range` into spans of at most `max`
@@ -138,21 +161,7 @@ pub(super) fn split_lines(src: &[u8], range: Range<usize>, max: usize) -> Vec<Ra
             size = 0;
         }
         if line_size > max {
-            let mut cut = i;
-            let mut n = 0;
-            for (off, &b) in src[i..line_end].iter().enumerate() {
-                let at = i + off;
-                // Only cut at UTF-8 character starts.
-                if n >= max && (b & 0xC0) != 0x80 {
-                    out.push(cut..at);
-                    cut = at;
-                    n = 0;
-                }
-                if !b.is_ascii_whitespace() && (b & 0xC0) != 0x80 {
-                    n += 1;
-                }
-            }
-            out.push(cut..line_end);
+            cut_long_line(src, i..line_end, max, &mut out);
             start = line_end;
             size = 0;
         } else {
@@ -164,6 +173,25 @@ pub(super) fn split_lines(src: &[u8], range: Range<usize>, max: usize) -> Vec<Ra
         out.push(start..range.end);
     }
     out
+}
+
+/// Cuts one line longer than `max` non-whitespace characters into pieces of that size, only at UTF-8
+/// character starts.
+fn cut_long_line(src: &[u8], line: Range<usize>, max: usize, out: &mut Vec<Range<usize>>) {
+    let mut cut = line.start;
+    let mut n = 0;
+    for (off, &b) in src[line.clone()].iter().enumerate() {
+        let at = line.start + off;
+        if n >= max && (b & 0xC0) != 0x80 {
+            out.push(cut..at);
+            cut = at;
+            n = 0;
+        }
+        if !b.is_ascii_whitespace() && (b & 0xC0) != 0x80 {
+            n += 1;
+        }
+    }
+    out.push(cut..line.end);
 }
 
 // ---------------------------------------------------------------------------------------------

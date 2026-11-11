@@ -200,6 +200,61 @@ def clone_repo(repo: str, repos_cache: str):
     return target_dir
 
 
+def retained_rows(raw_rows):
+    """Rows with a gold file left: gold files exclude created files. Returns them and how many were skipped."""
+    valid_rows = []
+    skipped_no_gold = 0
+    for r in raw_rows:
+        gold_files = extract_gold_files(r["patch"])
+        if not gold_files:
+            skipped_no_gold += 1
+            continue
+        r["_gold_files"] = gold_files
+        valid_rows.append(r)
+    return valid_rows, skipped_no_gold
+
+
+def evenly_spaced(insts, take):
+    """The ids of `take` instances spaced evenly through `insts` (already sorted by created_at)."""
+    take = min(take, len(insts))
+    if take <= 0:
+        return set()
+    step = len(insts) / take
+    return {insts[int(i * step)]["instance_id"] for i in range(take)}
+
+
+def stratified_120(repo_instances, sorted_repos):
+    """16 evenly spaced (by created_at) from each of the top 5 repos, plus 40 from the other repos together."""
+    ids = set()
+    for repo in sorted_repos[:5]:
+        insts = repo_instances[repo]
+        insts.sort(key=lambda x: x.get("created_at") or "")
+        ids |= evenly_spaced(insts, 16)
+    other_insts = []
+    for repo in sorted_repos[5:]:
+        other_insts.extend(repo_instances[repo])
+    other_insts.sort(key=lambda x: x.get("created_at") or "")
+    return ids | evenly_spaced(other_insts, 40)
+
+
+def processed_instance(r, in_stratified):
+    """The output record of one instance, with its leakage class."""
+    gold_files = r["_gold_files"]
+    q1 = r["problem_statement"]
+    return {
+        "instance_id": r["instance_id"],
+        "repo": r["repo"],
+        "base_commit": r["base_commit"],
+        "created_at": r.get("created_at"),
+        "expected_files": gold_files,
+        "q1": q1,
+        "q2": build_q2(q1),
+        "q3": build_q3(q1),
+        "leakage_class": classify_leakage(q1, gold_files),
+        "stratified_120": in_stratified,
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description="Import SWE-bench Verified dataset")
     p.add_argument("out", help="Output JSON file for SWE-bench instances")
@@ -211,89 +266,21 @@ def main():
     raw_rows = table.to_pylist()
     print(f"Loaded {len(raw_rows)} raw instances from SWE-bench Verified.")
 
-    # Filter instances: gold files exclude created files; skip instances with no gold file remaining
-    valid_rows = []
-    skipped_no_gold = 0
-    for r in raw_rows:
-        gold_files = extract_gold_files(r["patch"])
-        if not gold_files:
-            skipped_no_gold += 1
-            continue
-        r["_gold_files"] = gold_files
-        valid_rows.append(r)
-
+    valid_rows, skipped_no_gold = retained_rows(raw_rows)
     print(f"Skipped {skipped_no_gold} instances with no gold files (created files only or empty diff).")
     print(f"Retained {len(valid_rows)} instances with gold files.")
 
-    # Group instances by repository
     repo_instances = {}
     for r in valid_rows:
         repo_instances.setdefault(r["repo"], []).append(r)
-
     # Sort repositories by count descending
     sorted_repos = sorted(repo_instances.keys(), key=lambda r: len(repo_instances[r]), reverse=True)
+    stratified_120_ids = stratified_120(repo_instances, sorted_repos)
 
-    # Select Stratified-120: 16 evenly spaced (by created_at) from each of top 5 repos + 40 evenly spaced from other 7
-    stratified_120_ids = set()
-    for repo in sorted_repos[:5]:
-        insts = repo_instances[repo]
-        insts.sort(key=lambda x: x.get("created_at") or "")
-        take = min(16, len(insts))
-        if take > 0:
-            step = len(insts) / take
-            for i in range(take):
-                idx = int(i * step)
-                stratified_120_ids.add(insts[idx]["instance_id"])
-
-    other_insts = []
-    for repo in sorted_repos[5:]:
-        other_insts.extend(repo_instances[repo])
-    other_insts.sort(key=lambda x: x.get("created_at") or "")
-
-    # 40 from other 7 repos taken together
-    take_other = min(40, len(other_insts))
-    if take_other > 0:
-        step = len(other_insts) / take_other
-        for i in range(take_other):
-            idx = int(i * step)
-            stratified_120_ids.add(other_insts[idx]["instance_id"])
-
-    processed = []
-    single_file_count = 0
-    multi_file_count = 0
-    leakage_counts = Counter()
-
-    for r in valid_rows:
-        instance_id = r["instance_id"]
-        repo = r["repo"]
-        base_commit = r["base_commit"]
-        prob = r["problem_statement"]
-        gold_files = r["_gold_files"]
-
-        if len(gold_files) == 1:
-            single_file_count += 1
-        elif len(gold_files) > 1:
-            multi_file_count += 1
-
-        q1 = prob
-        leakage = classify_leakage(q1, gold_files)
-        leakage_counts[leakage] += 1
-
-        q2 = build_q2(prob)
-        q3 = build_q3(prob)
-
-        processed.append({
-            "instance_id": instance_id,
-            "repo": repo,
-            "base_commit": base_commit,
-            "created_at": r.get("created_at"),
-            "expected_files": gold_files,
-            "q1": q1,
-            "q2": q2,
-            "q3": q3,
-            "leakage_class": leakage,
-            "stratified_120": instance_id in stratified_120_ids,
-        })
+    processed = [processed_instance(r, r["instance_id"] in stratified_120_ids) for r in valid_rows]
+    leakage_counts = Counter(x["leakage_class"] for x in processed)
+    single_file_count = sum(1 for x in processed if len(x["expected_files"]) == 1)
+    multi_file_count = sum(1 for x in processed if len(x["expected_files"]) > 1)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:

@@ -336,52 +336,42 @@ impl LogParser {
     /// Feeds one line; returns a commit when the next one starts.
     fn push(&mut self, line: &str) -> Option<Commit> {
         if let Some(header) = line.strip_prefix(RECORD) {
-            let done = self.finish();
-            let mut parts = header.splitn(4, FIELD);
-            self.cur = Some(Commit {
-                sha: parts.next().unwrap_or_default().to_string(),
-                time: parts.next().and_then(|t| t.parse().ok()).unwrap_or_default(),
-                author: parts.next().unwrap_or_default().to_string(),
-                subject: parts.next().unwrap_or_default().to_string(),
-                ..Commit::default()
-            });
-            self.in_body = true;
-            return done;
+            return self.start_commit(header);
         }
         let cur = self.cur.as_mut()?;
         if self.in_body {
-            if let Some(rest) = line.strip_suffix(FIELD) {
-                cur.body.push_str(rest);
-                self.in_body = false;
-            } else {
-                cur.body.push_str(line);
-                cur.body.push('\n');
-            }
-            return None;
-        }
-        if let Some(paths) = line.strip_prefix("diff --git ") {
-            if let Some(f) = self.file.take() {
-                cur.files.push(f);
-            }
-            // "a/<path> b/<path>": take the new side.
-            let path = paths.rsplit_once(" b/").map_or(paths, |(_, b)| b).to_string();
-            self.file = Some((path, String::new()));
+            self.in_body = !push_body(cur, line);
+        } else if let Some(paths) = line.strip_prefix("diff --git ") {
+            self.start_file(paths);
         } else if let Some((_, diff)) = self.file.as_mut() {
-            let skip = line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ");
-            if !skip && diff.len() < MAX_DIFF_CHARS {
-                diff.push_str(line);
-                diff.push('\n');
-                if diff.len() > MAX_DIFF_CHARS {
-                    let mut end = MAX_DIFF_CHARS;
-                    while !diff.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    diff.truncate(end);
-                    diff.push_str("\n…");
-                }
-            }
+            append_diff(diff, line);
         }
         None
+    }
+
+    /// Starts the commit a header line describes; returns the previous one.
+    fn start_commit(&mut self, header: &str) -> Option<Commit> {
+        let done = self.finish();
+        let mut parts = header.splitn(4, FIELD);
+        self.cur = Some(Commit {
+            sha: parts.next().unwrap_or_default().to_string(),
+            time: parts.next().and_then(|t| t.parse().ok()).unwrap_or_default(),
+            author: parts.next().unwrap_or_default().to_string(),
+            subject: parts.next().unwrap_or_default().to_string(),
+            ..Commit::default()
+        });
+        self.in_body = true;
+        done
+    }
+
+    /// Starts the diff of the file a `diff --git` line names, closing the previous file's.
+    fn start_file(&mut self, paths: &str) {
+        if let (Some(f), Some(cur)) = (self.file.take(), self.cur.as_mut()) {
+            cur.files.push(f);
+        }
+        // "a/<path> b/<path>": take the new side.
+        let path = paths.rsplit_once(" b/").map_or(paths, |(_, b)| b).to_string();
+        self.file = Some((path, String::new()));
     }
 
     fn finish(&mut self) -> Option<Commit> {
@@ -391,6 +381,35 @@ impl LogParser {
         }
         c.body = c.body.trim().to_string();
         Some(c)
+    }
+}
+
+/// Adds a body line to `cur`; true when it was the last (the one ending in the field separator).
+fn push_body(cur: &mut Commit, line: &str) -> bool {
+    if let Some(rest) = line.strip_suffix(FIELD) {
+        cur.body.push_str(rest);
+        return true;
+    }
+    cur.body.push_str(line);
+    cur.body.push('\n');
+    false
+}
+
+/// Adds a diff line to `diff`, skipping the file headers and cutting the diff at `MAX_DIFF_CHARS`.
+fn append_diff(diff: &mut String, line: &str) {
+    let skip = line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ");
+    if skip || diff.len() >= MAX_DIFF_CHARS {
+        return;
+    }
+    diff.push_str(line);
+    diff.push('\n');
+    if diff.len() > MAX_DIFF_CHARS {
+        let mut end = MAX_DIFF_CHARS;
+        while !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        diff.truncate(end);
+        diff.push_str("\n…");
     }
 }
 

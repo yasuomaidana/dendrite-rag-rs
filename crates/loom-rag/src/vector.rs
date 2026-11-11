@@ -6,11 +6,14 @@
 //! vectorizes; rows are scanned in parallel.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
+use self::codec::{HashedWriter, Reader, write_atomically};
+
+mod codec;
 #[cfg(feature = "hnsw")]
 pub mod hnsw;
 #[cfg(feature = "hnsw")]
@@ -129,100 +132,47 @@ impl FlatIndex {
             check_u16_len("id", id)?;
             check_u16_len("tag", &self.tags[row])?;
         }
-        let tmp = path.with_extension("tmp");
-        {
-            let mut file = std::fs::File::create(&tmp)?;
-            let mut hasher = blake3::Hasher::new();
-            {
-                let mut w = std::io::BufWriter::new(&mut file);
-                let mut write_hashed = |buf: &[u8]| -> std::io::Result<()> {
-                    w.write_all(buf)?;
-                    hasher.update(buf);
-                    Ok(())
-                };
-                write_hashed(MAGIC)?;
-                write_hashed(&(self.dim as u32).to_le_bytes())?;
-                write_hashed(&(self.ids.len() as u32).to_le_bytes())?;
-                let mut row_buf = Vec::with_capacity(self.dim);
-                for (row, id) in self.ids.iter().enumerate() {
-                    write_hashed(&(id.len() as u16).to_le_bytes())?;
-                    write_hashed(id.as_bytes())?;
-                    let tag = &self.tags[row];
-                    write_hashed(&(tag.len() as u16).to_le_bytes())?;
-                    write_hashed(tag.as_bytes())?;
-                    write_hashed(&self.scales[row].to_le_bytes())?;
-                    let v = &self.data[row * self.dim..(row + 1) * self.dim];
-                    row_buf.clear();
-                    row_buf.extend(v.iter().map(|&x| x as u8));
-                    write_hashed(&row_buf)?;
-                }
-                let checksum = hasher.finalize();
-                w.write_all(checksum.as_bytes())?;
-                w.flush()?;
-            }
-            file.sync_all()?;
-        }
-        std::fs::rename(&tmp, path)?;
-        let dir = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        if let Ok(dir_file) = std::fs::File::open(dir) {
-            let _ = dir_file.sync_all();
+        write_atomically(path, |w| self.write_rows(w))
+    }
+
+    fn write_rows<W: Write>(&self, w: &mut HashedWriter<W>) -> std::io::Result<()> {
+        w.put(MAGIC)?;
+        w.put_u32(self.dim as u32)?;
+        w.put_u32(self.ids.len() as u32)?;
+        let mut row_buf = Vec::with_capacity(self.dim);
+        for row in 0..self.ids.len() {
+            w.put_str(&self.ids[row])?;
+            w.put_str(&self.tags[row])?;
+            w.put(&self.scales[row].to_le_bytes())?;
+            row_buf.clear();
+            row_buf.extend(
+                self.data[row * self.dim..(row + 1) * self.dim]
+                    .iter()
+                    .map(|&x| x as u8),
+            );
+            w.put(&row_buf)?;
         }
         Ok(())
     }
 
     /// Loads an index written by [`FlatIndex::save`]; a missing file gives an empty index.
     pub fn load(path: &Path) -> std::io::Result<Self> {
-        let bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let mut idx = Self::new();
-                idx.path = Some(path.to_path_buf());
-                return Ok(idx);
-            }
+        let mut idx = match std::fs::read(path) {
+            Ok(bytes) => Self::decode(&bytes)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::new(),
             Err(e) => return Err(e),
         };
-        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt vector index");
-        if bytes.len() < 4 {
-            return Err(bad());
-        }
-        let magic = &bytes[0..4];
-        if magic == MAGIC_V1 {
-            let mut idx = Self::new();
-            idx.path = Some(path.to_path_buf());
-            return Ok(idx);
-        }
-        let is_v3 = if magic == MAGIC {
-            true
-        } else if magic == MAGIC_V2 {
-            false
-        } else {
-            return Err(bad());
+        idx.path = Some(path.to_path_buf());
+        Ok(idx)
+    }
+
+    fn decode(bytes: &[u8]) -> std::io::Result<Self> {
+        let Some((v3, payload)) = flat_payload(bytes)? else {
+            return Ok(Self::new());
         };
-        if is_v3 {
-            if bytes.len() < 44 {
-                return Err(bad());
-            }
-            let payload_len = bytes.len() - 32;
-            let expected = &bytes[payload_len..];
-            let hash = blake3::hash(&bytes[..payload_len]);
-            if hash.as_bytes() != expected {
-                return Err(bad());
-            }
-        }
-        let payload = if is_v3 {
-            &bytes[4..bytes.len() - 32]
-        } else {
-            &bytes[4..]
-        };
-        let mut r = payload;
-        let mut u32b = [0u8; 4];
-        r.read_exact(&mut u32b).map_err(|_| bad())?;
-        let dim = u32::from_le_bytes(u32b) as usize;
-        r.read_exact(&mut u32b).map_err(|_| bad())?;
-        let count = u32::from_le_bytes(u32b) as usize;
+        let mut r = Reader::new(payload, "vector index");
+        let dim = r.u32()? as usize;
+        let count = r.u32()? as usize;
         let mut idx = Self {
             dim,
             ..Self::default()
@@ -232,28 +182,52 @@ impl FlatIndex {
         idx.tags.reserve(count);
         idx.scales.reserve(count);
         for row in 0..count {
-            let id = read_prefixed_string(&mut r, is_v3).ok_or_else(bad)?;
-
-            let tag = read_prefixed_string(&mut r, is_v3).ok_or_else(bad)?;
-
-            let mut f = [0u8; 4];
-            r.read_exact(&mut f).map_err(|_| bad())?;
-            let mut v = vec![0u8; dim];
-            r.read_exact(&mut v).map_err(|_| bad())?;
-
-            if idx.pos.insert(id.clone(), row).is_some() {
-                return Err(bad());
-            }
-            idx.ids.push(id);
-            idx.tags.push(tag);
-            idx.scales.push(f32::from_le_bytes(f));
-            idx.data.extend(v.into_iter().map(|x| x as i8));
+            idx.read_row(&mut r, v3, row)?;
         }
         if !r.is_empty() {
-            return Err(bad());
+            return Err(r.corrupt());
         }
-        idx.path = Some(path.to_path_buf());
         Ok(idx)
+    }
+
+    /// Reads row `row`: id, tag, scale and the int8 components.
+    fn read_row(&mut self, r: &mut Reader, v3: bool, row: usize) -> std::io::Result<()> {
+        let id = r.string(v3)?;
+        let tag = r.string(v3)?;
+        let scale = r.f32()?;
+        let components = r.take(self.dim)?;
+        if self.pos.insert(id.clone(), row).is_some() {
+            return Err(r.corrupt());
+        }
+        self.ids.push(id);
+        self.tags.push(tag);
+        self.scales.push(scale);
+        self.data.extend(components.iter().map(|&x| x as i8));
+        Ok(())
+    }
+}
+
+/// The rows of a flat index file and whether it is a v3 file (u16 string lengths, a checksum
+/// at the end); `None` for the v1 format, which held no rows worth keeping.
+fn flat_payload(bytes: &[u8]) -> std::io::Result<Option<(bool, &[u8])>> {
+    let bad = || codec::corrupt("vector index");
+    if bytes.len() < 4 {
+        return Err(bad());
+    }
+    match &bytes[0..4] {
+        m if m == MAGIC_V1 => Ok(None),
+        m if m == MAGIC_V2 => Ok(Some((false, &bytes[4..]))),
+        m if m == MAGIC => {
+            if bytes.len() < 44 {
+                return Err(bad());
+            }
+            let payload_len = bytes.len() - 32;
+            if blake3::hash(&bytes[..payload_len]).as_bytes() != &bytes[payload_len..] {
+                return Err(bad());
+            }
+            Ok(Some((true, &bytes[4..payload_len])))
+        }
+        _ => Err(bad()),
     }
 }
 
@@ -391,20 +365,4 @@ fn check_u16_len(what: &str, value: &str) -> std::io::Result<()> {
         ));
     }
     Ok(())
-}
-
-/// Reads a length-prefixed UTF-8 string: a u16 length in v3 files, a u8 length before.
-fn read_prefixed_string(r: &mut &[u8], is_v3: bool) -> Option<String> {
-    let len = if is_v3 {
-        let mut b = [0u8; 2];
-        r.read_exact(&mut b).ok()?;
-        u16::from_le_bytes(b) as usize
-    } else {
-        let mut b = [0u8; 1];
-        r.read_exact(&mut b).ok()?;
-        b[0] as usize
-    };
-    let mut bytes = vec![0u8; len];
-    r.read_exact(&mut bytes).ok()?;
-    String::from_utf8(bytes).ok()
 }

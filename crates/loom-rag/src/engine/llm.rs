@@ -271,46 +271,39 @@ pub fn build_concepts_prompt(content: &str) -> String {
     )
 }
 
+/// `text` without a Markdown code fence (` ``` ` or ` ```json `) around it.
+fn unfenced(text: &str) -> &str {
+    let text = text.trim();
+    let Some(inner) = text.strip_prefix("```json").or_else(|| text.strip_prefix("```")) else {
+        return text;
+    };
+    inner.strip_suffix("```").unwrap_or(inner).trim()
+}
+
+/// The concepts in a JSON array (items that are not concepts are skipped), at most 8.
+fn concepts_of(arr: &[serde_json::Value]) -> Vec<Concept> {
+    arr.iter()
+        .filter_map(|item| serde_json::from_value(item.clone()).ok())
+        .take(8)
+        .collect()
+}
+
 /// Parses the model's concepts JSON response, handling direct arrays, wrapper objects, or markdown code blocks.
 pub fn parse_concepts(text: &str) -> Option<Vec<Concept>> {
-    let text = text.trim();
-    let text = if let Some(stripped) = text.strip_prefix("```json") {
-        stripped.strip_suffix("```").unwrap_or(stripped).trim()
-    } else if let Some(stripped) = text.strip_prefix("```") {
-        stripped.strip_suffix("```").unwrap_or(stripped).trim()
-    } else {
-        text
-    };
-
+    let text = unfenced(text);
     if let Ok(mut list) = serde_json::from_str::<Vec<Concept>>(text) {
         list.truncate(8);
         return Some(list);
     }
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-        if let Some(arr) = val.as_array() {
-            let mut list: Vec<Concept> = arr
-                .iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                .collect();
-            list.truncate(8);
-            return Some(list);
-        }
-        if let Some(obj) = val.as_object() {
-            for (_, v) in obj {
-                if let Some(arr) = v.as_array() {
-                    let mut list: Vec<Concept> = arr
-                        .iter()
-                        .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                        .collect();
-                    if !list.is_empty() {
-                        list.truncate(8);
-                        return Some(list);
-                    }
-                }
-            }
-        }
+    let val: serde_json::Value = serde_json::from_str(text).ok()?;
+    if let Some(arr) = val.as_array() {
+        return Some(concepts_of(arr));
     }
-    None
+    val.as_object()?
+        .values()
+        .filter_map(|v| v.as_array())
+        .map(|arr| concepts_of(arr))
+        .find(|list| !list.is_empty())
 }
 
 #[cfg(test)]

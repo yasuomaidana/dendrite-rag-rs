@@ -131,6 +131,15 @@ fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     out.into_iter()
 }
 
+/// Whether an identifier starts a new part at `c`, after `prev` and before `next`: a lower to upper
+/// case change, the end of an acronym (`HTTPServer`), or a switch between letters and digits.
+fn is_part_boundary(prev: char, c: char, next: Option<char>) -> bool {
+    (prev.is_lowercase() && c.is_uppercase())
+        || (prev.is_uppercase() && c.is_uppercase() && next.is_some_and(char::is_lowercase))
+        || (prev.is_alphabetic() && c.is_numeric())
+        || (prev.is_numeric() && c.is_alphabetic())
+}
+
 /// Splits one word into its parts, with byte offsets relative to the word.
 fn split_identifier(word: &str) -> Vec<(usize, &str)> {
     let chars: Vec<(usize, char)> = word.char_indices().collect();
@@ -146,10 +155,7 @@ fn split_identifier(word: &str) -> Vec<(usize, &str)> {
         if let Some(s) = start {
             let prev = chars[k - 1].1;
             let next = chars.get(k + 1).map(|&(_, n)| n);
-            let boundary = (prev.is_lowercase() && c.is_uppercase())
-                || (prev.is_uppercase() && c.is_uppercase() && next.is_some_and(char::is_lowercase))
-                || (prev.is_alphabetic() && c.is_numeric())
-                || (prev.is_numeric() && c.is_alphabetic());
+            let boundary = is_part_boundary(prev, c, next);
             if boundary && prev != '_' {
                 parts.push((s, &word[s..i]));
                 start = Some(i);

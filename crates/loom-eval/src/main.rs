@@ -212,6 +212,36 @@ fn quality(
     }
     let walk = cfg.walk.clone();
     let mut engine = Engine::open(&root, cfg)?;
+    index_corpus(&mut engine, &root)?;
+    let started = Instant::now();
+    let baselines = Baselines::build(&root, &walk)?;
+    eprintln!("baselines built in {:.1} s", started.elapsed().as_secs_f64());
+
+    let methods: Vec<Method> = Method::all(engine.has_vectors())
+        .into_iter()
+        .filter(|m| only.as_ref().is_none_or(|o| m.label().contains(o.as_str())))
+        .collect();
+    let mut set_runs = Vec::new();
+    for path in golden {
+        let set = golden::load(&path)?;
+        let (rows, method_runs) = score_set(&engine, &baselines, &methods, &set)?;
+        println!(
+            "{}",
+            report::table(&format!("{} ({} queries)", set.name, set.queries.len()), &rows)
+        );
+        set_runs.push(runs::SetRun {
+            name: set.name,
+            methods: method_runs,
+        });
+    }
+    match json {
+        Some(json_path) => write_run_file(&json_path, &root, set_runs),
+        None => Ok(()),
+    }
+}
+
+/// Indexes the corpus and prints what it holds.
+fn index_corpus(engine: &mut Engine, root: &std::path::Path) -> anyhow::Result<()> {
     let started = Instant::now();
     let report = engine.index(false)?;
     let status = engine.status()?;
@@ -225,15 +255,6 @@ fn quality(
         started.elapsed().as_secs_f64(),
         report.files_changed
     );
-    let started = Instant::now();
-    let baselines = Baselines::build(&root, &walk)?;
-    eprintln!("baselines built in {:.1} s", started.elapsed().as_secs_f64());
-
-    let dense = engine.has_vectors();
-    let methods: Vec<Method> = Method::all(dense)
-        .into_iter()
-        .filter(|m| only.as_ref().is_none_or(|o| m.label().contains(o.as_str())))
-        .collect();
     println!(
         "Corpus: {} ({} files, {} chunks, embedder {}, vector coverage {:.0}%)\n",
         root.display(),
@@ -242,61 +263,63 @@ fn quality(
         status.embed_model.as_deref().unwrap_or("none"),
         status.embed_coverage.unwrap_or(0.0) * 100.0
     );
-    let mut set_runs = Vec::new();
-    for path in golden {
-        let set = golden::load(&path)?;
-        let mut rows = Vec::new();
-        let mut method_runs = Vec::new();
-        for m in &methods {
-            let mut scores = Scores::default();
-            for q in &set.queries {
-                let started = Instant::now();
-                let units = m.run(&engine, &baselines, &q.q, *BUDGETS.last().expect("budgets"))?;
-                let elapsed = started.elapsed();
-                let per_budget = if m.packs_per_budget() {
-                    Some(
-                        BUDGETS
-                            .iter()
-                            .map(|&b| m.run(&engine, &baselines, &q.q, b))
-                            .collect::<anyhow::Result<Vec<_>>>()?,
-                    )
-                } else {
-                    None
-                };
-                scores.add(q, &units, per_budget.as_deref(), elapsed);
-            }
-            if json.is_some() {
-                method_runs.push(runs::MethodRun {
-                    label: m.label(),
-                    per_query: scores.per_query.clone(),
-                });
-            }
-            rows.push((m.label(), scores));
+    Ok(())
+}
+
+/// Scores every method on the queries of `set`: the table rows and each method's per-query scores.
+#[allow(clippy::type_complexity)]
+fn score_set(
+    engine: &Engine,
+    baselines: &Baselines,
+    methods: &[Method],
+    set: &golden::Golden,
+) -> anyhow::Result<(Vec<(String, Scores)>, Vec<runs::MethodRun>)> {
+    let mut rows = Vec::new();
+    let mut method_runs = Vec::new();
+    for m in methods {
+        let mut scores = Scores::default();
+        for q in &set.queries {
+            let started = Instant::now();
+            let units = m.run(engine, baselines, &q.q, *BUDGETS.last().expect("budgets"))?;
+            let elapsed = started.elapsed();
+            let per_budget = if m.packs_per_budget() {
+                Some(
+                    BUDGETS
+                        .iter()
+                        .map(|&b| m.run(engine, baselines, &q.q, b))
+                        .collect::<anyhow::Result<Vec<_>>>()?,
+                )
+            } else {
+                None
+            };
+            scores.add(q, &units, per_budget.as_deref(), elapsed);
         }
-        println!(
-            "{}",
-            report::table(&format!("{} ({} queries)", set.name, set.queries.len()), &rows)
-        );
-        if json.is_some() {
-            set_runs.push(runs::SetRun {
-                name: set.name,
-                methods: method_runs,
-            });
-        }
+        method_runs.push(runs::MethodRun {
+            label: m.label(),
+            per_query: scores.per_query.clone(),
+        });
+        rows.push((m.label(), scores));
     }
-    if let Some(json_path) = json {
-        let run_file = runs::RunFile {
-            root: root.display().to_string(),
-            sets: set_runs,
-        };
-        let s = serde_json::to_string_pretty(&run_file)?;
-        if let Some(parent) = json_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&json_path, s)?;
+    Ok((rows, method_runs))
+}
+
+/// Writes the per-query scores of every set to `json_path`.
+fn write_run_file(
+    json_path: &std::path::Path,
+    root: &std::path::Path,
+    sets: Vec<runs::SetRun>,
+) -> anyhow::Result<()> {
+    let run_file = runs::RunFile {
+        root: root.display().to_string(),
+        sets,
+    };
+    let s = serde_json::to_string_pretty(&run_file)?;
+    if let Some(parent) = json_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
+    std::fs::write(json_path, s)?;
     Ok(())
 }
 

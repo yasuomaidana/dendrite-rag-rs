@@ -31,52 +31,87 @@ impl Engine {
         report: &mut IndexReport,
     ) -> Result<()> {
         let Some(model) = self.embedder.as_ref().map(|e| e.model_id().to_string()) else {
-            if !self.vectors.is_empty() {
-                self.vectors.clear();
-                self.vectors.persist()?;
-            }
-            return Ok(());
+            return self.drop_all_vectors();
         };
         if !changed && self.vectors_are_current(&model)? {
             return Ok(());
         }
-        let live = self.drop_stale_vectors()?;
-        let mut todo = self.uncached_chunks(&live, &model)?;
-        if let Some(q) = focus.filter(|_| deadline.is_some()) {
-            let first: HashSet<String> = self
-                .lexical
-                .search(q, FOCUS_CANDIDATES, &self.cfg.bm25)?
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect();
-            todo.sort_by_key(|id| !first.contains(id));
-        }
-        let budget_tokens = self.cfg.embed.budget_tokens;
-        if let Some(b) = budget_tokens {
-            report.budget_tokens_remaining = Some(b);
-        }
-        if let Some(embedder) = self.embedder.as_deref() {
-            let mut pass = EmbedPass {
-                embedder,
-                ledger: self.ledger.as_ref(),
-                vectors: self.vectors.as_mut(),
-                model: &model,
-                deadline,
-                budget_tokens,
-                // Under a budget (time or tokens), small groups keep the overshoot small.
-                group_size: if deadline.is_some() || budget_tokens.is_some() {
-                    EMBED_GROUP_BUDGETED
-                } else {
-                    EMBED_GROUP
-                },
-                tokens_spent: 0,
-            };
-            pass.run(&todo, report)?;
-        }
+        let todo = self.chunks_to_embed(&model, deadline, focus)?;
+        self.embed_chunks(&model, &todo, deadline, report)?;
         let mut batch = self.ledger.batch()?;
         batch.set_meta("embed_model", &model)?;
         batch.commit()?;
         self.vectors.persist()?;
+        Ok(())
+    }
+
+    /// Without an embedder the index holds no vectors.
+    fn drop_all_vectors(&mut self) -> Result<()> {
+        if !self.vectors.is_empty() {
+            self.vectors.clear();
+            self.vectors.persist()?;
+        }
+        Ok(())
+    }
+
+    /// Embeds `todo` in groups until the time or token budget runs out.
+    fn embed_chunks(
+        &mut self,
+        model: &str,
+        todo: &[String],
+        deadline: Option<Instant>,
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        let budget_tokens = self.cfg.embed.budget_tokens;
+        if let Some(b) = budget_tokens {
+            report.budget_tokens_remaining = Some(b);
+        }
+        let Some(embedder) = self.embedder.as_deref() else {
+            return Ok(());
+        };
+        let mut pass = EmbedPass {
+            embedder,
+            ledger: self.ledger.as_ref(),
+            vectors: self.vectors.as_mut(),
+            model,
+            deadline,
+            budget_tokens,
+            // Under a budget (time or tokens), small groups keep the overshoot small.
+            group_size: if deadline.is_some() || budget_tokens.is_some() {
+                EMBED_GROUP_BUDGETED
+            } else {
+                EMBED_GROUP
+            },
+            tokens_spent: 0,
+        };
+        pass.run(todo, report)
+    }
+
+    /// The chunks that need a new embedding, the ones `focus` matches first when the run is under a
+    /// deadline. Vectors of chunks that no longer exist are dropped and cached embeddings are taken.
+    fn chunks_to_embed(
+        &mut self,
+        model: &str,
+        deadline: Option<Instant>,
+        focus: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let live = self.drop_stale_vectors()?;
+        let mut todo = self.uncached_chunks(&live, model)?;
+        if let Some(q) = focus.filter(|_| deadline.is_some()) {
+            self.focus_first(&mut todo, q)?;
+        }
+        Ok(todo)
+    }
+
+    /// Puts the chunks `focus` matches lexically before the rest of the backlog.
+    fn focus_first(&self, todo: &mut [String], focus: &str) -> Result<()> {
+        let first: HashSet<String> = self
+            .lexical
+            .search(focus, FOCUS_CANDIDATES, &self.cfg.bm25)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        todo.sort_by_key(|id| !first.contains(id));
         Ok(())
     }
 

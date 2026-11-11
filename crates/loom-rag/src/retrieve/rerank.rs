@@ -246,6 +246,37 @@ pub struct CandleReranker {
     batch: usize,
 }
 
+/// Builds the cross-encoder `model_type` names from the weights in `vb`.
+#[cfg(feature = "candle")]
+fn load_cross_encoder(
+    model: &str,
+    model_type: &str,
+    config_text: &str,
+    vb: VarBuilder,
+) -> Result<CrossEncoder> {
+    let parse = |e: serde_json::Error| EmbedError::Model(format!("{model} config: {e}"));
+    match model_type {
+        "xlm-roberta" => {
+            let c: xlm_roberta::Config = serde_json::from_str(config_text).map_err(parse)?;
+            Ok(CrossEncoder::XlmRoberta(
+                xlm_roberta::XLMRobertaForSequenceClassification::new(1, &c, vb).map_err(model_err)?,
+            ))
+        }
+        "bert" => {
+            let c: bert::Config = serde_json::from_str(config_text).map_err(parse)?;
+            Ok(CrossEncoder::Bert {
+                model: bert::BertModel::load(vb.pp("bert"), &c).map_err(model_err)?,
+                pooler: linear(c.hidden_size, c.hidden_size, vb.pp("bert.pooler.dense"))
+                    .map_err(model_err)?,
+                classifier: linear(c.hidden_size, 1, vb.pp("classifier")).map_err(model_err)?,
+            })
+        }
+        other => Err(EmbedError::Model(format!(
+            "{model}: unsupported cross-encoder model_type {other:?} (xlm-roberta or bert)"
+        ))),
+    }
+}
+
 #[cfg(feature = "candle")]
 impl CandleReranker {
     pub fn load(cfg: &RerankConfig) -> Result<Self> {
@@ -264,30 +295,7 @@ impl CandleReranker {
         // SAFETY: the weights file is not modified while it is mapped.
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device) }
             .map_err(model_err)?;
-        let parse = |e: serde_json::Error| EmbedError::Model(format!("{model} config: {e}"));
-        let cross_encoder = match model_type.as_str() {
-            "xlm-roberta" => {
-                let c: xlm_roberta::Config = serde_json::from_str(&config_text).map_err(parse)?;
-                CrossEncoder::XlmRoberta(
-                    xlm_roberta::XLMRobertaForSequenceClassification::new(1, &c, vb).map_err(model_err)?,
-                )
-            }
-            "bert" => {
-                let c: bert::Config = serde_json::from_str(&config_text).map_err(parse)?;
-                CrossEncoder::Bert {
-                    model: bert::BertModel::load(vb.pp("bert"), &c).map_err(model_err)?,
-                    pooler: linear(c.hidden_size, c.hidden_size, vb.pp("bert.pooler.dense"))
-                        .map_err(model_err)?,
-                    classifier: linear(c.hidden_size, 1, vb.pp("classifier")).map_err(model_err)?,
-                }
-            }
-            other => {
-                return Err(EmbedError::Model(format!(
-                    "{model}: unsupported cross-encoder model_type {other:?} (xlm-roberta or bert)"
-                )));
-            }
-        };
-
+        let cross_encoder = load_cross_encoder(&model, &model_type, &config_text, vb)?;
         let tokenizer = Tokenizer::load(&tokenizer_path, MAX_TOKENS)?;
 
         Ok(Self {

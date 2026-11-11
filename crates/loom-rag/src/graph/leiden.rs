@@ -162,66 +162,113 @@ fn local_moving(g: &Graph, partition: &mut [u32], gamma: f64) {
 /// a node that is well connected to its community joins the well-connected
 /// subcommunity (within the same community) with the best non-negative gain.
 fn refine(g: &Graph, partition: &[u32], gamma: f64) -> Vec<u32> {
-    let n = g.len();
-    let mut refined: Vec<u32> = (0..n as u32).collect();
-    let mut sub_total: Vec<f64> = g.degree.clone();
-    let mut sub_size: Vec<usize> = vec![1; n];
-    let mut comm_total: HashMap<u32, f64> = HashMap::new();
-    for (&c, &k) in partition.iter().zip(&g.degree) {
-        *comm_total.entry(c).or_insert(0.0) += k;
-    }
-    // Weight from each subcommunity to the rest of its community, kept current.
-    let mut sub_external: Vec<f64> = (0..n)
-        .map(|v| {
-            g.adj[v]
-                .iter()
-                .filter(|(u, _)| partition[*u as usize] == partition[v])
-                .map(|(_, w)| w)
-                .sum()
-        })
-        .collect();
-    for v in 0..n {
-        if sub_size[refined[v] as usize] != 1 {
+    let mut st = Refinement::new(g, partition, gamma);
+    for (v, c) in partition.iter().enumerate() {
+        if st.sub_size[st.refined[v] as usize] != 1 {
             continue; // already merged into another node's subcommunity
         }
-        let c = partition[v];
-        let k = g.degree[v];
-        let total_c = comm_total[&c];
-        let well_connected = |ext: f64, tot: f64| ext >= gamma * tot * (total_c - tot) / g.two_m;
-        if !well_connected(sub_external[v], k) {
+        let total_c = st.comm_total[c];
+        if !st.well_connected(total_c, st.sub_external[v], g.degree[v]) {
             continue;
         }
+        let links = st.community_links(v);
+        let best = st.best_join(v, total_c, &links);
+        if best != st.refined[v] {
+            st.merge(v, best, links[&best]);
+        }
+    }
+    st.refined
+}
+
+/// The state of [`refine`]: each node's subcommunity and what the well-connectedness test needs.
+struct Refinement<'a> {
+    g: &'a Graph,
+    partition: &'a [u32],
+    gamma: f64,
+    refined: Vec<u32>,
+    sub_total: Vec<f64>,
+    sub_size: Vec<usize>,
+    comm_total: HashMap<u32, f64>,
+    /// Weight from each subcommunity to the rest of its community, kept current.
+    sub_external: Vec<f64>,
+}
+
+impl<'a> Refinement<'a> {
+    fn new(g: &'a Graph, partition: &'a [u32], gamma: f64) -> Self {
+        let n = g.len();
+        let mut comm_total: HashMap<u32, f64> = HashMap::new();
+        for (&c, &k) in partition.iter().zip(&g.degree) {
+            *comm_total.entry(c).or_insert(0.0) += k;
+        }
+        let sub_external = (0..n)
+            .map(|v| {
+                g.adj[v]
+                    .iter()
+                    .filter(|(u, _)| partition[*u as usize] == partition[v])
+                    .map(|(_, w)| w)
+                    .sum()
+            })
+            .collect();
+        Self {
+            g,
+            partition,
+            gamma,
+            refined: (0..n as u32).collect(),
+            sub_total: g.degree.clone(),
+            sub_size: vec![1; n],
+            comm_total,
+            sub_external,
+        }
+    }
+
+    /// Whether a set with `ext` weight to the rest of a community of `total_c` and degree `tot` is well connected.
+    fn well_connected(&self, total_c: f64, ext: f64, tot: f64) -> bool {
+        ext >= self.gamma * tot * (total_c - tot) / self.g.two_m
+    }
+
+    /// The weight from `v` to each subcommunity of its own community.
+    fn community_links(&self, v: usize) -> BTreeMap<u32, f64> {
+        let c = self.partition[v];
         let mut links: BTreeMap<u32, f64> = BTreeMap::new();
-        for &(u, w) in &g.adj[v] {
-            if partition[u as usize] == c {
-                *links.entry(refined[u as usize]).or_insert(0.0) += w;
+        for &(u, w) in &self.g.adj[v] {
+            if self.partition[u as usize] == c {
+                *links.entry(self.refined[u as usize]).or_insert(0.0) += w;
             }
         }
-        let own = refined[v];
+        links
+    }
+
+    /// The well-connected subcommunity of `links` with the best positive gain for `v`, or its own.
+    fn best_join(&self, v: usize, total_c: f64, links: &BTreeMap<u32, f64>) -> u32 {
+        let k = self.g.degree[v];
+        let own = self.refined[v];
         let mut best = own;
         let mut best_gain = 0.0;
-        for (&s, &w) in &links {
-            if s == own || !well_connected(sub_external[s as usize], sub_total[s as usize]) {
+        for (&s, &w) in links {
+            let (ext, tot) = (self.sub_external[s as usize], self.sub_total[s as usize]);
+            if s == own || !self.well_connected(total_c, ext, tot) {
                 continue;
             }
-            let gain = w - gamma * k * sub_total[s as usize] / g.two_m;
+            let gain = w - self.gamma * k * tot / self.g.two_m;
             if gain > best_gain + 1e-12 {
                 best = s;
                 best_gain = gain;
             }
         }
-        if best != own {
-            refined[v] = best;
-            let b = best as usize;
-            let w_vs = links[&best];
-            sub_total[b] += k;
-            sub_size[b] += 1;
-            sub_size[own as usize] = 0;
-            // External weight of the merged set: both sides' minus the edges between them.
-            sub_external[b] = sub_external[b] + sub_external[v] - 2.0 * w_vs;
-        }
+        best
     }
-    refined
+
+    /// Moves `v` into subcommunity `best`, joined to it by `w_vs`.
+    fn merge(&mut self, v: usize, best: u32, w_vs: f64) {
+        let own = self.refined[v];
+        let b = best as usize;
+        self.refined[v] = best;
+        self.sub_total[b] += self.g.degree[v];
+        self.sub_size[b] += 1;
+        self.sub_size[own as usize] = 0;
+        // External weight of the merged set: both sides' minus the edges between them.
+        self.sub_external[b] = self.sub_external[b] + self.sub_external[v] - 2.0 * w_vs;
+    }
 }
 
 /// Collapses each community of `ids` into one node, summing edge weights.

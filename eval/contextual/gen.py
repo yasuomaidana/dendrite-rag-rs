@@ -50,58 +50,71 @@ stats = {
 }
 
 
+def cache_key(f, doc):
+    """The cache file name for a file's document text and chunk ids under the current model."""
+    return hashlib.sha256(
+        (model + "\0" + doc + "\0" + json.dumps([c["id"] for c in f["chunks"]])).encode()
+    ).hexdigest()[:24]
+
+
+def chunks_text(f):
+    return "\n".join(
+        f'<chunk id="{c["id"]}" lines="{c["start_line"]}-{c["end_line"]}">\n{c["content"][:4000]}\n</chunk>'
+        for c in f["chunks"]
+    )
+
+
+def ask_model(prompt):
+    """Runs the model on `prompt`; the completed process."""
+    return subprocess.run(
+        [
+            "agy",
+            "--model",
+            model,
+            "--disable-slash-commands",
+            "--print-timeout",
+            "170s",
+            "-p=" + prompt,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
+        cwd=cache,
+    )
+
+
+def parse_contexts(stdout, f):
+    """The per-chunk contexts in the model's JSON answer, for the chunks of `f` only."""
+    m = re.search(r"\{.*\}", stdout, re.DOTALL)
+    if not m:
+        return {}
+    ids = {c["id"] for c in f["chunks"]}
+    parsed = json.loads(m.group(0)).items()
+    return {k: v.strip() for k, v in parsed if isinstance(v, str) and k in ids}
+
+
 def work(f):
     path = os.path.join(root, f["path"])
     doc = Path(path).read_text(encoding="utf-8", errors="replace")
     if len(f["chunks"]) < 2 and len(doc) < 2000:
         return "skipped", {}
     doc = doc[:DOC_CHARS]
-    key = hashlib.sha256(
-        (
-            model + "\0" + doc + "\0" + json.dumps([c["id"] for c in f["chunks"]])
-        ).encode()
-    ).hexdigest()[:24]
-    cp = os.path.join(cache, key + ".json")
+    cp = os.path.join(cache, cache_key(f, doc) + ".json")
     if os.path.exists(cp):
         return "cached", json.loads(Path(cp).read_text())
-    chunks = "\n".join(
-        f'<chunk id="{c["id"]}" lines="{c["start_line"]}-{c["end_line"]}">\n{c["content"][:4000]}\n</chunk>'
-        for c in f["chunks"]
-    )
+    chunks = chunks_text(f)
     prompt = PROMPT.format(path=f["path"], doc=doc, chunks=chunks)
     for attempt in range(3):
         try:
-            r = subprocess.run(
-                [
-                    "agy",
-                    "--model",
-                    model,
-                    "--disable-slash-commands",
-                    "--print-timeout",
-                    "170s",
-                    "-p=" + prompt,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=180,
-                cwd=cache,
-            )
-            m = re.search(r"\{.*\}", r.stdout, re.DOTALL)
-            if m:
-                ctx = {
-                    k: v
-                    for k, v in json.loads(m.group(0)).items()
-                    if isinstance(v, str)
-                }
-                ids = {c["id"] for c in f["chunks"]}
-                ctx = {k: v.strip() for k, v in ctx.items() if k in ids}
-                if ctx:
-                    Path(cp).write_text(json.dumps(ctx))
-                    stats["doc_chars"] += len(doc)
-                    stats["chunk_chars"] += len(chunks)
-                    stats["out_chars"] += sum(map(len, ctx.values()))
-                    return "calls", ctx
+            r = ask_model(prompt)
+            ctx = parse_contexts(r.stdout, f)
+            if ctx:
+                Path(cp).write_text(json.dumps(ctx))
+                stats["doc_chars"] += len(doc)
+                stats["chunk_chars"] += len(chunks)
+                stats["out_chars"] += sum(map(len, ctx.values()))
+                return "calls", ctx
             if "quota" in (r.stdout + r.stderr).lower():
                 print("QUOTA:", (r.stdout + r.stderr)[-300:], file=sys.stderr)
                 return "failed", {}

@@ -197,6 +197,17 @@ impl CandleEmbedder {
     }
 }
 
+/// Parses the model's config as `C` (`what` names the architecture in an error) and builds the architecture from it.
+fn load_from<C: serde::de::DeserializeOwned>(
+    config_text: &str,
+    what: &str,
+    build: impl FnOnce(&C) -> candle_core::Result<Arch>,
+) -> Result<Arch> {
+    let c: C =
+        serde_json::from_str(config_text).map_err(|e| EmbedError::Model(format!("{what} config: {e}")))?;
+    build(&c).map_err(model_err)
+}
+
 /// Builds the architecture `probe` names from the weights in `vb`.
 fn load_arch(
     model: &str,
@@ -205,67 +216,71 @@ fn load_arch(
     vb: VarBuilder,
     tokenizer_path: &std::path::Path,
 ) -> Result<Arch> {
-    let parse = |what| move |e: serde_json::Error| EmbedError::Model(format!("{what} config: {e}"));
     let jina = probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
         || probe.position_embedding_type.as_deref() == Some("alibi");
-    Ok(match probe.model_type.as_deref() {
-        Some("nomic_bert") => {
-            let c: nomic_bert::Config = serde_json::from_str(config_text).map_err(parse("NomicBERT"))?;
-            Arch::Nomic(nomic_bert::NomicBertModel::load(vb, &c).map_err(model_err)?)
-        }
+    match probe.model_type.as_deref() {
+        Some("nomic_bert") => load_from(config_text, "NomicBERT", |c: &nomic_bert::Config| {
+            Ok(Arch::Nomic(nomic_bert::NomicBertModel::load(vb, c)?))
+        }),
         Some("bert") if jina && jina_code::Config::is_qk_post_norm(&vb) => {
-            let c: jina_code::Config =
-                serde_json::from_str(config_text).map_err(parse("JinaBERT qk-post-norm"))?;
-            Arch::JinaCode(jina_code::JinaCodeModel::load(vb, &c).map_err(model_err)?)
+            load_from(config_text, "JinaBERT qk-post-norm", |c: &jina_code::Config| {
+                Ok(Arch::JinaCode(jina_code::JinaCodeModel::load(vb, c)?))
+            })
         }
-        Some("bert") if jina => {
-            let c: jina_bert::Config = serde_json::from_str(config_text).map_err(parse("JinaBERT"))?;
-            Arch::Jina(jina_bert::BertModel::new(vb, &c).map_err(model_err)?)
-        }
+        Some("bert") if jina => load_from(config_text, "JinaBERT", |c: &jina_bert::Config| {
+            Ok(Arch::Jina(jina_bert::BertModel::new(vb, c)?))
+        }),
         Some("qwen3") => {
             let tokenizer = Tokenizer::load(tokenizer_path, MAX_TOKENS)?;
-            Arch::Qwen3(qwen3::Qwen3Encoder::load(vb, config_text, &tokenizer)?)
+            Ok(Arch::Qwen3(qwen3::Qwen3Encoder::load(
+                vb,
+                config_text,
+                &tokenizer,
+            )?))
         }
         Some("bert") | Some("roberta") | Some("xlm-roberta") => {
-            let c: bert::Config = serde_json::from_str(config_text).map_err(parse("BERT"))?;
-            Arch::Bert(bert::BertModel::load(vb, &c).map_err(model_err)?)
+            load_from(config_text, "BERT", |c: &bert::Config| {
+                Ok(Arch::Bert(bert::BertModel::load(vb, c)?))
+            })
         }
-        other => {
-            return Err(EmbedError::Model(format!(
-                "{model}: model_type {other:?} is not supported by the candle backend \
-                 (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
-            )));
-        }
-    })
+        other => Err(EmbedError::Model(format!(
+            "{model}: model_type {other:?} is not supported by the candle backend \
+             (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
+        ))),
+    }
 }
 
 /// `[batch, tokens, dim]` → `[batch, dim]`, ignoring padding.
 pub(super) fn pool(hidden: &Tensor, mask: &Tensor, pooling: Pooling) -> candle_core::Result<Tensor> {
     match pooling {
         Pooling::Cls => hidden.narrow(1, 0, 1)?.squeeze(1),
-        Pooling::Mean => {
-            let m = mask.to_dtype(hidden.dtype())?.unsqueeze(2)?;
-            let sum = hidden.broadcast_mul(&m)?.sum(1)?;
-            let count = m.sum(1)?.clamp(1e-9, f64::MAX)?;
-            sum.broadcast_div(&count)
-        }
-        Pooling::Last => {
-            // Padding is on the right: the last real token is at (mask sum - 1).
-            let last: Vec<u32> = mask
-                .to_dtype(DType::U32)?
-                .sum(D::Minus1)?
-                .to_vec1::<u32>()?
-                .into_iter()
-                .map(|n| n.saturating_sub(1))
-                .collect();
-            let rows = last
-                .iter()
-                .enumerate()
-                .map(|(b, &t)| hidden.get(b)?.get(t as usize))
-                .collect::<candle_core::Result<Vec<_>>>()?;
-            Tensor::stack(&rows, 0)
-        }
+        Pooling::Mean => mean_pool(hidden, mask),
+        Pooling::Last => last_pool(hidden, mask),
     }
+}
+
+fn mean_pool(hidden: &Tensor, mask: &Tensor) -> candle_core::Result<Tensor> {
+    let m = mask.to_dtype(hidden.dtype())?.unsqueeze(2)?;
+    let sum = hidden.broadcast_mul(&m)?.sum(1)?;
+    let count = m.sum(1)?.clamp(1e-9, f64::MAX)?;
+    sum.broadcast_div(&count)
+}
+
+/// The hidden state of the last real token of each row. Padding is on the right: it is at (mask sum - 1).
+fn last_pool(hidden: &Tensor, mask: &Tensor) -> candle_core::Result<Tensor> {
+    let last: Vec<u32> = mask
+        .to_dtype(DType::U32)?
+        .sum(D::Minus1)?
+        .to_vec1::<u32>()?
+        .into_iter()
+        .map(|n| n.saturating_sub(1))
+        .collect();
+    let rows = last
+        .iter()
+        .enumerate()
+        .map(|(b, &t)| hidden.get(b)?.get(t as usize))
+        .collect::<candle_core::Result<Vec<_>>>()?;
+    Tensor::stack(&rows, 0)
 }
 
 impl_prefixed_embedder!(CandleEmbedder, id);

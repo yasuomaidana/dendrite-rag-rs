@@ -193,14 +193,10 @@ impl Engine {
             batch.clear_index()?;
         }
         plan.drop_removed(&mut *batch, report)?;
-        let (lw, mut batch) = self.write_groups(plan, lw, batch, report)?;
+        let (lw, batch) = self.write_groups(plan, lw, batch, report)?;
         // Lexical index first: the ledger commit below is what makes the run count.
         lw.commit()?;
-        plan.refresh_unchanged(&mut *batch)?;
-        batch.set_meta("merkle_root", &hex(&plan.new_tree.hash))?;
-        batch.set_meta("last_indexed", &now_secs().to_string())?;
-        batch.commit()?;
-        Ok(())
+        plan.commit_ledger(batch)
     }
 
     /// Chunks the added and modified files a group at a time and commits each group to both
@@ -345,6 +341,15 @@ impl Plan {
                 batch.remove_concepts(p)?;
             }
         }
+        Ok(())
+    }
+
+    /// Refreshes the unchanged entries, stamps the Merkle root and the time, and commits the batch.
+    fn commit_ledger(&self, mut batch: Box<dyn LedgerWrite + '_>) -> Result<()> {
+        self.refresh_unchanged(&mut *batch)?;
+        batch.set_meta("merkle_root", &hex(&self.new_tree.hash))?;
+        batch.set_meta("last_indexed", &now_secs().to_string())?;
+        batch.commit()?;
         Ok(())
     }
 

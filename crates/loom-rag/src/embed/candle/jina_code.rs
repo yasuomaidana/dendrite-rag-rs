@@ -160,17 +160,19 @@ impl JinaCodeModel {
 
     fn attention(&self, l: &Layer, x: &Tensor, bias: &Tensor, dims: (usize, usize)) -> Result<Tensor> {
         let (b, n) = dims;
-        let scale = (self.head_dim as f64).powf(-0.5);
         let q = self.split_heads(l.norm_q.forward(&l.query.forward(x)?)?, dims)?;
         let k = self.split_heads(l.norm_k.forward(&l.key.forward(x)?)?, dims)?;
         let v = self.split_heads(l.value.forward(x)?, dims)?;
-        let scores = (q.matmul(&k.t()?)? * scale)?.broadcast_add(bias)?;
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape((b, n, self.heads * self.head_dim))?;
+        let ctx = self.attend(&q, &k, &v, bias)?;
+        let ctx = ctx.transpose(1, 2)?.reshape((b, n, self.heads * self.head_dim))?;
         l.norm_out.forward(&(l.out.forward(&ctx)? + x)?)
+    }
+
+    /// Scaled dot-product attention over the heads, with the additive `bias`.
+    fn attend(&self, q: &Tensor, k: &Tensor, v: &Tensor, bias: &Tensor) -> Result<Tensor> {
+        let scale = (self.head_dim as f64).powf(-0.5);
+        let scores = (q.matmul(&k.t()?)? * scale)?.broadcast_add(bias)?;
+        candle_nn::ops::softmax_last_dim(&scores)?.matmul(v)
     }
 
     fn feed_forward(&self, l: &Layer, r: &Tensor) -> Result<Tensor> {

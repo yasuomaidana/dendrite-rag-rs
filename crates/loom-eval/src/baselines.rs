@@ -10,6 +10,7 @@ use std::path::Path;
 
 use loom_rag::chunk::Chunk;
 use loom_rag::lexical::LexicalIndex;
+use loom_rag::lexical::LexicalWriter;
 use loom_rag::retrieve::estimate_tokens;
 use loom_rag::walk::{WalkOptions, read_text, walk};
 
@@ -42,36 +43,82 @@ pub struct Baselines {
     _dir: tempfile::TempDir,
 }
 
+/// The text files under `root` the engine indexes.
+fn read_files(root: &Path, walk_options: &WalkOptions) -> anyhow::Result<Vec<File>> {
+    let mut files = Vec::new();
+    for f in walk(root, walk_options)? {
+        if let Some(text) = read_text(&f.abs) {
+            files.push(File {
+                path: f.path,
+                lower: text.to_lowercase(),
+                tokens: estimate_tokens(&text),
+                text,
+                copies: Vec::new(),
+            });
+        }
+    }
+    Ok(files)
+}
+
+/// Records, for each file, the other files with the same text.
+fn mark_copies(files: &mut [File]) {
+    let mut by_text: HashMap<String, Vec<String>> = HashMap::new();
+    for f in files.iter() {
+        by_text
+            .entry(f.text.trim().to_string())
+            .or_default()
+            .push(f.path.clone());
+    }
+    for f in files.iter_mut() {
+        f.copies = by_text[f.text.trim()]
+            .iter()
+            .filter(|p| **p != f.path)
+            .cloned()
+            .collect();
+    }
+}
+
+/// Adds the file as one document to `whole` and as windows of `WINDOW_LINES` lines to `windows`,
+/// recording each document's path, tokens and copies in `units`.
+fn index_file(
+    f: &File,
+    whole: &mut LexicalWriter<'_>,
+    windows: &mut LexicalWriter<'_>,
+    units: &mut HashMap<String, (String, usize, Vec<String>)>,
+) -> anyhow::Result<()> {
+    let id = format!("file:{}", f.path);
+    whole.add(&pseudo_chunk(
+        &id,
+        &f.path,
+        &f.text,
+        1,
+        f.text.lines().count().max(1),
+    ))?;
+    units.insert(id, (f.path.clone(), f.tokens, f.copies.clone()));
+    let lines: Vec<&str> = f.text.lines().collect();
+    for (i, window) in lines.chunks(WINDOW_LINES).enumerate() {
+        let id = format!("win:{}:{i}", f.path);
+        let text = window.join("\n");
+        let start = i * WINDOW_LINES + 1;
+        windows.add(&pseudo_chunk(
+            &id,
+            &f.path,
+            &text,
+            start,
+            start + window.len() - 1,
+        ))?;
+        // A window of a copied file is a copy of the same window.
+        units.insert(id, (f.path.clone(), estimate_tokens(&text), f.copies.clone()));
+    }
+    Ok(())
+}
+
 impl Baselines {
     /// Reads the files under `root` the engine indexes (`walk`: the project's own walk
     /// settings) and builds the two BM25 indexes.
     pub fn build(root: &Path, walk_options: &WalkOptions) -> anyhow::Result<Self> {
-        let mut files = Vec::new();
-        for f in walk(root, walk_options)? {
-            if let Some(text) = read_text(&f.abs) {
-                files.push(File {
-                    path: f.path,
-                    lower: text.to_lowercase(),
-                    tokens: estimate_tokens(&text),
-                    text,
-                    copies: Vec::new(),
-                });
-            }
-        }
-        let mut by_text: HashMap<String, Vec<String>> = HashMap::new();
-        for f in &files {
-            by_text
-                .entry(f.text.trim().to_string())
-                .or_default()
-                .push(f.path.clone());
-        }
-        for f in &mut files {
-            f.copies = by_text[f.text.trim()]
-                .iter()
-                .filter(|p| **p != f.path)
-                .cloned()
-                .collect();
-        }
+        let mut files = read_files(root, walk_options)?;
+        mark_copies(&mut files);
         let dir = tempfile::tempdir()?;
         let whole = LexicalIndex::open(&dir.path().join("whole"))?;
         let windows = LexicalIndex::open(&dir.path().join("windows"))?;
@@ -80,30 +127,7 @@ impl Baselines {
             let mut ww = whole.writer()?;
             let mut nw = windows.writer()?;
             for f in &files {
-                let id = format!("file:{}", f.path);
-                ww.add(&pseudo_chunk(
-                    &id,
-                    &f.path,
-                    &f.text,
-                    1,
-                    f.text.lines().count().max(1),
-                ))?;
-                units.insert(id, (f.path.clone(), f.tokens, f.copies.clone()));
-                let lines: Vec<&str> = f.text.lines().collect();
-                for (i, window) in lines.chunks(WINDOW_LINES).enumerate() {
-                    let id = format!("win:{}:{i}", f.path);
-                    let text = window.join("\n");
-                    let start = i * WINDOW_LINES + 1;
-                    nw.add(&pseudo_chunk(
-                        &id,
-                        &f.path,
-                        &text,
-                        start,
-                        start + window.len() - 1,
-                    ))?;
-                    // A window of a copied file is a copy of the same window.
-                    units.insert(id, (f.path.clone(), estimate_tokens(&text), f.copies.clone()));
-                }
+                index_file(f, &mut ww, &mut nw, &mut units)?;
             }
             ww.commit()?;
             nw.commit()?;

@@ -162,6 +162,13 @@ fn upload(
     local: &LocalIndex,
     report: &mut PushReport,
 ) -> Result<(), DbError> {
+    upload_ledger(tx, repo, local)?;
+    upload_embeddings(tx, repo, local, report)?;
+    upload_search_indexes(tx, repo, local)
+}
+
+/// Sends the files, chunks, meta values and communities.
+fn upload_ledger(tx: &mut PgConnection, repo: i32, local: &LocalIndex) -> Result<(), DbError> {
     apply_ledger(tx, repo, LedgerOp::ClearIndex)?;
     for (path, entry) in &local.files {
         let entry = serde_json::to_value(entry).expect("file entries serialize");
@@ -171,6 +178,20 @@ fn upload(
         let value = serde_json::to_value(c).expect("chunks serialize");
         apply_ledger(tx, repo, LedgerOp::PutChunk(c.id.clone(), c.path.clone(), value))?;
     }
+    for (k, v) in &local.meta {
+        apply_ledger(tx, repo, LedgerOp::SetMeta(k.clone(), v.clone()))?;
+    }
+    let communities = LedgerOp::communities(&local.communities, &local.files).expect("communities serialize");
+    apply_ledger(tx, repo, communities)
+}
+
+/// Sends the embeddings the tier does not have yet.
+fn upload_embeddings(
+    tx: &mut PgConnection,
+    repo: i32,
+    local: &LocalIndex,
+    report: &mut PushReport,
+) -> Result<(), DbError> {
     let keys: Vec<(String, String)> = local
         .embeddings
         .iter()
@@ -187,12 +208,11 @@ fn upload(
             report.embeddings_uploaded += 1;
         }
     }
-    for (k, v) in &local.meta {
-        apply_ledger(tx, repo, LedgerOp::SetMeta(k.clone(), v.clone()))?;
-    }
-    let communities = LedgerOp::communities(&local.communities, &local.files).expect("communities serialize");
-    apply_ledger(tx, repo, communities)?;
+    Ok(())
+}
 
+/// Replaces the tier's lexical documents and vectors with the local ones.
+fn upload_search_indexes(tx: &mut PgConnection, repo: i32, local: &LocalIndex) -> Result<(), DbError> {
     apply_lexical(tx, repo, LexicalOp::Clear)?;
     for c in &local.chunks {
         apply_lexical(tx, repo, LexicalOp::Add(Box::new(c.clone())))?;

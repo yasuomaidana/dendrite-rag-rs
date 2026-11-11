@@ -61,6 +61,13 @@ impl Command {
                 max,
             } => grep(&root, &pattern, &paths, max, json),
             Command::History { root, query, top_k } => history(&root, &query, top_k, json),
+            other => other.run_admin(json),
+        }
+    }
+
+    /// The commands that report on or maintain an index: its graph, state, sync with the shared tier, settings.
+    fn run_admin(self, json: bool) -> Done {
+        match self {
             Command::Graph { op } => graph(op),
             Command::Sync { root } => sync(&root, json),
             #[cfg(feature = "postgres")]
@@ -70,6 +77,7 @@ impl Command {
             Command::Embedders => embedders(json),
             Command::Settings { root } => settings(&root, json),
             Command::Purge { root } => purge(&root),
+            _ => unreachable!("`run` handles the other commands"),
         }
     }
 }

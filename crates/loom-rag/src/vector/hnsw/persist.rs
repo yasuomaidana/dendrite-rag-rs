@@ -2,76 +2,10 @@
 //! flat index it indexes.
 
 use super::*;
+use crate::vector::codec::{self, HashedWriter, Reader, write_atomically};
 
 fn corrupt() -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt hnsw index")
-}
-
-/// Writes the graph file, hashing everything but the trailing checksum.
-struct HashedWriter<W: Write> {
-    out: W,
-    hasher: blake3::Hasher,
-}
-
-impl<W: Write> HashedWriter<W> {
-    fn put(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.out.write_all(buf)?;
-        self.hasher.update(buf);
-        Ok(())
-    }
-
-    fn put_u32(&mut self, v: u32) -> std::io::Result<()> {
-        self.put(&v.to_le_bytes())
-    }
-
-    /// Appends the checksum of everything written so far and flushes.
-    fn finish(mut self) -> std::io::Result<()> {
-        let checksum = self.hasher.finalize();
-        self.out.write_all(checksum.as_bytes())?;
-        self.out.flush()
-    }
-}
-
-/// Reads the graph file's fields in order; running out of bytes is a corrupt file.
-struct Reader<'a>(&'a [u8]);
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> std::io::Result<&'a [u8]> {
-        if self.0.len() < n {
-            return Err(corrupt());
-        }
-        let (head, rest) = self.0.split_at(n);
-        self.0 = rest;
-        Ok(head)
-    }
-
-    fn u8(&mut self) -> std::io::Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn u16(&mut self) -> std::io::Result<u16> {
-        Ok(u16::from_le_bytes(
-            self.take(2)?.try_into().map_err(|_| corrupt())?,
-        ))
-    }
-
-    fn u32(&mut self) -> std::io::Result<u32> {
-        Ok(u32::from_le_bytes(
-            self.take(4)?.try_into().map_err(|_| corrupt())?,
-        ))
-    }
-
-    fn i64(&mut self) -> std::io::Result<i64> {
-        Ok(i64::from_le_bytes(
-            self.take(8)?.try_into().map_err(|_| corrupt())?,
-        ))
-    }
-
-    fn f32(&mut self) -> std::io::Result<f32> {
-        Ok(f32::from_le_bytes(
-            self.take(4)?.try_into().map_err(|_| corrupt())?,
-        ))
-    }
+    codec::corrupt("hnsw index")
 }
 
 /// The part of the file after the magic and the version, once the checksum, the magic and the
@@ -93,8 +27,7 @@ fn verified_body(bytes: &[u8]) -> std::io::Result<&[u8]> {
 }
 
 fn write_node<W: Write>(w: &mut HashedWriter<W>, node: &HnswNode) -> std::io::Result<()> {
-    w.put(&(node.id.len() as u16).to_le_bytes())?;
-    w.put(node.id.as_bytes())?;
+    w.put_str(&node.id)?;
     w.put_u32(node.level as u32)?;
     w.put(&[u8::from(node.deleted)])?;
     if node.deleted {
@@ -124,8 +57,7 @@ fn write_tombstone<W: Write>(
 }
 
 fn read_node(r: &mut Reader) -> std::io::Result<HnswNode> {
-    let id_len = r.u16()? as usize;
-    let id = String::from_utf8(r.take(id_len)?.to_vec()).map_err(|_| corrupt())?;
+    let id = r.string(true)?;
     let level = r.u32()? as usize;
     let deleted = r.u8()? != 0;
     let tombstone_vector = if deleted { read_tombstone(r)? } else { None };
@@ -167,28 +99,10 @@ impl HnswIndex {
                 ));
             }
         }
-        let tmp = path.with_extension("tmp");
-        {
-            let mut file = std::fs::File::create(&tmp)?;
-            self.write_graph(&mut file)?;
-            file.sync_all()?;
-        }
-        std::fs::rename(&tmp, path)?;
-        let dir = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        if let Ok(dir_file) = std::fs::File::open(dir) {
-            let _ = dir_file.sync_all();
-        }
-        Ok(())
+        write_atomically(path, |w| self.write_graph(w))
     }
 
-    fn write_graph(&self, file: &mut std::fs::File) -> std::io::Result<()> {
-        let mut w = HashedWriter {
-            out: std::io::BufWriter::new(file),
-            hasher: blake3::Hasher::new(),
-        };
+    fn write_graph<W: Write>(&self, w: &mut HashedWriter<W>) -> std::io::Result<()> {
         w.put(HNSW_MAGIC)?;
         w.put_u32(1)?;
         w.put_u32(self.m as u32)?;
@@ -198,17 +112,17 @@ impl HnswIndex {
         w.put_u32(self.max_level as u32)?;
         w.put_u32(self.nodes.len() as u32)?;
         for node in &self.nodes {
-            write_node(&mut w, node)?;
+            write_node(w, node)?;
         }
-        w.finish()
+        Ok(())
     }
 
     pub(super) fn load_hnsw_file(&mut self, path: &Path) -> std::io::Result<()> {
         let bytes = std::fs::read(path)?;
-        let mut r = Reader(verified_body(&bytes)?);
+        let mut r = Reader::new(verified_body(&bytes)?, "hnsw index");
         let m = r.u32()? as usize;
         let ef_c = r.u32()? as usize;
-        let ep = r.i64()?;
+        let ep = i64::from_le_bytes(r.take(8)?.try_into().map_err(|_| corrupt())?);
         let max_level = r.u32()? as usize;
         let count = r.u32()? as usize;
 
@@ -224,7 +138,7 @@ impl HnswIndex {
             }
             nodes.push(node);
         }
-        if !r.0.is_empty() {
+        if !r.is_empty() {
             return Err(corrupt());
         }
 

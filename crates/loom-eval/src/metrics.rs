@@ -73,6 +73,37 @@ pub fn within(units: &[Unit], budget: usize) -> Vec<&Unit> {
     out
 }
 
+/// The first unit of each distinct path, in rank order.
+fn distinct_files(units: &[Unit]) -> Vec<&Unit> {
+    let mut files: Vec<&Unit> = Vec::new();
+    for u in units {
+        if !files.iter().any(|f| f.path == u.path) {
+            files.push(u);
+        }
+    }
+    files
+}
+
+/// NDCG over the top 10 files; each expected file earns its gain once, however many copies of it are listed.
+fn ndcg10(q: &Query, files: &[&Unit]) -> f64 {
+    let mut credited: Vec<&str> = Vec::new();
+    let mut dcg = 0.0;
+    for (i, u) in files.iter().take(10).enumerate() {
+        let fresh = q
+            .expect
+            .iter()
+            .find(|e| !credited.contains(&e.as_str()) && u.holds(|p| p == e.as_str()));
+        if let Some(e) = fresh {
+            credited.push(e);
+            dcg += 1.0 / (i as f64 + 2.0).log2();
+        }
+    }
+    let ideal: f64 = (0..q.expect.len().min(10))
+        .map(|i| 1.0 / (i as f64 + 2.0).log2())
+        .sum();
+    dcg / ideal.max(f64::MIN_POSITIVE)
+}
+
 impl Scores {
     /// Scores ranked `units`; `at_budget[i]` holds the units for `BUDGETS[i]` when the method
     /// packs per budget (context packs), otherwise `units` is cut to each budget.
@@ -80,44 +111,9 @@ impl Scores {
         self.n += 1;
         self.latency.push(elapsed);
         let wanted = |p: &str| q.expect.iter().any(|e| e == p);
-
-        let mut files: Vec<&Unit> = Vec::new();
-        for u in units {
-            if !files.iter().any(|f| f.path == u.path) {
-                files.push(u);
-            }
-        }
-        let query_rr = match files.iter().take(10).position(|u| u.holds(wanted)) {
-            Some(i) => {
-                self.hit1 += (i < 1) as usize;
-                self.hit5 += (i < 5) as usize;
-                self.hit10 += 1;
-                let r = 1.0 / (i as f64 + 1.0);
-                self.rr += r;
-                r
-            }
-            None => {
-                self.misses.push(q.q.clone());
-                0.0
-            }
-        };
-        // Each expected file earns its gain once, however many copies of it are listed.
-        let mut credited: Vec<&str> = Vec::new();
-        let mut dcg = 0.0;
-        for (i, u) in files.iter().take(10).enumerate() {
-            let fresh = q
-                .expect
-                .iter()
-                .find(|e| !credited.contains(&e.as_str()) && u.holds(|p| p == e.as_str()));
-            if let Some(e) = fresh {
-                credited.push(e);
-                dcg += 1.0 / (i as f64 + 2.0).log2();
-            }
-        }
-        let ideal: f64 = (0..q.expect.len().min(10))
-            .map(|i| 1.0 / (i as f64 + 2.0).log2())
-            .sum();
-        let query_ndcg = dcg / ideal.max(f64::MIN_POSITIVE);
+        let files = distinct_files(units);
+        let query_rr = self.reciprocal_rank(q, &files, wanted);
+        let query_ndcg = ndcg10(q, &files);
         self.ndcg += query_ndcg;
 
         let mut read = 0;
@@ -128,14 +124,45 @@ impl Scores {
                 break;
             }
         }
+        let query_recall = self.recall_at_budgets(q, units, at_budget, wanted);
+        self.per_query.push(QueryScore {
+            q: q.q.clone(),
+            rr: query_rr,
+            ndcg: query_ndcg,
+            recall: query_recall,
+        });
+    }
 
+    /// Counts the query's hits at 1, 5 and 10 and returns its reciprocal rank (0 when the top 10 miss).
+    fn reciprocal_rank(&mut self, q: &Query, files: &[&Unit], wanted: impl Fn(&str) -> bool) -> f64 {
+        let Some(i) = files.iter().take(10).position(|u| u.holds(&wanted)) else {
+            self.misses.push(q.q.clone());
+            return 0.0;
+        };
+        self.hit1 += (i < 1) as usize;
+        self.hit5 += (i < 5) as usize;
+        self.hit10 += 1;
+        let r = 1.0 / (i as f64 + 1.0);
+        self.rr += r;
+        r
+    }
+
+    /// Whether the expected files are within each budget; also counts the mixed (code and docs) queries
+    /// that reach both at `BOTH_BUDGET`.
+    fn recall_at_budgets(
+        &mut self,
+        q: &Query,
+        units: &[Unit],
+        at_budget: Option<&[Vec<Unit>]>,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Vec<bool> {
         let mut query_recall = Vec::with_capacity(BUDGETS.len());
         for (i, &b) in BUDGETS.iter().enumerate() {
             let seen: Vec<&Unit> = match at_budget {
                 Some(per) => per[i].iter().collect(),
                 None => within(units, b),
             };
-            let hit = seen.iter().any(|u| u.holds(wanted));
+            let hit = seen.iter().any(|u| u.holds(&wanted));
             self.recall[i] += hit as usize;
             query_recall.push(hit);
             if b == BOTH_BUDGET && q.is_mixed() {
@@ -145,12 +172,7 @@ impl Scores {
                 self.both += (doc && code) as usize;
             }
         }
-        self.per_query.push(QueryScore {
-            q: q.q.clone(),
-            rr: query_rr,
-            ndcg: query_ndcg,
-            recall: query_recall,
-        });
+        query_recall
     }
 
     pub fn mrr(&self) -> f64 {

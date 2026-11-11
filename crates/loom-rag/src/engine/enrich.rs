@@ -2,6 +2,7 @@
 //! concepts for prose files.
 
 use super::*;
+use crate::store::LedgerWrite;
 
 /// Characters of a document sent for concept extraction.
 const CONCEPT_TEXT_CHARS: usize = 12_000;
@@ -46,19 +47,31 @@ impl Engine {
             summaries.push(chunk);
         }
         self.store_summaries(&old_summaries, &summaries)?;
+        self.store_communities(&old_summaries, &summaries, &communities, new_cache)?;
+        Ok(communities.len())
+    }
+
+    /// Writes the communities, their summary chunks and the new gateway answers in one ledger batch.
+    fn store_communities(
+        &self,
+        old_summaries: &[String],
+        summaries: &[Chunk],
+        communities: &[crate::graph::communities::Community],
+        new_cache: Vec<(String, String, String)>,
+    ) -> Result<()> {
         let mut batch = self.ledger.batch()?;
         for (model, prompt_hash, desc) in new_cache {
             batch.put_llm_cache(&model, &prompt_hash, &desc)?;
         }
-        for id in &old_summaries {
+        for id in old_summaries {
             batch.remove_chunk(id)?;
         }
-        for c in &summaries {
+        for c in summaries {
             batch.put_chunk(c)?;
         }
-        batch.put_communities(&communities, &self.ledger.files()?)?;
+        batch.put_communities(communities, &self.ledger.files()?)?;
         batch.commit()?;
-        Ok(communities.len())
+        Ok(())
     }
 
     /// The gateway's one-paragraph description of a community, from the cache or a new request
@@ -131,52 +144,54 @@ impl Engine {
         let Some(llm) = &self.llm else {
             return Ok(());
         };
-        let model = llm.model();
-
         let mut batch = self.ledger.batch()?;
         for (f, _) in scanned {
-            if !is_prose(f) {
+            if !is_prose(f) || (!added.contains(&f.path) && self.ledger.concepts(&f.path)?.is_some()) {
                 continue;
             }
-            let is_new_or_modified = added.contains(&f.path);
-            let has_concepts = self.ledger.concepts(&f.path)?.is_some();
-            if !is_new_or_modified && has_concepts {
-                continue;
-            }
-            let Some(text) = read_text(&f.abs) else {
+            let Some(text) = read_text(&f.abs).filter(|t| !t.trim().is_empty()) else {
                 continue;
             };
-            if text.trim().is_empty() {
-                continue;
-            }
-
             let text: String = text.chars().take(CONCEPT_TEXT_CHARS).collect();
-            let prompt = crate::llm::build_concepts_prompt(&text);
-            let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
-
-            let raw_res = match self.ledger.llm_cache(model, &prompt_hash)? {
-                Some(cached) => Ok(cached),
-                None if report.llm_error.is_some() => Err(()),
-                None => match llm.complete_json(&prompt) {
-                    Ok(resp) => {
-                        batch.put_llm_cache(model, &prompt_hash, &resp)?;
-                        Ok(resp)
-                    }
-                    Err(e) => {
-                        report.llm_error = Some(e.to_string());
-                        Err(())
-                    }
-                },
-            };
-
-            if let Ok(resp) = raw_res
-                && let Some(concepts) = crate::llm::parse_concepts(&resp)
-            {
-                let json = serde_json::to_string(&concepts).map_err(crate::ledger::LedgerError::from)?;
+            if let Some(json) = self.extract_concepts(llm, &mut *batch, &text, report)? {
                 batch.put_concepts(&f.path, &json)?;
             }
         }
         batch.commit()?;
         Ok(())
+    }
+
+    /// The concepts of `text` as JSON, from the cache or a new request (cached in `batch`). After one
+    /// failure the gateway is not asked again in this run.
+    fn extract_concepts(
+        &self,
+        llm: &crate::llm::Client,
+        batch: &mut dyn LedgerWrite,
+        text: &str,
+        report: &mut IndexReport,
+    ) -> Result<Option<String>> {
+        let model = llm.model();
+        let prompt = crate::llm::build_concepts_prompt(text);
+        let prompt_hash = blake3::hash(prompt.as_bytes()).to_hex().to_string();
+        let resp = match self.ledger.llm_cache(model, &prompt_hash)? {
+            Some(cached) => cached,
+            None if report.llm_error.is_some() => return Ok(None),
+            None => match llm.complete_json(&prompt) {
+                Ok(resp) => {
+                    batch.put_llm_cache(model, &prompt_hash, &resp)?;
+                    resp
+                }
+                Err(e) => {
+                    report.llm_error = Some(e.to_string());
+                    return Ok(None);
+                }
+            },
+        };
+        let Some(concepts) = crate::llm::parse_concepts(&resp) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            serde_json::to_string(&concepts).map_err(crate::ledger::LedgerError::from)?,
+        ))
     }
 }

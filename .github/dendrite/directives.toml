@@ -19,8 +19,8 @@ min_lines = 5
 include_tests = true
 
 [complexity]
-max_cyclomatic = 25
-max_cognitive = 25
+max_cyclomatic = 15
+max_cognitive = 20
 exclude = []
 
 [structure]

@@ -256,109 +256,130 @@ impl Engine {
             && g.file_id(to).is_none()
             && !src_syms.is_empty()
             && !dst_syms.is_empty();
-        if both_symbols {
-            for directed in [true, false] {
-                let next = |s: u32| -> Vec<(u32, EdgeKind, bool)> {
-                    let mut out: Vec<(u32, EdgeKind, bool)> = g
-                        .uses(s)
-                        .filter(|(_, k)| kinds.contains(k))
-                        .map(|(t, k)| (t, k, false))
-                        .collect();
-                    if !directed {
-                        out.extend(
-                            g.users(s)
-                                .filter(|(_, k)| kinds.contains(k))
-                                .map(|(t, k)| (t, k, true)),
-                        );
+        Ok(if both_symbols {
+            symbol_path(&g, (&src_syms, &dst_syms), &kinds, max_hops)
+        } else {
+            // At file level: a symbol stands for the files defining it.
+            let files_of = |name: &str, syms: &[u32]| -> Vec<u32> {
+                match g.file_id(name) {
+                    Some(f) => vec![f],
+                    None => {
+                        let mut fs: Vec<u32> = syms.iter().map(|&s| g.symbol_file(s)).collect();
+                        fs.sort_unstable();
+                        fs.dedup();
+                        fs
                     }
-                    out.sort_unstable_by_key(|&(t, k, r)| (r, t, k));
-                    out
-                };
-                if let Some(path) = bfs(&src_syms, &dst_syms, max_hops, next) {
-                    let steps = path
-                        .into_iter()
-                        .map(|(s, via)| {
-                            let site = &g.sites(s)[0];
-                            PathStep {
-                                node: g.symbol_name(s).to_string(),
-                                location: Some(format!("{}:{}", site.path, site.line)),
-                                via: via.map(|(k, _)| k),
-                                reversed: via.is_some_and(|(_, r)| r),
-                            }
-                        })
-                        .collect();
-                    return Ok(GraphPath {
-                        found: true,
-                        directed,
-                        level: "symbol",
-                        steps,
-                    });
                 }
-            }
-            return Ok(GraphPath {
-                found: false,
-                directed: false,
-                level: "symbol",
-                steps: Vec::new(),
-            });
-        }
-        // At file level: a symbol stands for the files defining it.
-        let files_of = |name: &str, syms: &[u32]| -> Vec<u32> {
-            match g.file_id(name) {
-                Some(f) => vec![f],
-                None => {
-                    let mut fs: Vec<u32> = syms.iter().map(|&s| g.symbol_file(s)).collect();
-                    fs.sort_unstable();
-                    fs.dedup();
-                    fs
-                }
-            }
-        };
-        let (src, dst) = (files_of(from, &src_syms), files_of(to, &dst_syms));
-        let incoming = incoming_edges(&g);
-        for directed in [true, false] {
-            let next = |f: u32| -> Vec<(u32, EdgeKind, bool)> {
-                let mut out: Vec<(u32, EdgeKind, bool)> = g
-                    .file_edges(f)
-                    .filter(|(_, k, _)| kinds.contains(k))
-                    .map(|(t, k, _)| (t, k, false))
-                    .collect();
-                if !directed {
-                    out.extend(
-                        incoming[f as usize]
-                            .iter()
-                            .filter(|(_, k)| kinds.contains(k))
-                            .map(|&(t, k)| (t, k, true)),
-                    );
-                }
-                out.sort_unstable_by_key(|&(t, k, r)| (r, t, k));
-                out
             };
-            if let Some(path) = bfs(&src, &dst, max_hops, next) {
-                let steps = path
-                    .into_iter()
-                    .map(|(f, via)| PathStep {
-                        node: g.file_name(f).to_string(),
-                        location: None,
-                        via: via.map(|(k, _)| k),
-                        reversed: via.is_some_and(|(_, r)| r),
-                    })
-                    .collect();
-                return Ok(GraphPath {
-                    found: true,
-                    directed,
-                    level: "file",
-                    steps,
-                });
-            }
-        }
-        Ok(GraphPath {
-            found: false,
-            directed: false,
-            level: "file",
-            steps: Vec::new(),
+            let ends = (files_of(from, &src_syms), files_of(to, &dst_syms));
+            file_path(&g, (&ends.0, &ends.1), &kinds, max_hops)
         })
     }
+}
+
+impl GraphPath {
+    fn found(directed: bool, level: &'static str, steps: Vec<PathStep>) -> Self {
+        GraphPath {
+            found: true,
+            directed,
+            level,
+            steps,
+        }
+    }
+
+    fn not_found(level: &'static str) -> Self {
+        GraphPath {
+            found: false,
+            directed: false,
+            level,
+            steps: Vec::new(),
+        }
+    }
+}
+
+/// The shortest symbol path between the ends, forward edges first and then in either direction.
+fn symbol_path(
+    g: &CodeGraph,
+    (src, dst): (&[u32], &[u32]),
+    kinds: &HashSet<EdgeKind>,
+    max_hops: usize,
+) -> GraphPath {
+    for directed in [true, false] {
+        let next = |s: u32| -> Vec<(u32, EdgeKind, bool)> {
+            let mut out: Vec<(u32, EdgeKind, bool)> = g
+                .uses(s)
+                .filter(|(_, k)| kinds.contains(k))
+                .map(|(t, k)| (t, k, false))
+                .collect();
+            if !directed {
+                out.extend(
+                    g.users(s)
+                        .filter(|(_, k)| kinds.contains(k))
+                        .map(|(t, k)| (t, k, true)),
+                );
+            }
+            out.sort_unstable_by_key(|&(t, k, r)| (r, t, k));
+            out
+        };
+        if let Some(path) = bfs(src, dst, max_hops, next) {
+            let steps = path
+                .into_iter()
+                .map(|(s, via)| {
+                    let site = &g.sites(s)[0];
+                    PathStep {
+                        node: g.symbol_name(s).to_string(),
+                        location: Some(format!("{}:{}", site.path, site.line)),
+                        via: via.map(|(k, _)| k),
+                        reversed: via.is_some_and(|(_, r)| r),
+                    }
+                })
+                .collect();
+            return GraphPath::found(directed, "symbol", steps);
+        }
+    }
+    GraphPath::not_found("symbol")
+}
+
+/// The shortest file path between the ends, forward edges first and then in either direction.
+fn file_path(
+    g: &CodeGraph,
+    (src, dst): (&[u32], &[u32]),
+    kinds: &HashSet<EdgeKind>,
+    max_hops: usize,
+) -> GraphPath {
+    let incoming = incoming_edges(g);
+    for directed in [true, false] {
+        let next = |f: u32| -> Vec<(u32, EdgeKind, bool)> {
+            let mut out: Vec<(u32, EdgeKind, bool)> = g
+                .file_edges(f)
+                .filter(|(_, k, _)| kinds.contains(k))
+                .map(|(t, k, _)| (t, k, false))
+                .collect();
+            if !directed {
+                out.extend(
+                    incoming[f as usize]
+                        .iter()
+                        .filter(|(_, k)| kinds.contains(k))
+                        .map(|&(t, k)| (t, k, true)),
+                );
+            }
+            out.sort_unstable_by_key(|&(t, k, r)| (r, t, k));
+            out
+        };
+        if let Some(path) = bfs(src, dst, max_hops, next) {
+            let steps = path
+                .into_iter()
+                .map(|(f, via)| PathStep {
+                    node: g.file_name(f).to_string(),
+                    location: None,
+                    via: via.map(|(k, _)| k),
+                    reversed: via.is_some_and(|(_, r)| r),
+                })
+                .collect();
+            return GraphPath::found(directed, "file", steps);
+        }
+    }
+    GraphPath::not_found("file")
 }
 
 #[cfg(test)]

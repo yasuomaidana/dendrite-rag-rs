@@ -72,32 +72,44 @@ pub struct Ledger {
     db: Database,
 }
 
+/// Creates every table that does not exist yet.
+fn create_tables(txn: &redb::WriteTransaction) -> Result<()> {
+    txn.open_table(FILES)?;
+    txn.open_table(CHUNKS)?;
+    txn.open_table(EMBEDDINGS)?;
+    txn.open_table(COMMUNITY_FILES)?;
+    txn.open_table(COMMUNITY_CHUNKS)?;
+    txn.open_table(COMMUNITIES)?;
+    txn.open_table(LLM_CACHE)?;
+    txn.open_table(CONCEPTS)?;
+    Ok(())
+}
+
+/// Stamps the schema version. A ledger written under another version loses its files, chunks and
+/// concepts (and the Merkle root), so the next index run rebuilds them.
+fn migrate_schema(txn: &redb::WriteTransaction) -> Result<()> {
+    let mut meta = txn.open_table(META)?;
+    let stored = meta.get("schema")?.map(|v| v.value().to_string());
+    if stored.is_some_and(|v| v != SCHEMA_VERSION) {
+        meta.remove("merkle_root")?;
+        drop(meta);
+        txn.open_table(FILES)?.retain(|_, _| false)?;
+        txn.open_table(CHUNKS)?.retain(|_, _| false)?;
+        txn.open_table(CONCEPTS)?.retain(|_, _| false)?;
+        meta = txn.open_table(META)?;
+    }
+    meta.insert("schema", SCHEMA_VERSION)?;
+    Ok(())
+}
+
 impl Ledger {
     pub fn open(path: &Path) -> Result<Self> {
         // redb's default page cache is sized for databases, not a sidecar: bound it so
         // full scans (symbol index, embedding phase) do not inflate resident memory.
         let db = Database::builder().set_cache_size(CACHE_BYTES).create(path)?;
         let txn = db.begin_write()?;
-        txn.open_table(FILES)?;
-        txn.open_table(CHUNKS)?;
-        txn.open_table(EMBEDDINGS)?;
-        txn.open_table(COMMUNITY_FILES)?;
-        txn.open_table(COMMUNITY_CHUNKS)?;
-        txn.open_table(COMMUNITIES)?;
-        txn.open_table(LLM_CACHE)?;
-        txn.open_table(CONCEPTS)?;
-        let mut meta = txn.open_table(META)?;
-        let stored = meta.get("schema")?.map(|v| v.value().to_string());
-        if stored.is_some_and(|v| v != SCHEMA_VERSION) {
-            meta.remove("merkle_root")?;
-            drop(meta);
-            txn.open_table(FILES)?.retain(|_, _| false)?;
-            txn.open_table(CHUNKS)?.retain(|_, _| false)?;
-            txn.open_table(CONCEPTS)?.retain(|_, _| false)?;
-            meta = txn.open_table(META)?;
-        }
-        meta.insert("schema", SCHEMA_VERSION)?;
-        drop(meta);
+        create_tables(&txn)?;
+        migrate_schema(&txn)?;
         txn.commit()?;
         Ok(Self { db })
     }
