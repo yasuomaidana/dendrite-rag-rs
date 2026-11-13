@@ -1,0 +1,54 @@
+# managed by dendrite — edit with `dendrite directive "<rule>"`
+# What CI, the quality gate and the agents enforce. See docs/specs/quality.md in dendrite-rag-rs.
+schema = 1
+
+[loc]
+max_production_lines = 500
+warn_at = 450
+exclude = ["**/generated/**"]
+
+[coverage]
+min_percent = 85.0
+scope = "line"
+exclude = []
+
+[duplication]
+max_percent = 0.0
+min_tokens = 50
+min_lines = 5
+include_tests = true
+
+[complexity]
+max_cyclomatic = 15
+max_cognitive = 20
+exclude = []
+
+[structure]
+max_files_per_dir = 12
+max_dir_production_lines = 3000
+max_prefix_group = 4
+require_docs = true
+docs_files = ["README.md", "CHANGELOG.md"]
+exclude = []
+
+[immune]
+approve_max = 20
+hold_max = 50
+
+[lint]
+strictness = "strict"
+
+[security]
+fail_on = "high"
+secrets = true
+
+[done]
+auto_done = true
+human_review_labels = ["needs-human-review"]
+
+[languages]
+preference = ["rust", "python", "typescript", "go", "kotlin", "c", "cpp"]
+
+[git]
+integration_branch = ""
+feature_prefix = "feature/"

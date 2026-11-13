@@ -1,0 +1,40 @@
+# Quality gates from .github/dendrite/directives.toml (lines <= 500, complexity 10/15, files per directory, no clones, rstest).
+# Limits come from the directives; large projects carry a baseline that is tightened over time, small ones are strict.
+name: quality gates
+permissions:
+  contents: read
+on:
+  pull_request:
+jobs:
+  loom-gate:
+    name: Quality gates (loc, clones, complexity, structure, rstest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache loom-gate
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/loom-gate
+          key: loom-gate-${{ runner.os }}-b3dd79d0190b29fe9815b21b30ca22c402c6f2be
+      - name: Install loom-gate
+        run: command -v loom-gate >/dev/null || cargo install --locked --git https://github.com/yasuomaidana/dendrite-rag-rs --rev b3dd79d0190b29fe9815b21b30ca22c402c6f2be loom-gate
+      - run: loom-gate loc --format github
+      - run: loom-gate clones --format github
+      - run: loom-gate complexity --format github
+      - run: loom-gate structure --format github
+      - run: loom-gate rstest --format github
+  coverage:
+    name: Coverage floor (from directives)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage floor from [coverage] min_percent
+        run: |
+          MIN=$(awk '/^\[coverage\]/{t=1;next} /^\[/{t=0} t && $1=="min_percent"{print int($3)}' .github/dendrite/directives.toml)
+          cargo llvm-cov --workspace --fail-under-lines "$MIN"

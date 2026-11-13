@@ -1,0 +1,1 @@
+fn t(c: &mut PgConnection) { diesel::sql_query("SELECT 1").execute(c).unwrap(); }

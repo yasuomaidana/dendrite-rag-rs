@@ -1,6 +1,15 @@
-[package]
-name = "dendrite-rag-rs"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "3"
+members = ["crates/loom-rag", "crates/dendrite-rag", "crates/loom-eval", "crates/loom-gate"]
+default-members = ["crates/loom-rag", "crates/dendrite-rag", "crates/loom-gate"]
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yasuomaidana/dendrite-rag-rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/quality.structure.json",
+  "title": "quality.structure",
+  "description": "Module structure: files per directory, production lines per directory and modules sharing a leading word. No index needed. A root that is not a directory is an invalid_params error.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "config": {
+        "type": "string",
+        "description": "Directives file; default <root>/.github/dendrite/directives.toml"
+      },
+      "max_files_per_dir": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 12
+      },
+      "max_dir_production_lines": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 3000
+      },
+      "max_prefix_group": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 4
+      },
+      "require_docs": {
+        "type": "boolean",
+        "description": "Also check that the project's documentation files exist"
+      },
+      "docs_files": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Documentation files the docs rule expects"
+      },
+      "exclude": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Globs relative to root"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "schema",
+      "max_files_per_dir",
+      "max_dir_production_lines",
+      "max_prefix_group",
+      "totals",
+      "findings"
+    ],
+    "properties": {
+      "schema": {
+        "type": "integer",
+        "const": 1
+      },
+      "max_files_per_dir": {
+        "type": "integer"
+      },
+      "max_dir_production_lines": {
+        "type": "integer"
+      },
+      "max_prefix_group": {
+        "type": "integer"
+      },
+      "totals": {
+        "type": "object",
+        "required": [
+          "dirs",
+          "files",
+          "failures"
+        ],
+        "properties": {
+          "dirs": {
+            "type": "integer"
+          },
+          "files": {
+            "type": "integer"
+          },
+          "failures": {
+            "type": "integer"
+          }
+        }
+      },
+      "findings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "rule",
+            "value",
+            "limit",
+            "files",
+            "message"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory relative to root; . for the root"
+            },
+            "rule": {
+              "type": "string",
+              "description": "files, lines, prefix or docs"
+            },
+            "value": {
+              "type": "integer"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

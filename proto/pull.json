@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/pull.json",
+  "title": "pull",
+  "description": "Fetches every embedding the current chunks need that is missing locally (from the shared tier in edge mode) and fills the vector index, for offline use.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "chunks",
+      "cached",
+      "vectors"
+    ],
+    "properties": {
+      "chunks": {
+        "type": "integer"
+      },
+      "cached": {
+        "type": "integer",
+        "description": "Chunks whose embedding is in the local cache"
+      },
+      "vectors": {
+        "type": "integer"
+      }
+    }
+  }
+}

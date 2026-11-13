@@ -1,0 +1,1 @@
+fn open() { let _c = rusqlite::Connection::open_in_memory(); }

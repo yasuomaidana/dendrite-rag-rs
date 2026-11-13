@@ -1,0 +1,12 @@
+# managed by dendrite — edit with `dendrite directive "<rule>"`
+coverage:
+  status:
+    project:
+      default:
+        target: 85%
+        threshold: 0%
+    patch:
+      default:
+        target: 85%
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"

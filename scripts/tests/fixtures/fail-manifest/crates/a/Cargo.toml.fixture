@@ -1,0 +1,5 @@
+[package]
+name = "a"
+[dependencies]
+diesel = "2.3"
+sqlx = { version = "0.8", features = ["postgres"] }

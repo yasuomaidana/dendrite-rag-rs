@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/grep.json",
+  "title": "grep",
+  "description": "Regex search over the project's indexable files (ignore rules apply; no index needed).",
+  "params": {
+    "type": "object",
+    "required": [
+      "root",
+      "pattern"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "Rust regex syntax"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "max_results": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 200
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "matches"
+    ],
+    "properties": {
+      "matches": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "line",
+            "text"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/quality.clones.json",
+  "title": "quality.clones",
+  "description": "Blocks repeated across the project's code files, the same up to names and constants. No index needed.",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string"
+      },
+      "config": {
+        "type": "string"
+      },
+      "max_percent": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 0
+      },
+      "min_lines": {
+        "type": "integer",
+        "minimum": 2,
+        "default": 5
+      },
+      "min_tokens": {
+        "type": "integer",
+        "minimum": 10,
+        "default": 50
+      },
+      "include_tests": {
+        "type": "boolean",
+        "default": true
+      },
+      "exclude": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "schema",
+      "max_percent",
+      "totals",
+      "groups"
+    ],
+    "properties": {
+      "schema": {
+        "type": "integer",
+        "const": 1
+      },
+      "max_percent": {
+        "type": "number"
+      },
+      "min_lines": {
+        "type": "integer"
+      },
+      "min_tokens": {
+        "type": "integer"
+      },
+      "include_tests": {
+        "type": "boolean"
+      },
+      "totals": {
+        "type": "object",
+        "required": [
+          "files",
+          "lines",
+          "duplicated_lines",
+          "percent",
+          "groups"
+        ],
+        "properties": {
+          "files": {
+            "type": "integer"
+          },
+          "lines": {
+            "type": "integer"
+          },
+          "duplicated_lines": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "integer"
+          },
+          "percent": {
+            "type": "number"
+          }
+        }
+      },
+      "groups": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "tokens",
+            "locations"
+          ],
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "tokens": {
+              "type": "integer"
+            },
+            "locations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "start_line",
+                  "end_line"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "start_line": {
+                    "type": "integer"
+                  },
+                  "end_line": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

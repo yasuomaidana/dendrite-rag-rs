@@ -1,0 +1,17 @@
+{
+  "_managed_by": "dendrite directives (.github/dendrite/directives.toml)",
+  "gitignore": true,
+  "ignore": [
+    "**/target/**",
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/dist/**",
+    "**/.git/**"
+  ],
+  "minLines": 5,
+  "minTokens": 50,
+  "reporters": [
+    "console"
+  ],
+  "threshold": 0
+}

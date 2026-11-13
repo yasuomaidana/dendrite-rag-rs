@@ -1,0 +1,35 @@
+{
+  "note": "Questions each repository cannot answer: the feature, protocol or library they name occurs nowhere in its code or docs (checked by grep, 2026-10-24). Drafted with GPT-OSS-120B, curated by hand. Used to calibrate abstention (DRAG-51): a good engine abstains on these and answers the golden sets.",
+  "sets": {
+    "dendrite": [
+      "How can I configure Dendrite to route messages through RabbitMQ?",
+      "How does Dendrite handle PostgreSQL logical replication for state sync?",
+      "Is there native Azure Active Directory integration in Dendrite for user authentication?",
+      "How can I connect Dendrite to a TensorFlow Serving model for inference?",
+      "Is it possible to deploy Dendrite as an AWS Lambda function?",
+      "How does Dendrite perform A/B testing using Optimizely?",
+      "Is there an iOS SDK for embedding Dendrite functionality into mobile apps?",
+      "Can Dendrite ingest events from a Kafka Streams pipeline?"
+    ],
+    "embedag": [
+      "How can embedag cache embedding results in Redis?",
+      "Are there Python bindings available for using embedag in a Jupyter notebook?",
+      "Can embedag store its metadata in a MySQL database instead of the default storage?",
+      "Can embedag synchronize its index with an external Elasticsearch cluster?",
+      "How can embedag perform audio transcription using OpenAI Whisper?",
+      "Does embedag provide a Kubernetes Operator for automated scaling?",
+      "Can embedag integrate with Azure Cognitive Search for hybrid search scenarios?",
+      "How do I implement token-bucket rate limiting directly inside embedag?"
+    ],
+    "dendrite-rag": [
+      "How can I replace the default Tantivy backend with Elasticsearch in dendrite-rag-rs?",
+      "Does dendrite-rag-rs provide a GraphQL endpoint for querying the retrieval engine?",
+      "Is there support for real-time index updates via a Kafka topic in dendrite-rag-rs?",
+      "Is there an Azure Functions deployment target for the dendrite-rag-rs binary?",
+      "Does dendrite-rag-rs include native OAuth2 authentication for its RPC layer?",
+      "Can I run dendrite-rag-rs as a serverless Cloudflare Worker?",
+      "Where is the Stripe webhook secret configured for billing?",
+      "Which React component renders the search results page?"
+    ]
+  }
+}
