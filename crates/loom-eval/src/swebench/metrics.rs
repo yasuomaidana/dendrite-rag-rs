@@ -336,4 +336,39 @@ mod tests {
         let late = InstanceScore::compute(&inst, &ranked(&["a.py", "x.py", "b.py"]), None);
         assert!(late.ndcg10 < 1.0 && late.ndcg10 > 0.0);
     }
+    fn scored(repo: &str, expected: &[&str], paths: &[&str], tokens: Option<usize>) -> InstanceScore {
+        let mut inst = instance(expected);
+        inst.repo = repo.to_string();
+        InstanceScore::compute(&inst, &ranked(paths), tokens)
+    }
+
+    #[test]
+    fn aggregating_nothing_gives_the_default() {
+        let m = AggregatedMetrics::aggregate(&[]);
+        assert_eq!(m.n, 0);
+        assert!(m.all_gold5.is_none() && m.median_tokens_to_gold.is_none());
+        let (micro, repo_macro, by_repo, by_leakage) = summarize_report(&[]);
+        assert_eq!((micro.n, repo_macro.n), (0, 0));
+        assert!(by_repo.is_empty() && by_leakage.is_empty());
+    }
+
+    #[test]
+    fn micro_and_repo_macro_averages_differ_when_repos_differ_in_size() {
+        let scores = vec![
+            scored("a/x", &["a.py"], &["a.py"], Some(10)),
+            scored("a/x", &["a.py"], &["a.py"], Some(30)),
+            scored("a/x", &["a.py"], &["a.py"], Some(20)),
+            scored("b/y", &["a.py", "b.py"], &["z.py"], None),
+        ];
+        let (micro, repo_macro, by_repo, by_leakage) = summarize_report(&scores);
+        assert_eq!(micro.n, 4);
+        assert!((micro.recall1 - 0.75).abs() < 1e-9);
+        assert!((repo_macro.recall1 - 0.5).abs() < 1e-9);
+        assert_eq!(repo_macro.all_gold5, Some(0.0));
+        assert_eq!(micro.median_tokens_to_gold, Some(20));
+        assert_eq!(by_repo.len(), 2);
+        assert_eq!(by_repo["a/x"].n, 3);
+        assert_eq!(by_repo["b/y"].all_gold10, Some(0.0));
+        assert_eq!(by_leakage[&LeakageClass::Opaque].n, 4);
+    }
 }

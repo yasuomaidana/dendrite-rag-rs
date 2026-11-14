@@ -1397,7 +1397,7 @@ dependencies = [
 [[package]]
 name = "dendrite-core-rs"
 version = "0.1.0"
-source = "git+https://github.com/yasuomaidana/dendrite-core-rs#274bebbd9b91637bdaf70907e6264b56ad2226a6"
+source = "git+https://github.com/yasuomaidana/dendrite-core-rs?tag=v0.1.0#bfdf94c013b45aba7797a3df479dc6e5b7155f86"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -5816,7 +5816,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
