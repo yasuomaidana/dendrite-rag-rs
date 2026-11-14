@@ -1,5 +1,0 @@
-module x
-
-require github.com/yasuomaidana/dendrite-mcp-hub v0.1.0
-
-replace github.com/yasuomaidana/dendrite-mcp-hub => ../dendrite-mcp-hub

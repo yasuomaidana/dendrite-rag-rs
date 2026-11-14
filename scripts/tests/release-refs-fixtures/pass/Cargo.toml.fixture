@@ -1,5 +1,0 @@
-[dependencies]
-dendrite-core-rs = { git = "https://github.com/yasuomaidana/dendrite-core-rs", tag = "v0.1.0" }
-other = { git = "https://example.com/o", branch = "main" }
-embedag = "0.1.1"
-local = { path = "crates/local", version = "0.1.0" }

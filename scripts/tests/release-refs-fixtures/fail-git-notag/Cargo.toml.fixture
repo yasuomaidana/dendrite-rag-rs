@@ -1,2 +1,0 @@
-[dependencies]
-dendrite-core-rs = { git = "https://github.com/yasuomaidana/dendrite-core-rs", version = "0.1.0" }

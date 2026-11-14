@@ -1,0 +1,21 @@
+# A final version names its siblings by release tag, or by their main branch (see "Release references" in the
+# README). Runs on every pull request, whatever its target branch, and on pushes to main.
+name: release refs
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  release-refs:
+    name: release refs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard self-test
+        run: sh scripts/tests/check-release-refs.test.sh
+      - name: Release references check
+        run: sh scripts/check-release-refs.sh

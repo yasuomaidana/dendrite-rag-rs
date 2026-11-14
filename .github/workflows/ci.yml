@@ -12,15 +12,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: sh scripts/tests/check-db-access.test.sh
       - run: sh scripts/check-db-access.sh
-  release-refs:
-    # A final version references sibling repositories by tag, version or main, never by a moving
-    # branch (scripts/check-release-refs.sh); runs on every pull request and push.
-    name: release refs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: sh scripts/tests/check-release-refs.test.sh
-      - run: sh scripts/check-release-refs.sh
   rust:
     runs-on: ubuntu-latest
     steps:

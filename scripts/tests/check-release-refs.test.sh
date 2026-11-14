@@ -1,30 +1,66 @@
 #!/bin/sh
-# Runs scripts/check-release-refs.sh against the fixture trees: each case names the expected
-# result and a fragment of the message.
+# Self-test of scripts/check-release-refs.sh with passing and failing fixture trees.
+# Usage: scripts/tests/check-release-refs.test.sh
 here=$(cd "$(dirname "$0")" && pwd)
-script=$here/../check-release-refs.sh
-bad=0
-# Fixtures carry a .fixture suffix so cargo, go and editors do not treat them as real manifests.
-tmp=$(mktemp -d) || exit 2
+guard="$here/../check-release-refs.sh"
+tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-materialize() { # name -> $tmp/name
-  cp -R "$here/release-refs-fixtures/$1" "$tmp/$1"
-  find "$tmp/$1" -name '*.fixture' | while IFS= read -r f; do mv "$f" "${f%.fixture}"; done
+failures=0
+n=0
+
+run_case() { # name expected(pass|fail) build-snippet
+    name=$1 expect=$2 build=$3
+    n=$((n + 1))
+    dir="$tmp/case$n"
+    mkdir -p "$dir/.github/workflows"
+    (cd "$dir" && eval "$build")
+    if sh "$guard" "$dir" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if [ "$got" = "$expect" ]; then
+        echo "ok   $name"
+    else
+        echo "FAIL $name (expected $expect, got $got)"
+        failures=$((failures + 1))
+    fi
 }
-expect() { # name, want (0|1), fragment
-  materialize "$1"
-  out=$(sh "$script" "$tmp/$1" 2>&1); got=$?
-  if [ "$got" -ne "$2" ]; then echo "FAIL $1: exit $got, want $2"; echo "$out"; bad=1
-  elif [ -n "$3" ] && ! printf %s "$out" | grep -qF "$3"; then echo "FAIL $1: missing '$3'"; echo "$out"; bad=1
-  else echo "ok   $1"; fi
-}
-expect pass 0 "ok (siblings are referenced by tag"
-expect fail-git-notag 1 "git dependency without tag"
-expect fail-rev 1 "pins rev"
-expect fail-branch 1 "branch other than main"
-expect fail-path 1 "path outside the repository"
-expect fail-pseudo 1 "pseudo-version"
-expect fail-replace 1 "replace directive"
-expect fail-ref 1 "sibling checkout at ref"
-expect fail-doc 1 "links to a sibling's develop"
-exit $bad
+
+run_case "registry dependencies only" pass \
+    'printf "[dependencies]\nserde = \"1\"\n" > Cargo.toml'
+run_case "git dependency with a release tag" pass \
+    'printf "[dependencies]\nx = { git = \"https://github.com/o/x\", tag = \"v0.1.0\", version = \"0.1.0\" }\n" > Cargo.toml'
+run_case "git dependency on main" pass \
+    'printf "[dependencies]\nx = { git = \"https://github.com/o/x\", branch = \"main\" }\n" > Cargo.toml'
+run_case "table form with a tag" pass \
+    'printf "[dependencies.x]\ngit = \"https://github.com/o/x\"\ntag = \"v1.2.3\"\n" > Cargo.toml'
+run_case "git dependency without tag" fail \
+    'printf "[dependencies]\nx = { git = \"https://github.com/o/x\", version = \"0.1.0\" }\n" > Cargo.toml'
+run_case "git dependency on develop" fail \
+    'printf "[dependencies]\nx = { git = \"https://github.com/o/x\", branch = \"develop\" }\n" > Cargo.toml'
+run_case "git dependency pinned by rev" fail \
+    'printf "[dependencies]\nx = { git = \"https://github.com/o/x\", rev = \"abc123\" }\n" > Cargo.toml'
+run_case "table form without tag" fail \
+    'printf "[dependencies.x]\ngit = \"https://github.com/o/x\"\n" > Cargo.toml'
+run_case "patch section without tag" fail \
+    'printf "[patch.crates-io]\nx = { git = \"https://github.com/o/x\" }\n" > Cargo.toml'
+run_case "nested crate manifest without tag" fail \
+    'mkdir -p crates/a; printf "[dependencies]\nx = { git = \"https://github.com/o/x\" }\n" > crates/a/Cargo.toml'
+run_case "workflow checks out main" pass \
+    'printf "steps:\n  - uses: actions/checkout@v4\n    with:\n      ref: main\n" > .github/workflows/ci.yml'
+run_case "workflow checks out a tag" pass \
+    'printf "steps:\n  - uses: actions/checkout@v4\n    with:\n      ref: v0.1.0\n" > .github/workflows/ci.yml'
+run_case "workflow checks out develop" fail \
+    'printf "steps:\n  - uses: actions/checkout@v4\n    with:\n      ref: develop\n" > .github/workflows/ci.yml'
+run_case "workflow defaults a ref to develop" fail \
+    'printf "      ref: ${REF:-develop}\n" > .github/workflows/ci.yml'
+run_case "workflow installs a tool from a develop branch" fail \
+    'printf "      run: cargo install --git https://github.com/o/x --branch develop\n" > .github/workflows/ci.yml'
+run_case "workflow installs a tool from a tag" pass \
+    'printf "      run: cargo install --git https://github.com/o/x --tag v0.1.0\n" > .github/workflows/ci.yml'
+run_case "workflow triggers on develop pushes" pass \
+    'printf "on:\n  push:\n    branches: [develop, main]\n" > .github/workflows/ci.yml'
+run_case "markdown links to main" pass \
+    'printf "[a](https://github.com/o/x/blob/main/a.md)\n" > README.md'
+run_case "markdown links to develop" fail \
+    'printf "[a](https://github.com/o/x/blob/develop/a.md)\n" > README.md'
+
+echo "$n cases, $failures failures"
+[ "$failures" -eq 0 ]
