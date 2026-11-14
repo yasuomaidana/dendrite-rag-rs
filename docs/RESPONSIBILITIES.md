@@ -89,7 +89,7 @@ Per `docs/architecture/2026-10-quality-audit-execution-plan.md` (§5), `dendrite
 ## 5. Workspace Dependencies & Sibling Repositories
 
 ### Sibling Repositories
-- **`embedag`**: Consumed by `loom-rag` via git dependency (`git = "https://github.com/yasuomaidana/embedag", branch = "develop", version = "0.1.0", default-features = false, features = ["core"]`) for BLAKE3 Merkle tree change detection (`MerkleNode::from_paths` and `diff`).
+- **`embedag`**: Consumed by `loom-rag` from crates.io (`embedag = { version = "0.1.1", default-features = false, features = ["core"] }`) for BLAKE3 Merkle tree change detection (`MerkleNode::from_paths` and `diff`).
 - **`dendrite-core-rs` (`../dendrite-core-rs`, crate `dendrite-core`)** *(Planned)*:
   - Planned future parser integration. Currently `loom-rag` links tree-sitter grammars directly and hashes chunks with `blake3`; `dendrite-core-rs` keeps signature folding, complexity metrics and token counting.
 - **`dendrite-control` (`../dendrite-control` / `../Dendrite`)**:
@@ -103,7 +103,7 @@ Per `docs/architecture/2026-10-quality-audit-execution-plan.md` (§5), `dendrite
 |---|---|---|
 | `anyhow` | `1` | Error handling |
 | `blake3` | `1.8.7` | Content hashing, Merkle nodes, vector checksums |
-| `embedag` | `git = "https://github.com/yasuomaidana/embedag", branch = "develop", version = "0.1.0"` | `default-features = false, features = ["core"]` (Merkle tree change detection) |
+| `embedag` | `0.1.1` (crates.io) | `default-features = false, features = ["core"]` (Merkle tree change detection) |
 | `globset` | `0.4.20` | Path glob matching filters |
 | `ignore` | `0.4.33` | Gitignore-aware parallel filesystem walk |
 | `lru` | `0.19.0` | Query vector caching |

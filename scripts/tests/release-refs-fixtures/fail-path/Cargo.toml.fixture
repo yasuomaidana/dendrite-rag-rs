@@ -1,0 +1,2 @@
+[dependencies]
+dendrite-core-rs = { path = "../dendrite-core-rs", version = "0.1.0" }

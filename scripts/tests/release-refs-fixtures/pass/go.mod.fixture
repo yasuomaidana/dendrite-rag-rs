@@ -1,0 +1,3 @@
+module example.com/x
+
+require github.com/yasuomaidana/dendrite-mcp-hub v0.1.0
