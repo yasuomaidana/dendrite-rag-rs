@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-rag-rs/proto/symbols.hashes.json",
+  "title": "symbols.hashes",
+  "description": "Formatting-stable hash of every definition (tree-sitter tag queries). The hash covers the definition's tokens only: whitespace, layout and comments do not change it. Reads the files, so no index is needed (protocol 1.14).",
+  "params": {
+    "type": "object",
+    "required": [
+      "root"
+    ],
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "Project directory"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Globs relative to the root; empty or absent means every indexable file"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "hashes"
+    ],
+    "properties": {
+      "hashes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/symbol_hash"
+        },
+        "description": "Sorted by path, then line"
+      }
+    }
+  },
+  "$defs": {
+    "symbol_hash": {
+      "type": "object",
+      "required": [
+        "path",
+        "symbol",
+        "kind",
+        "start_line",
+        "end_line",
+        "hash"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "description": "The tag query's kind: function, method, class, type, ..."
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "hash": {
+          "type": "string",
+          "description": "blake3 of the definition's tokens, first 32 hex chars"
+        }
+      }
+    }
+  }
+}

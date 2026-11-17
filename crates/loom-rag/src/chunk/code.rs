@@ -171,7 +171,7 @@ fn merge_small(spans: Vec<Range<usize>>, src: &[u8], opts: ChunkOptions) -> Vec<
     out.into_iter().map(|(r, _)| r).collect()
 }
 
-fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
+pub(super) fn tags(lang: Lang, root: Node, src: &[u8]) -> Vec<Tag> {
     let Some(query) = lang.tags() else {
         return Vec::new();
     };

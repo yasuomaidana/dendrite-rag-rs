@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The complexity gate measures Java, Kotlin and Svelte as well: one `Lang::core` mapping to `dendrite-core`'s languages replaces the private one in `quality::complexity`, which had left Java out (DRAG-91).
 
 ### Added
+- `symbols.hashes` (protocol 1.14.0): a formatting-stable hash for every definition, computed from the definition's tokens (whitespace, layout and comments do not change it; an edit, a rename or a signature change does). It reads the files, so it needs no index. The Dendrite mesh uses the hash as the key of semantic symbol leases (DRAG-124).
 - Kotlin and Svelte join Rust, TypeScript, Python, Java, C and C++ as indexed languages (DRAG-91): grammar, tag query and import query for Kotlin, in the same table as the others; a Svelte component is chunked by its parts, each `<script>` as the language it names (TypeScript for `lang="ts"`, else JavaScript) with the byte offsets and lines of the file, the markup and style as text. The scripts are found by `dendrite-core`'s `embedded::regions`, so the definition is shared. Kotlin and Java imports resolve to each other's files; a wildcard import keeps its star whichever way the grammar spells it.
 - CI: `.github/workflows/complexity.yml` cross-checks function complexity with clippy `cognitive_complexity`, `lizard` and `ruff` C901; the Rust and Python steps are report only while DRAG-78 is open (DRAG-82, DRAG-84).
 
