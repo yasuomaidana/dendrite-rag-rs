@@ -8,7 +8,7 @@ warn_at = 450
 exclude = ["**/generated/**"]
 
 [coverage]
-min_percent = 85.0
+min_percent = 100.0
 scope = "line"
 exclude = []
 
@@ -19,8 +19,8 @@ min_lines = 5
 include_tests = true
 
 [complexity]
-max_cyclomatic = 15
-max_cognitive = 20
+max_cyclomatic = 10
+max_cognitive = 15
 exclude = []
 
 [structure]
