@@ -192,6 +192,83 @@ pub fn repo_name(root: &Path, configured: Option<&str>) -> String {
         .unwrap_or_else(|| root.display().to_string())
 }
 
+fn init_local_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(ignore, "*\n")?;
+    }
+    Ok(())
+}
+
+fn open_local_ledger(dir: &Path, ledger: LedgerChoice) -> Result<Box<dyn LedgerStore>> {
+    match ledger {
+        LedgerChoice::Redb => Ok(Box::new(Ledger::open(&dir.join("ledger.redb"))?)),
+        LedgerChoice::Sqlite => {
+            #[cfg(feature = "sqlite")]
+            {
+                Ok(Box::new(sqlite::SqliteLedger::open(
+                    &dir.join(sqlite::INDEX_FILE),
+                )?))
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                let _ = dir;
+                Err(crate::engine::Error::Other(anyhow::anyhow!(
+                    "ledger \"sqlite\" needs the `sqlite` feature; this build was made without it"
+                )))
+            }
+        }
+    }
+}
+
+fn load_local_flat(dir: &Path) -> FlatIndex {
+    let vectors_path = dir.join(VECTORS_FILE);
+    match FlatIndex::load(&vectors_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to load vector index at {}: {e}; starting with empty index",
+                vectors_path.display()
+            );
+            FlatIndex::new().with_path(&vectors_path)
+        }
+    }
+}
+
+fn open_local_vectors(
+    dir: &Path,
+    choice: VectorIndexChoice,
+    ef_search: usize,
+) -> Result<Box<dyn VectorIndex>> {
+    let flat = load_local_flat(dir);
+    match choice {
+        VectorIndexChoice::Flat => Ok(Box::new(flat)),
+        VectorIndexChoice::Hnsw => {
+            #[cfg(feature = "hnsw")]
+            {
+                let hnsw_path = dir.join(VECTORS_HNSW_FILE);
+                let hnsw = crate::vector::HnswIndex::load(&hnsw_path, flat, ef_search)?;
+                Ok(Box::new(hnsw))
+            }
+            #[cfg(not(feature = "hnsw"))]
+            {
+                let _ = ef_search;
+                Err(crate::engine::Error::Other(anyhow::anyhow!(
+                    "vector index 'hnsw' requires cargo feature 'hnsw'"
+                )))
+            }
+        }
+        // The flat scan: in the DRAG-41 benchmark (768-d, eval/RESULTS.md) it beat HNSW
+        // on latency, recall and build time at every size HNSW could be built, and
+        // meets the latency target up to about 200k vectors.
+        VectorIndexChoice::Auto => {
+            let _ = ef_search;
+            Ok(Box::new(flat))
+        }
+    }
+}
+
 impl Store {
     /// Opens the store `cfg.storage` selects for the project at `root`.
     pub fn open(dir: &Path, root: &Path, cfg: &crate::engine::Config) -> Result<Self> {
@@ -260,65 +337,10 @@ impl Store {
         ef_search: usize,
         ledger: LedgerChoice,
     ) -> Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        let ignore = dir.join(".gitignore");
-        if !ignore.exists() {
-            std::fs::write(ignore, "*\n")?;
-        }
-        let ledger: Box<dyn LedgerStore> = match ledger {
-            LedgerChoice::Redb => Box::new(Ledger::open(&dir.join("ledger.redb"))?),
-            LedgerChoice::Sqlite => {
-                #[cfg(feature = "sqlite")]
-                {
-                    Box::new(sqlite::SqliteLedger::open(&dir.join(sqlite::INDEX_FILE))?)
-                }
-                #[cfg(not(feature = "sqlite"))]
-                {
-                    return Err(crate::engine::Error::Other(anyhow::anyhow!(
-                        "ledger \"sqlite\" needs the `sqlite` feature; this build was made without it"
-                    )));
-                }
-            }
-        };
+        init_local_dir(dir)?;
+        let ledger = open_local_ledger(dir, ledger)?;
         let lexical = LexicalIndex::open(&dir.join("tantivy"))?;
-        let vectors_path = dir.join(VECTORS_FILE);
-        let flat = match FlatIndex::load(&vectors_path) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to load vector index at {}: {e}; starting with empty index",
-                    vectors_path.display()
-                );
-                FlatIndex::new().with_path(&vectors_path)
-            }
-        };
-
-        let vectors: Box<dyn VectorIndex> = match choice {
-            VectorIndexChoice::Flat => Box::new(flat),
-            VectorIndexChoice::Hnsw => {
-                #[cfg(feature = "hnsw")]
-                {
-                    let hnsw_path = dir.join(VECTORS_HNSW_FILE);
-                    let hnsw = crate::vector::HnswIndex::load(&hnsw_path, flat, ef_search)?;
-                    Box::new(hnsw)
-                }
-                #[cfg(not(feature = "hnsw"))]
-                {
-                    let _ = ef_search;
-                    return Err(crate::engine::Error::Other(anyhow::anyhow!(
-                        "vector index 'hnsw' requires cargo feature 'hnsw'"
-                    )));
-                }
-            }
-            // The flat scan: in the DRAG-41 benchmark (768-d, eval/RESULTS.md) it beat HNSW
-            // on latency, recall and build time at every size HNSW could be built, and
-            // meets the latency target up to about 200k vectors.
-            VectorIndexChoice::Auto => {
-                let _ = ef_search;
-                Box::new(flat)
-            }
-        };
-
+        let vectors = open_local_vectors(dir, choice, ef_search)?;
         Ok(Self {
             ledger,
             lexical: Box::new(lexical),

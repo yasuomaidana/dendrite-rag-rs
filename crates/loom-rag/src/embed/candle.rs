@@ -208,6 +208,52 @@ fn load_from<C: serde::de::DeserializeOwned>(
     build(&c).map_err(model_err)
 }
 
+fn is_jina(probe: &Probe) -> bool {
+    probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
+        || probe.position_embedding_type.as_deref() == Some("alibi")
+}
+
+fn load_jina(config_text: &str, vb: VarBuilder) -> Result<Arch> {
+    if jina_code::Config::is_qk_post_norm(&vb) {
+        load_from(config_text, "JinaBERT qk-post-norm", |c: &jina_code::Config| {
+            Ok(Arch::JinaCode(jina_code::JinaCodeModel::load(vb, c)?))
+        })
+    } else {
+        load_from(config_text, "JinaBERT", |c: &jina_bert::Config| {
+            Ok(Arch::Jina(jina_bert::BertModel::new(vb, c)?))
+        })
+    }
+}
+
+fn load_qwen3(vb: VarBuilder, config_text: &str, tokenizer_path: &std::path::Path) -> Result<Arch> {
+    let tokenizer = Tokenizer::load(tokenizer_path, MAX_TOKENS)?;
+    Ok(Arch::Qwen3(qwen3::Qwen3Encoder::load(
+        vb,
+        config_text,
+        &tokenizer,
+    )?))
+}
+
+/// Defines a loader for an architecture whose config type, constructor and variant follow one shape.
+macro_rules! loader {
+    ($name:ident, $what:literal, $cfg:ty, $variant:ident, $build:expr) => {
+        fn $name(config_text: &str, vb: VarBuilder) -> Result<Arch> {
+            load_from(config_text, $what, |c: &$cfg| {
+                Ok(Arch::$variant($build(vb, c)?))
+            })
+        }
+    };
+}
+
+loader!(load_bert, "BERT", bert::Config, Bert, bert::BertModel::load);
+loader!(
+    load_nomic,
+    "NomicBERT",
+    nomic_bert::Config,
+    Nomic,
+    nomic_bert::NomicBertModel::load
+);
+
 /// Builds the architecture `probe` names from the weights in `vb`.
 fn load_arch(
     model: &str,
@@ -216,33 +262,14 @@ fn load_arch(
     vb: VarBuilder,
     tokenizer_path: &std::path::Path,
 ) -> Result<Arch> {
-    let jina = probe.architectures.iter().any(|a| a.starts_with("JinaBert"))
-        || probe.position_embedding_type.as_deref() == Some("alibi");
-    match probe.model_type.as_deref() {
-        Some("nomic_bert") => load_from(config_text, "NomicBERT", |c: &nomic_bert::Config| {
-            Ok(Arch::Nomic(nomic_bert::NomicBertModel::load(vb, c)?))
-        }),
-        Some("bert") if jina && jina_code::Config::is_qk_post_norm(&vb) => {
-            load_from(config_text, "JinaBERT qk-post-norm", |c: &jina_code::Config| {
-                Ok(Arch::JinaCode(jina_code::JinaCodeModel::load(vb, c)?))
-            })
-        }
-        Some("bert") if jina => load_from(config_text, "JinaBERT", |c: &jina_bert::Config| {
-            Ok(Arch::Jina(jina_bert::BertModel::new(vb, c)?))
-        }),
-        Some("qwen3") => {
-            let tokenizer = Tokenizer::load(tokenizer_path, MAX_TOKENS)?;
-            Ok(Arch::Qwen3(qwen3::Qwen3Encoder::load(
-                vb,
-                config_text,
-                &tokenizer,
-            )?))
-        }
-        Some("bert") | Some("roberta") | Some("xlm-roberta") => {
-            load_from(config_text, "BERT", |c: &bert::Config| {
-                Ok(Arch::Bert(bert::BertModel::load(vb, c)?))
-            })
-        }
+    let mt = probe.model_type.as_deref();
+    if mt == Some("bert") && is_jina(probe) {
+        return load_jina(config_text, vb);
+    }
+    match mt {
+        Some("nomic_bert") => load_nomic(config_text, vb),
+        Some("qwen3") => load_qwen3(vb, config_text, tokenizer_path),
+        Some("bert" | "roberta" | "xlm-roberta") => load_bert(config_text, vb),
         other => Err(EmbedError::Model(format!(
             "{model}: model_type {other:?} is not supported by the candle backend \
              (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
