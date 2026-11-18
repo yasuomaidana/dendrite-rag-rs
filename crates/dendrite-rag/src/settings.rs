@@ -39,6 +39,10 @@
 //! # local_model = "local-coder" paid_model = "gemini-2.5-pro"
 //! docs_share = 0.2              # share of an `all` context pack kept for documentation (0 to 1)
 //!
+//! [brief]
+//! # local_model = "local-coder" fallback_model = "<a cheap gateway model>"
+//! # max_tokens = 400 max_matches = 60
+//!
 //! [graph.llm]
 //! enabled = false
 //! model = "gpt-4o-mini"
@@ -50,7 +54,8 @@
 //! `_DOCUMENT_PREFIX`, `_QUERY_PREFIX`, `_POOLING`, `_BATCH`, `_DIMENSIONS`, `_BUDGET_TOKENS` (all `DENDRITE_RAG_EMBED_*`),
 //! `DENDRITE_RAG_RERANK_BACKEND`, `_MODEL`, `_URL`, `_API_KEY_ENV`, `_BATCH`, `_ABSTAIN`, `DENDRITE_RAG_MAX_FILE_BYTES`,
 //! `DENDRITE_RAG_QUERY_CACHE`, `DENDRITE_RAG_GRAPH_RESOLUTION`, `DENDRITE_RAG_ASK_LOCAL_MODEL`, `_PAID_MODEL`,
-//! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`, `DENDRITE_RAG_STORAGE_LEDGER`,
+//! `_DOCS_SHARE` (all `DENDRITE_RAG_ASK_*`), `DENDRITE_RAG_BRIEF_LOCAL_MODEL`, `_FALLBACK_MODEL`, `_MAX_TOKENS`,
+//! `_MAX_MATCHES` (all `DENDRITE_RAG_BRIEF_*`), `DENDRITE_RAG_STORAGE_MODE`, `DENDRITE_RAG_STORAGE_REPO`, `DENDRITE_RAG_STORAGE_LEDGER`,
 //! `DENDRITE_RAG_PG_URL` (the shared tier's URL: environment only, never the file),
 //! `DENDRITE_RAG_FUSION_LEXICAL`, `_DENSE`, `_SYMBOL`, `_COMMUNITY`, `DENDRITE_RAG_BM25_K1`, `_B`, `_Q`,
 //! `DENDRITE_RAG_GRAPH_LLM_ENABLED`,
@@ -83,6 +88,7 @@ pub struct Settings {
     pub lexical: loom_rag::bm25::Bm25Params,
     pub storage: StorageSettings,
     pub ask: AskSettings,
+    pub brief: BriefSettings,
     /// `DENDRITE_RAG_PG_URL`; never read from or written to the file.
     #[serde(skip)]
     pub pg_url: Option<String>,
@@ -105,6 +111,20 @@ impl AskSettings {
     pub fn docs_share(&self, requested: Option<f32>) -> f32 {
         requested.or(self.docs_share).unwrap_or(DEFAULT_DOCS_SHARE)
     }
+}
+
+/// `[brief]`: the models and limits of `brief` (`docs/specs/brief.md`). A model left out here
+/// falls back to `[ask] local_model` and the default local model; no fallback model is assumed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BriefSettings {
+    pub local_model: Option<String>,
+    /// The model that writes the brief when the local one fails.
+    pub fallback_model: Option<String>,
+    /// Longest brief requested from a model (default 400).
+    pub max_tokens: Option<u32>,
+    /// Most grep matches in a brief (default 60).
+    pub max_matches: Option<usize>,
 }
 
 /// Whether `share` is a documentation share: a number from 0 to 1.
@@ -173,6 +193,9 @@ impl Settings {
             && !valid_docs_share(s)
         {
             bail!("ask.docs_share must be a number from 0 to 1, got {s}");
+        }
+        if self.brief.max_tokens == Some(0) || self.brief.max_matches == Some(0) {
+            bail!("brief.max_tokens and brief.max_matches must be positive numbers");
         }
         if let Some(r) = self.graph.resolution
             && !(r > 0.0 && r.is_finite())

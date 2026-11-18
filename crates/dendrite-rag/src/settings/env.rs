@@ -40,6 +40,7 @@ impl Settings {
         self.apply_lexical_env(var)?;
         self.apply_storage_env(var)?;
         self.apply_ask_env(var)?;
+        self.apply_brief_env(var)?;
         self.apply_graph_llm_env(var)?;
         self.apply_vector_index_env(var)?;
         self.validate()?;
@@ -160,6 +161,17 @@ impl Settings {
         env_parse(var, &mut self.ask.docs_share, "DENDRITE_RAG_ASK_DOCS_SHARE")?;
         set(var, &mut self.pg_url, "DENDRITE_RAG_PG_URL");
         env_parse(var, &mut self.graph.resolution, "DENDRITE_RAG_GRAPH_RESOLUTION")
+    }
+
+    fn apply_brief_env<F: Fn(&str) -> Option<String>>(&mut self, var: Var<F>) -> anyhow::Result<()> {
+        set(var, &mut self.brief.local_model, "DENDRITE_RAG_BRIEF_LOCAL_MODEL");
+        set(
+            var,
+            &mut self.brief.fallback_model,
+            "DENDRITE_RAG_BRIEF_FALLBACK_MODEL",
+        );
+        env_parse(var, &mut self.brief.max_tokens, "DENDRITE_RAG_BRIEF_MAX_TOKENS")?;
+        env_parse(var, &mut self.brief.max_matches, "DENDRITE_RAG_BRIEF_MAX_MATCHES")
     }
 
     fn apply_graph_llm_env<F: Fn(&str) -> Option<String>>(&mut self, var: Var<F>) -> anyhow::Result<()> {

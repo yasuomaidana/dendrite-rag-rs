@@ -115,6 +115,19 @@ fn full_method_table() {
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
 }
 
+#[rstest]
+#[case::blank_question(json!({"root": "ROOT", "question": "  "}))]
+#[case::no_question(json!({"root": "ROOT"}))]
+#[case::no_root(json!({"question": "where is LocateBinary"}))]
+#[case::missing_root(json!({"root": "/definitely/missing", "question": "x"}))]
+fn brief_rejects_params_that_cannot_work(#[case] params: Value, mut lexical_server: Server) {
+    let dir = project();
+    let params =
+        serde_json::from_str(&params.to_string().replace("ROOT", dir.path().to_str().unwrap())).unwrap();
+    let r = call(&mut lexical_server, "brief", params);
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "{r}");
+}
+
 #[fixture]
 fn lexical_server() -> Server {
     let mut cfg = Config::default();

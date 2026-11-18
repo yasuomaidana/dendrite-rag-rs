@@ -1,53 +1,9 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use super::*;
+use crate::scripted::ScriptedGateway;
 use crate::settings::AskSettings;
 use loom_rag::engine::Config;
 use loom_rag::testutil::project;
 use rstest::{fixture, rstest};
-
-/// Answers by model name and records every call as `(model, system, prompt)`.
-struct ScriptedGateway {
-    answers: HashMap<&'static str, std::result::Result<&'static str, &'static str>>,
-    calls: RefCell<Vec<(String, String, String)>>,
-}
-
-impl ScriptedGateway {
-    fn new(answers: &[(&'static str, std::result::Result<&'static str, &'static str>)]) -> Self {
-        Self {
-            answers: answers.iter().cloned().collect(),
-            calls: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn models(&self) -> Vec<String> {
-        self.calls.borrow().iter().map(|c| c.0.clone()).collect()
-    }
-}
-
-impl Gateway for ScriptedGateway {
-    fn complete(
-        &self,
-        model: &str,
-        system: &str,
-        prompt: &str,
-        _t: f32,
-    ) -> std::result::Result<Completion, String> {
-        self.calls
-            .borrow_mut()
-            .push((model.to_string(), system.to_string(), prompt.to_string()));
-        match self.answers.get(model) {
-            Some(Ok(text)) => Ok(Completion {
-                text: text.to_string(),
-                prompt_tokens: 10,
-                output_tokens: 5,
-            }),
-            Some(Err(e)) => Err(e.to_string()),
-            None => Err(format!("unknown model {model}")),
-        }
-    }
-}
 
 #[fixture]
 fn engine() -> (tempfile::TempDir, Engine) {

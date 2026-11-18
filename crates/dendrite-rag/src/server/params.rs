@@ -134,6 +134,13 @@ pub(super) struct AskParams {
 }
 
 #[derive(Deserialize)]
+pub(super) struct BriefParams {
+    pub(super) root: String,
+    #[serde(flatten)]
+    pub(super) request: crate::brief::BriefRequest,
+}
+
+#[derive(Deserialize)]
 pub(super) struct RankParams {
     pub(super) root: String,
     pub(super) query: String,

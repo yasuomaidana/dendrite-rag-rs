@@ -279,6 +279,49 @@ fn docs_share_from_file_and_env() {
 }
 
 #[test]
+fn brief_settings_from_file_and_environment() {
+    let mut s = Settings::parse("[brief]\nlocal_model = \"a\"\nmax_tokens = 300\n").unwrap();
+    s.apply_env(env(&[])).unwrap();
+    assert_eq!(
+        (s.brief.local_model.as_deref(), s.brief.max_tokens),
+        (Some("a"), Some(300))
+    );
+    assert!(s.brief.fallback_model.is_none() && s.brief.max_matches.is_none());
+    s.apply_env(env(&[
+        ("DENDRITE_RAG_BRIEF_LOCAL_MODEL", "b"),
+        ("DENDRITE_RAG_BRIEF_FALLBACK_MODEL", "cheap"),
+        ("DENDRITE_RAG_BRIEF_MAX_MATCHES", "20"),
+    ]))
+    .unwrap();
+    assert_eq!(
+        (
+            s.brief.local_model.as_deref(),
+            s.brief.fallback_model.as_deref(),
+            s.brief.max_matches
+        ),
+        (Some("b"), Some("cheap"), Some(20))
+    );
+    assert_eq!(s.brief.max_tokens, Some(300), "untouched by the environment");
+}
+
+#[test]
+fn brief_limits_must_be_positive_numbers() {
+    for bad in ["max_tokens = 0", "max_matches = 0"] {
+        let mut s = Settings::parse(&format!("[brief]\n{bad}\n")).unwrap();
+        assert!(s.apply_env(env(&[])).is_err(), "{bad}");
+    }
+    let mut s = Settings::default();
+    assert!(
+        s.apply_env(env(&[("DENDRITE_RAG_BRIEF_MAX_TOKENS", "many")]))
+            .is_err()
+    );
+    assert!(
+        Settings::parse("[brief]\nbogus = 1\n").is_err(),
+        "unknown keys are errors"
+    );
+}
+
+#[test]
 fn lexical_bm25_from_file_and_environment() {
     let mut s = Settings::parse("[lexical]\nk1 = 0.9\nb = 0.4\n").unwrap();
     assert_eq!((s.lexical.k1, s.lexical.b, s.lexical.q), (0.9, 0.4, 1.0));
