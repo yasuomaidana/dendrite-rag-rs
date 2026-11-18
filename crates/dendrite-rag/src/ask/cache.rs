@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::{Gateway, prompt};
 
 /// A gateway that answers from the cache when it can and caches usable answers.
-pub(super) struct CachedGateway<'a> {
+pub(crate) struct CachedGateway<'a> {
     pub inner: &'a dyn Gateway,
     pub ledger: &'a dyn LedgerStore,
     /// Skip the cache lookup (the answer is still stored).
@@ -24,13 +24,15 @@ fn key(system: &str, prompt: &str, temperature: f32) -> String {
     blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
-impl Gateway for CachedGateway<'_> {
-    fn complete(
+impl CachedGateway<'_> {
+    /// Answers from the cache, or calls `call` and caches a usable answer.
+    fn through(
         &self,
         model: &str,
         system: &str,
         prompt: &str,
         temperature: f32,
+        call: impl FnOnce() -> Result<Completion, String>,
     ) -> Result<Completion, String> {
         let key = key(system, prompt, temperature);
         if !self.fresh
@@ -46,7 +48,7 @@ impl Gateway for CachedGateway<'_> {
                 output_tokens: tokens("output_tokens"),
             });
         }
-        let c = self.inner.complete(model, system, prompt, temperature)?;
+        let c = call()?;
         if !c.text.trim().is_empty() && !c.text.contains(prompt::CANNED_REPLY) {
             let value =
                 json!({"text": c.text, "prompt_tokens": c.prompt_tokens, "output_tokens": c.output_tokens});
@@ -58,5 +60,33 @@ impl Gateway for CachedGateway<'_> {
             }
         }
         Ok(c)
+    }
+}
+
+impl Gateway for CachedGateway<'_> {
+    fn complete(
+        &self,
+        model: &str,
+        system: &str,
+        prompt: &str,
+        temperature: f32,
+    ) -> Result<Completion, String> {
+        self.through(model, system, prompt, temperature, || {
+            self.inner.complete(model, system, prompt, temperature)
+        })
+    }
+
+    fn complete_capped(
+        &self,
+        model: &str,
+        system: &str,
+        prompt: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<Completion, String> {
+        self.through(model, system, prompt, temperature, || {
+            self.inner
+                .complete_capped(model, system, prompt, temperature, max_tokens)
+        })
     }
 }

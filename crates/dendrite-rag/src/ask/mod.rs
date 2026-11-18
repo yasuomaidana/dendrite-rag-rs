@@ -4,7 +4,7 @@
 //! caller did not allow paid escalation, the answer says escalation is needed and the client
 //! asks the person.
 
-mod cache;
+pub(crate) mod cache;
 mod prompt;
 #[cfg(test)]
 mod tests;
@@ -111,6 +111,19 @@ pub trait Gateway {
         prompt: &str,
         temperature: f32,
     ) -> std::result::Result<Completion, String>;
+
+    /// Like [`Gateway::complete`] with an answer of at most `max_tokens`. A gateway that cannot cap
+    /// the answer ignores the cap.
+    fn complete_capped(
+        &self,
+        model: &str,
+        system: &str,
+        prompt: &str,
+        temperature: f32,
+        _max_tokens: u32,
+    ) -> std::result::Result<Completion, String> {
+        self.complete(model, system, prompt, temperature)
+    }
 }
 
 impl Gateway for loom_rag::llm::Client {
@@ -121,14 +134,19 @@ impl Gateway for loom_rag::llm::Client {
         prompt: &str,
         temperature: f32,
     ) -> std::result::Result<Completion, String> {
-        self.chat_with(
-            model,
-            Some(system),
-            prompt,
-            temperature,
-            Some(answer_max_tokens()),
-        )
-        .map_err(|e| e.to_string())
+        self.complete_capped(model, system, prompt, temperature, answer_max_tokens())
+    }
+
+    fn complete_capped(
+        &self,
+        model: &str,
+        system: &str,
+        prompt: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> std::result::Result<Completion, String> {
+        self.chat_with(model, Some(system), prompt, temperature, Some(max_tokens))
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -146,7 +164,7 @@ fn answer_max_tokens() -> u32 {
 }
 
 /// A usable local answer: non-empty and not an engine's canned placeholder.
-fn usable(c: std::result::Result<Completion, String>) -> std::result::Result<Completion, String> {
+pub(crate) fn usable(c: std::result::Result<Completion, String>) -> std::result::Result<Completion, String> {
     let c = c?;
     if c.text.trim().is_empty() {
         return Err("empty answer".into());
@@ -292,7 +310,7 @@ fn answer(
 }
 
 /// Runs `f`, adding its duration in milliseconds to `acc`.
-fn timed<T>(acc: &Cell<u64>, f: impl FnOnce() -> T) -> T {
+pub(crate) fn timed<T>(acc: &Cell<u64>, f: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let out = f();
     acc.set(acc.get() + started.elapsed().as_millis() as u64);

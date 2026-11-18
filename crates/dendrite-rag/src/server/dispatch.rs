@@ -24,7 +24,7 @@ impl Server {
         match method {
             "health" | "embedders" | "settings" => self.meta_method(method, params),
             "index" | "sync" | "pull" | "push" | "status" | "purge" => self.index_method(method, params),
-            "search" | "context" | "chunks.get" | "rank" | "grep" | "ask" => {
+            "search" | "context" | "chunks.get" | "rank" | "grep" | "ask" | "brief" => {
                 self.retrieval_method(method, params)
             }
             "symbols.definitions" | "symbols.references" | "history.index" | "history.search" => {
@@ -66,6 +66,7 @@ impl Server {
             "rank" => self.rpc_rank(params),
             "grep" => self.rpc_grep(params),
             "ask" => self.rpc_ask(params),
+            "brief" => self.rpc_brief(params),
             _ => Err(unknown(method)),
         }
     }
@@ -200,6 +201,20 @@ impl Server {
         let settings = self.asks.get(&root).cloned().unwrap_or_default();
         let engine = self.engines.get(&root).expect("opened above");
         to_value(crate::ask::ask(engine, &settings, &p.request, &gateway).map_err(engine_error)?)
+    }
+
+    fn rpc_brief(&mut self, params: Value) -> Reply {
+        let p: BriefParams = rpc::params(params)?;
+        if p.request.question.trim().is_empty() {
+            return Err(RpcError::invalid_params("question must not be empty"));
+        }
+        let gateway = loom_rag::llm::Client::new(None, None, String::new());
+        let engine = self.indexed(&p.root)?;
+        let root = engine.root().to_path_buf();
+        let ask = self.asks.get(&root).cloned().unwrap_or_default();
+        let settings = self.briefs.get(&root).cloned().unwrap_or_default();
+        let engine = self.engines.get(&root).expect("opened above");
+        to_value(crate::brief::brief(engine, &ask, &settings, &p.request, &gateway).map_err(engine_error)?)
     }
 
     fn rpc_symbols(&mut self, method: &str, params: Value) -> Reply {

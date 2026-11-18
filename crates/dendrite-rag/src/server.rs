@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use self::params::*;
 use crate::rpc::{self, Handler, RpcError, code};
-use crate::settings::{AskSettings, Settings, valid_docs_share};
+use crate::settings::{AskSettings, BriefSettings, Settings, valid_docs_share};
 use loom_rag::engine::{Config, Engine, Error};
 use loom_rag::retrieve::{SearchOpts, Timings};
 
@@ -20,6 +20,8 @@ pub struct Server {
     engines: HashMap<PathBuf, Engine>,
     /// `[ask]` of each project opened with its own settings.
     asks: HashMap<PathBuf, AskSettings>,
+    /// `[brief]` of each project opened with its own settings.
+    briefs: HashMap<PathBuf, BriefSettings>,
     /// When each open engine was last used (end of the last request that touched it).
     last_used: HashMap<PathBuf, Instant>,
     /// Roots the current request used; stamped into `last_used` when it finishes.
@@ -65,6 +67,7 @@ impl Server {
             config: Some(config),
             engines: HashMap::new(),
             asks: HashMap::new(),
+            briefs: HashMap::new(),
             last_used: HashMap::new(),
             touched: Vec::new(),
             engine_idle: engine_idle_from_env(),
@@ -78,6 +81,7 @@ impl Server {
             config: None,
             engines: HashMap::new(),
             asks: HashMap::new(),
+            briefs: HashMap::new(),
             last_used: HashMap::new(),
             touched: Vec::new(),
             engine_idle: engine_idle_from_env(),
@@ -124,6 +128,7 @@ impl Server {
                     let settings =
                         Settings::load(&path).map_err(|e| RpcError::engine("config", format!("{e:#}")))?;
                     self.asks.insert(path.clone(), settings.ask.clone());
+                    self.briefs.insert(path.clone(), settings.brief.clone());
                     settings.config_at(&path)
                 }
             };
