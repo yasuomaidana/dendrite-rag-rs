@@ -67,6 +67,14 @@ pub(super) struct SymbolParams {
 }
 
 #[derive(Deserialize)]
+pub(super) struct SymbolHashParams {
+    pub(super) root: String,
+    /// Globs relative to the root; empty means every indexable file.
+    #[serde(default)]
+    pub(super) paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct HistoryIndexParams {
     pub(super) root: String,
     #[serde(default = "default_max_commits")]

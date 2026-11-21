@@ -444,3 +444,41 @@ fn quality_structure_reports_directories_that_are_piles_of_files() {
     let r = call(&mut s, "quality.structure", json!({"nothing": 1}));
     assert_eq!(r["error"]["code"], code::INVALID_PARAMS, "root is required");
 }
+
+#[test]
+fn symbols_hashes_needs_no_index_and_survives_a_reformat() {
+    let dir = project();
+    let root = dir.path().to_str().unwrap();
+    let mut s = Server::new(Config::default());
+
+    let r = call(&mut s, "symbols.hashes", json!({"root": root}));
+    let hashes = r["result"]["hashes"].as_array().unwrap().clone();
+    let names: Vec<_> = hashes.iter().map(|h| h["symbol"].as_str().unwrap()).collect();
+    assert_eq!(names, ["IndexProject", "LocateBinary"]);
+    assert_eq!(hashes[1]["path"], "pkg/sidecar/sidecar.go");
+    assert_eq!(hashes[1]["kind"], "function");
+
+    let only = call(
+        &mut s,
+        "symbols.hashes",
+        json!({"root": root, "paths": ["pkg/rag/**"]}),
+    );
+    assert_eq!(only["result"]["hashes"].as_array().unwrap().len(), 1);
+
+    let file = dir.path().join("pkg/sidecar/sidecar.go");
+    std::fs::write(
+        &file,
+        "package sidecar\n\n// LocateBinary finds a sidecar executable.\nfunc LocateBinary(\n\tname string\n) string {\n\t// the name is the path\n\treturn name\n}\n",
+    )
+    .unwrap();
+    let again = call(&mut s, "symbols.hashes", json!({"root": root}));
+    assert_eq!(
+        again["result"]["hashes"][1]["hash"], hashes[1]["hash"],
+        "a reformat must not move the hash"
+    );
+
+    let r = call(&mut s, "symbols.hashes", json!({"root": root, "paths": ["["]}));
+    assert!(r["error"].is_object());
+    let r = call(&mut s, "symbols.hashes", json!({}));
+    assert_eq!(r["error"]["code"], code::INVALID_PARAMS);
+}

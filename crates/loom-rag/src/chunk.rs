@@ -13,6 +13,8 @@ mod code;
 use code::{Tag, TagKind, chunk_code, relang};
 mod embedded;
 use embedded::chunk_embedded;
+mod hashes;
+pub use hashes::{SymbolHash, symbol_hashes};
 mod text;
 use text::{markdown_sections, nonws, pack, pack_text, significant, split_lines};
 
