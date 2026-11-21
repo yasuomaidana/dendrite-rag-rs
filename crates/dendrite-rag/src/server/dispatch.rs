@@ -27,9 +27,11 @@ impl Server {
             "search" | "context" | "chunks.get" | "rank" | "grep" | "ask" => {
                 self.retrieval_method(method, params)
             }
-            "symbols.definitions" | "symbols.references" | "history.index" | "history.search" => {
-                self.symbol_method(method, params)
-            }
+            "symbols.definitions"
+            | "symbols.references"
+            | "symbols.hashes"
+            | "history.index"
+            | "history.search" => self.symbol_method(method, params),
             m if m.starts_with("graph.") => self.graph_method(m, params),
             m if m.starts_with("quality.") => quality_method(m, params),
             _ => Err(unknown(method)),
@@ -73,6 +75,7 @@ impl Server {
     fn symbol_method(&mut self, method: &str, params: Value) -> Reply {
         match method {
             "symbols.definitions" | "symbols.references" => self.rpc_symbols(method, params),
+            "symbols.hashes" => self.rpc_symbol_hashes(params),
             "history.index" => self.rpc_history_index(params),
             "history.search" => self.rpc_history_search(params),
             _ => Err(unknown(method)),
@@ -212,6 +215,13 @@ impl Server {
         }
         .map_err(engine_error)?;
         Ok(json!({ "hits": hits }))
+    }
+
+    fn rpc_symbol_hashes(&mut self, params: Value) -> Reply {
+        let p: SymbolHashParams = rpc::params(params)?;
+        self.keyed_call(("hashes", &p.root, false), |e| {
+            e.symbol_hashes(&p.paths).map_err(engine_error)
+        })
     }
 
     fn rpc_history_index(&mut self, params: Value) -> Reply {
