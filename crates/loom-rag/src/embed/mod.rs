@@ -332,16 +332,33 @@ pub fn model_pooling(model: &str) -> Pooling {
 pub(crate) mod auto;
 pub use auto::{gateway_reachable, ollama_reachable, resolve_auto};
 
+fn resolve_auto_backend(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
+    let (resolved, reason) = resolve_auto(cfg, ollama_reachable, gateway_reachable);
+    eprintln!(
+        "loom-rag: embedder auto -> {} ({reason})",
+        resolved.backend.as_str()
+    );
+    from_config(&resolved)
+}
+
+fn build_in_process(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
+    match cfg.backend {
+        #[cfg(feature = "candle")]
+        Backend::Candle => Ok(Some(Box::new(candle::CandleEmbedder::load(cfg)?))),
+        #[cfg(feature = "oxillama")]
+        Backend::Oxillama => Ok(Some(Box::new(oxillama::OxillamaEmbedder::load(cfg)?))),
+        #[cfg(feature = "model2vec")]
+        Backend::Model2vec => Ok(Some(Box::new(model2vec::Model2VecEmbedder::load(cfg)?))),
+        #[allow(unreachable_patterns)]
+        _ => unreachable!("compiled() rejected the backend"),
+    }
+}
+
 /// Builds the configured embedder; `Ok(None)` for `Backend::None`. `auto` is resolved
 /// first, and the choice is reported on stderr.
 pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
     if cfg.backend == Backend::Auto {
-        let (resolved, reason) = resolve_auto(cfg, ollama_reachable, gateway_reachable);
-        eprintln!(
-            "loom-rag: embedder auto -> {} ({reason})",
-            resolved.backend.as_str()
-        );
-        return from_config(&resolved);
+        return resolve_auto_backend(cfg);
     }
     if !cfg.backend.compiled() {
         return Err(EmbedError::Model(format!(
@@ -349,20 +366,13 @@ pub fn from_config(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
             cfg.backend.as_str()
         )));
     }
-    Ok(match cfg.backend {
-        Backend::None => None,
-        Backend::Openai => Some(Box::new(OpenAiEmbedder::new(cfg))),
-        Backend::Ollama => Some(Box::new(ollama::OllamaEmbedder::new(cfg))),
-        Backend::Hf => Some(Box::new(hf::HfEmbedder::new(cfg)?)),
-        #[cfg(feature = "candle")]
-        Backend::Candle => Some(Box::new(candle::CandleEmbedder::load(cfg)?)),
-        #[cfg(feature = "oxillama")]
-        Backend::Oxillama => Some(Box::new(oxillama::OxillamaEmbedder::load(cfg)?)),
-        #[cfg(feature = "model2vec")]
-        Backend::Model2vec => Some(Box::new(model2vec::Model2VecEmbedder::load(cfg)?)),
-        #[allow(unreachable_patterns)]
-        _ => unreachable!("compiled() rejected the backend"),
-    })
+    match cfg.backend {
+        Backend::None => Ok(None),
+        Backend::Openai => Ok(Some(Box::new(OpenAiEmbedder::new(cfg)))),
+        Backend::Ollama => Ok(Some(Box::new(ollama::OllamaEmbedder::new(cfg)))),
+        Backend::Hf => Ok(Some(Box::new(hf::HfEmbedder::new(cfg)?))),
+        _ => build_in_process(cfg),
+    }
 }
 
 /// Loaded embedders by configuration; `None` is a configuration without dense retrieval.

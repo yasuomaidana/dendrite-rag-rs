@@ -82,6 +82,24 @@ fn hash_of(parts: &[&dyn Fn(&mut DefaultHasher)]) -> u64 {
     h.finish()
 }
 
+fn hash_leaf(node: &Node, src: &[u8], mode: Normalize, kind: &str, literal: bool) -> u64 {
+    if literal {
+        hash_of(&[&|h| "$lit".hash(h)])
+    } else if is_identifier(kind) && mode == Normalize::Structure {
+        hash_of(&[&|h| "$id".hash(h)])
+    } else if is_identifier(kind) {
+        let text = &src[node.byte_range()];
+        hash_of(&[&|h| "id".hash(h), &|h| text.hash(h)])
+    } else {
+        hash_of(&[&|h| kind.hash(h)])
+    }
+}
+
+fn should_skip_child(child: &Node, skip: &[Range<usize>]) -> bool {
+    let range = child.byte_range();
+    child.is_extra() || skip.iter().any(|s| s.start <= range.start && range.end <= s.end)
+}
+
 /// Hash and token count of `node`, recording every subtree that meets the limits into `out`.
 pub fn walk(
     node: Node,
@@ -94,16 +112,7 @@ pub fn walk(
     let kind = node.kind();
     let literal = is_literal(kind);
     if literal || node.child_count() == 0 || depth > MAX_DEPTH {
-        let hash = if literal {
-            hash_of(&[&|h| "$lit".hash(h)])
-        } else if is_identifier(kind) && mode == Normalize::Structure {
-            hash_of(&[&|h| "$id".hash(h)])
-        } else if is_identifier(kind) {
-            let text = &src[node.byte_range()];
-            hash_of(&[&|h| "id".hash(h), &|h| text.hash(h)])
-        } else {
-            hash_of(&[&|h| kind.hash(h)])
-        };
+        let hash = hash_leaf(&node, src, mode, kind, literal);
         return (hash, 1);
     }
     let mut h = DefaultHasher::new();
@@ -111,13 +120,7 @@ pub fn walk(
     let mut tokens = 0;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        let range = child.byte_range();
-        if child.is_extra()
-            || lim
-                .skip
-                .iter()
-                .any(|s| s.start <= range.start && range.end <= s.end)
-        {
+        if should_skip_child(&child, lim.skip) {
             continue;
         }
         let (ch, ct) = walk(child, src, mode, lim, out, depth + 1);
