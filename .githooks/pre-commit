@@ -1,0 +1,9 @@
+#!/bin/sh
+# >>> dendrite managed: ticket lock >>>
+if command -v dendrite >/dev/null 2>&1; then
+  dendrite hook pre-commit || exit 1
+else
+  echo "blocked: dendrite is not on PATH, so this commit cannot be checked against a ticket claim" >&2
+  exit 1
+fi
+# <<< dendrite managed: ticket lock <<<

@@ -11,3 +11,8 @@ eval/swebench/verified.json
 
 # Per-machine MCP registration written by `dendrite soma prepare`
 .ai/mcp/mcp.json
+coverage.out
+*.tmp
+bin/
+.venv/
+node_modules/
