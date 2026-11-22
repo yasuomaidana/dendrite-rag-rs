@@ -18,7 +18,7 @@
     {"q": "derive macro generating AsGraphContext implementation for structs", "expect": ["crates/embedag-derive/src/as_graph_context.rs"]},
     {"q": "derive HierarchicalModel for diesel recursive CTE queries", "expect": ["crates/embedag-derive/src/hierarchical_model.rs"]},
     {"q": "pushdown automaton validating tokens against compiled GBNF grammar", "expect": ["crates/embedag-llm/src/gbnf.rs"]},
-    {"q": "extract structured entities using oxillama and candle local models", "expect": ["crates/embedag-llm/src/provider.rs", "crates/embedag-llm/src/extractor.rs"]},
+    {"q": "extract structured entities using candle local models", "expect": ["crates/embedag-llm/src/provider.rs", "crates/embedag-llm/src/extractor.rs"]},
     {"q": "synthesize attribute differences between candidate and incoming entities", "expect": ["crates/embedag-llm/src/delta_synthesizer.rs"]},
     {"q": "batch upsert nodes and edges into postgres with savepoints", "expect": ["crates/embedag-diesel/src/ops.rs"]},
     {"q": "rank RRF candidates from dense and sparse retrieval stages", "expect": ["crates/embedag-rag/src/rrf.rs"]},

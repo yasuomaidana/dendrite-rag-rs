@@ -48,13 +48,16 @@ impl Settings {
     }
 
     fn apply_embed_env<F: Fn(&str) -> Option<String>>(&mut self, var: Var<F>) -> anyhow::Result<()> {
-        apply_backend!(
-            var,
-            "DENDRITE_RAG_EMBED_BACKEND",
-            Backend,
-            EmbedConfig,
-            &mut self.embed
-        );
+        if let Some(raw) = var("DENDRITE_RAG_EMBED_BACKEND") {
+            let backend = Backend::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("DENDRITE_RAG_EMBED_BACKEND={raw:?}: {e}"))?;
+            if backend != self.embed.backend {
+                self.embed = EmbedConfig {
+                    backend,
+                    ..Default::default()
+                };
+            }
+        }
         let e = &mut self.embed;
         set(var, &mut e.model, "DENDRITE_RAG_EMBED_MODEL");
         set(var, &mut e.url, "DENDRITE_RAG_EMBED_URL");

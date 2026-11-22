@@ -1,0 +1,36 @@
+# Licence policy: permissive licences, plus BUSL-1.1 from projects with a public repository.
+# cargo-deny cannot see repository visibility; `scripts/check-busl-public-repos.py` fails when a BUSL-1.1
+# crate's repository is private. COOLJAPAN made oxirag and oxillama private when it relicensed them to
+# BUSL-1.1 (2026-11), so both fail that check and are also banned by name below.
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+    "BUSL-1.1",
+    "CDLA-Permissive-2.0",
+    "PostgreSQL",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+# Workspace crates with `publish = false` (loom-eval) declare no licence.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "oxirag" },
+    { crate = "oxillama" },
+    { crate = "oxillama-runtime" },
+    { crate = "oxibonsai" },
+]

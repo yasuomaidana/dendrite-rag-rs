@@ -272,7 +272,7 @@ fn load_arch(
         Some("bert" | "roberta" | "xlm-roberta") => load_bert(config_text, vb),
         other => Err(EmbedError::Model(format!(
             "{model}: model_type {other:?} is not supported by the candle backend \
-             (bert, nomic_bert, JinaBERT or qwen3); use the ollama, hf or oxillama backend"
+             (bert, nomic_bert, JinaBERT or qwen3); use the ollama or hf backend"
         ))),
     }
 }

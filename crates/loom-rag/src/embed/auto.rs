@@ -17,8 +17,6 @@ use super::{Backend, EmbedConfig};
 /// 6. `model2vec` (static embeddings) when built with `model2vec`;
 /// 7. `none`: lexical and symbol retrieval only.
 ///
-/// oxillama is never chosen: oxillama-runtime 0.1.4 offloads only Q4_0 single-token
-/// decode to the GPU, so its embeddings run on the CPU (over 3 s per chunk measured).
 /// The configured model, prefixes, pooling and batch carry over to the chosen backend.
 pub fn resolve_auto(
     cfg: &EmbedConfig,

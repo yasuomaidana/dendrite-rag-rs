@@ -15,7 +15,7 @@ pub const NAME: &str = "dendrite-rag";
 /// Crate version reported by the `health` handshake.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// JSON-RPC protocol version; clients refuse a server with a different major version.
-pub const PROTOCOL: &str = "1.15.0";
+pub const PROTOCOL: &str = "1.16.0";
 
 /// The cargo features this binary was built with, so a client can tell, before any
 /// project is opened, what `[embed]`, `[storage]` and `[rerank]` settings it can honour.
@@ -29,7 +29,6 @@ pub fn features() -> Vec<&'static str> {
         (cfg!(feature = "candle-metal"), "candle-metal"),
         (cfg!(feature = "candle-cuda"), "candle-cuda"),
         (cfg!(feature = "candle-accelerate"), "candle-accelerate"),
-        (cfg!(feature = "oxillama"), "oxillama"),
     ]
     .into_iter()
     .filter_map(|(on, name)| on.then_some(name))

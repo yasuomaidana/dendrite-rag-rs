@@ -22,7 +22,6 @@ candle-nn = { version = "0.11", optional = true }
 candle-transformers = { version = "0.11", optional = true }
 hf-hub = { version = "1.0.0", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 tokenizers = { version = "1.0.0-rc.3", default-features = false, features = ["regex", "normalizers", "bpe", "wordpiece", "unigram", "wordlevel", "unicode-scripts", "parallelism"], optional = true }
-oxillama-runtime = { version = "0.1.4", default-features = false, features = ["qwen3", "llama", "gemma", "mistral", "phi", "tokenizer-wasm", "parallel", "mmap"], optional = true }
 blake3 = "1.8.7"
 dendrite-core-rs = { git = "https://github.com/yasuomaidana/dendrite-core-rs", tag = "v0.1.0" }
 embedag = { version = "0.1.1", default-features = false, features = ["core"] }
@@ -88,8 +87,6 @@ candle-metal = ["candle", "candle-core/metal", "candle-nn/metal", "candle-transf
 candle-cuda = ["candle", "candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 # candle with Apple Accelerate BLAS on the CPU.
 candle-accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-# In-process GGUF embedders (Qwen3-Embedding and other decoder models) on OxiLLaMa; needs Rust 1.89.
-oxillama = ["dep:oxillama-runtime", "dep:hf-hub"]
 
 [[example]]
 name = "vector_bench"
