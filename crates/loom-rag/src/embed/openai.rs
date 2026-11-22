@@ -1,4 +1,4 @@
-//! OpenAI-compatible `/v1/embeddings` (LiteLLM gateway, vLLM, LM Studio, `oxillama serve`).
+//! OpenAI-compatible `/v1/embeddings` (LiteLLM gateway, vLLM, LM Studio).
 
 use serde::{Deserialize, Serialize};
 

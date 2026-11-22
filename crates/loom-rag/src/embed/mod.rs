@@ -6,11 +6,10 @@
 //! | backend | where the model runs | wire / runtime |
 //! |---|---|---|
 //! | `auto` (default) | the first available of: candle on a GPU, a TEI server, Ollama, the LiteLLM gateway, candle on the CPU, model2vec | see [`resolve_auto`] |
-//! | `openai` | any OpenAI-compatible server: the LiteLLM gateway, vLLM, LM Studio, `oxillama serve` | `POST /v1/embeddings` |
+//! | `openai` | any OpenAI-compatible server: the LiteLLM gateway, vLLM, LM Studio | `POST /v1/embeddings` |
 //! | `ollama` | an Ollama server | `POST /api/embed` |
 //! | `hf` | Hugging Face Inference (serverless or a dedicated endpoint) or a TEI server | `POST …/feature-extraction`, TEI `POST /embed` |
 //! | `candle` | in process (feature `candle`) | safetensors BERT / NomicBERT / JinaBERT |
-//! | `oxillama` | in process (feature `oxillama`), CPU only for embeddings | GGUF decoder embedders, e.g. Qwen3-Embedding |
 //! | `model2vec` | in process (feature `model2vec`) | static token embeddings |
 //! | `none` | — | lexical and symbol retrieval only |
 
@@ -32,8 +31,6 @@ pub use candle::jina_code;
 pub(crate) use candle::tokenize;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
-#[cfg(feature = "oxillama")]
-pub mod oxillama;
 
 pub use openai::OpenAiEmbedder;
 
@@ -60,7 +57,7 @@ pub trait Embedder: Send + Sync {
 }
 
 /// Which embedder the engine uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     /// The first available GPU-capable backend; see [`resolve_auto`].
@@ -76,9 +73,6 @@ pub enum Backend {
     Hf,
     /// In-process safetensors encoders (feature `candle`).
     Candle,
-    /// In-process GGUF embedders (feature `oxillama`). oxillama-runtime 0.1.4 runs
-    /// multi-token prefill, and therefore every embedding, on the CPU.
-    Oxillama,
     /// In-process static embeddings (feature `model2vec`).
     Model2vec,
     /// Lexical and symbol retrieval only.
@@ -86,14 +80,35 @@ pub enum Backend {
     None,
 }
 
+impl<'de> Deserialize<'de> for Backend {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BackendVisitor;
+        impl<'de> serde::de::Visitor<'de> for BackendVisitor {
+            type Value = Backend;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a backend name")
+            }
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Backend, E>
+            where
+                E: serde::de::Error,
+            {
+                Backend::parse(value).map_err(serde::de::Error::custom)
+            }
+        }
+        deserializer.deserialize_str(BackendVisitor)
+    }
+}
+
 impl Backend {
-    pub const ALL: [Backend; 8] = [
+    pub const ALL: [Backend; 7] = [
         Backend::Auto,
         Backend::Openai,
         Backend::Ollama,
         Backend::Hf,
         Backend::Candle,
-        Backend::Oxillama,
         Backend::Model2vec,
         Backend::None,
     ];
@@ -105,15 +120,27 @@ impl Backend {
             Backend::Ollama => "ollama",
             Backend::Hf => "hf",
             Backend::Candle => "candle",
-            Backend::Oxillama => "oxillama",
             Backend::Model2vec => "model2vec",
             Backend::None => "none",
         }
     }
 
     /// Parses a backend name (aliases included).
-    pub fn parse(s: &str) -> Option<Backend> {
-        serde_json::from_value(serde_json::Value::String(s.trim().to_ascii_lowercase())).ok()
+    pub fn parse(s: &str) -> std::result::Result<Backend, String> {
+        let clean = s.trim().to_ascii_lowercase();
+        if clean == "oxillama" {
+            return Err("oxillama backend removed (licence change); use candle".to_string());
+        }
+        match clean.as_str() {
+            "auto" => Ok(Backend::Auto),
+            "openai" | "gateway" | "litellm" => Ok(Backend::Openai),
+            "ollama" => Ok(Backend::Ollama),
+            "hf" | "huggingface" | "tei" => Ok(Backend::Hf),
+            "candle" => Ok(Backend::Candle),
+            "model2vec" => Ok(Backend::Model2vec),
+            "none" | "off" => Ok(Backend::None),
+            other => Err(format!("unknown backend `{other}`")),
+        }
     }
 
     /// Whether this build can construct the backend.
@@ -121,7 +148,6 @@ impl Backend {
         // In-process backends need their cargo feature; the others are always built.
         let features = [
             (Backend::Candle, cfg!(feature = "candle")),
-            (Backend::Oxillama, cfg!(feature = "oxillama")),
             (Backend::Model2vec, cfg!(feature = "model2vec")),
         ];
         features
@@ -138,7 +164,6 @@ impl Backend {
             Backend::Hf => Some("BAAI/bge-base-en-v1.5"),
             Backend::Auto => None,
             Backend::Candle => Some("jinaai/jina-embeddings-v2-base-code"),
-            Backend::Oxillama => Some("Qwen/Qwen3-Embedding-0.6B-GGUF"),
             Backend::Model2vec => Some("minishlab/potion-code-16M-v2"),
             Backend::None => None,
         }
@@ -180,16 +205,11 @@ impl Backend {
             Backend::Auto => {
                 "first available: candle on a GPU, a TEI server (HF_TEI_ENDPOINT), Ollama, candle on the CPU"
             }
-            Backend::Openai => {
-                "OpenAI-compatible /v1/embeddings: LiteLLM gateway, vLLM, LM Studio, oxillama serve"
-            }
+            Backend::Openai => "OpenAI-compatible /v1/embeddings: LiteLLM gateway, vLLM, LM Studio",
             Backend::Ollama => "Ollama server, /api/embed",
             Backend::Hf => "Hugging Face Inference (serverless or dedicated endpoint) or a TEI server",
             Backend::Candle => {
                 "in process: safetensors BERT, NomicBERT or JinaBERT encoders (CPU, Metal, Accelerate)"
-            }
-            Backend::Oxillama => {
-                "in process: GGUF decoder embedders such as Qwen3-Embedding (pure Rust, CPU only: no GPU prefill)"
             }
             Backend::Model2vec => "in process: static token embeddings, fastest, lowest quality",
             Backend::None => "no dense retrieval: lexical and symbol rankings only",
@@ -345,8 +365,6 @@ fn build_in_process(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>> {
     match cfg.backend {
         #[cfg(feature = "candle")]
         Backend::Candle => Ok(Some(Box::new(candle::CandleEmbedder::load(cfg)?))),
-        #[cfg(feature = "oxillama")]
-        Backend::Oxillama => Ok(Some(Box::new(oxillama::OxillamaEmbedder::load(cfg)?))),
         #[cfg(feature = "model2vec")]
         Backend::Model2vec => Ok(Some(Box::new(model2vec::Model2VecEmbedder::load(cfg)?))),
         #[allow(unreachable_patterns)]
@@ -466,7 +484,7 @@ pub(crate) use impl_batched_http_embedder;
 
 /// The `Embedder` implementation of the embedders that embed in process: both prefixes go to their `embed`
 /// method, a query alone. The type needs `embed(&str, &[String])`, the prefix fields and the field `$id`.
-#[cfg(any(feature = "candle", feature = "oxillama"))]
+#[cfg(feature = "candle")]
 macro_rules! impl_prefixed_embedder {
     ($ty:ty, $id:ident) => {
         impl Embedder for $ty {
@@ -486,7 +504,7 @@ macro_rules! impl_prefixed_embedder {
         }
     };
 }
-#[cfg(any(feature = "candle", feature = "oxillama"))]
+#[cfg(feature = "candle")]
 pub(crate) use impl_prefixed_embedder;
 
 /// Prefixed and truncated inputs, ready for a model.

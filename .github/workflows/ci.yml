@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature: [model2vec, candle, oxillama, hnsw, sqlite]
+        feature: [model2vec, candle, hnsw, sqlite]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -59,6 +59,15 @@ jobs:
           key: ${{ matrix.feature }}
       - run: cargo clippy --workspace --all-targets --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }} -- -D warnings
       - run: cargo test --workspace --features loom-rag/${{ matrix.feature }},dendrite-rag/${{ matrix.feature }}
+  licenses:
+    # deny.toml: permissive licences, BUSL-1.1 only from public repositories (scripts/check-busl-public-repos.py
+    # checks visibility, which cargo-deny cannot see), and the relicensed oxi* crates banned by name.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans
   postgres:
     # The shared tier against a real PostgreSQL 16 with pgvector.
     runs-on: ubuntu-latest

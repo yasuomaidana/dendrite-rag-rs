@@ -12,14 +12,17 @@ fn normalizes_and_truncates() {
 }
 
 #[rstest]
-#[case("gateway", Some(Backend::Openai))]
-#[case(" OpenAI ", Some(Backend::Openai))]
-#[case("tei", Some(Backend::Hf))]
-#[case("huggingface", Some(Backend::Hf))]
-#[case("off", Some(Backend::None))]
-#[case("oxillama", Some(Backend::Oxillama))]
-#[case("word2vec", None)]
-fn backend_names_and_aliases_parse(#[case] name: &str, #[case] expected: Option<Backend>) {
+#[case("gateway", Ok(Backend::Openai))]
+#[case(" OpenAI ", Ok(Backend::Openai))]
+#[case("tei", Ok(Backend::Hf))]
+#[case("huggingface", Ok(Backend::Hf))]
+#[case("off", Ok(Backend::None))]
+#[case("oxillama", Err("oxillama backend removed (licence change); use candle".to_string()))]
+#[case("word2vec", Err("unknown backend `word2vec`".to_string()))]
+fn backend_names_and_aliases_parse(
+    #[case] name: &str,
+    #[case] expected: std::result::Result<Backend, String>,
+) {
     assert_eq!(Backend::parse(name), expected);
 }
 
@@ -29,7 +32,6 @@ fn backend_round_trips_as_str(
         Backend::Openai,
         Backend::Ollama,
         Backend::Hf,
-        Backend::Oxillama,
         Backend::Candle,
         Backend::Model2vec,
         Backend::None,
@@ -37,7 +39,7 @@ fn backend_round_trips_as_str(
     )]
     b: Backend,
 ) {
-    assert_eq!(Backend::parse(b.as_str()), Some(b));
+    assert_eq!(Backend::parse(b.as_str()), Ok(b));
 }
 
 #[test]
@@ -104,7 +106,7 @@ fn auto_prefers_gpu_then_tei_then_ollama() {
         );
     }
     for c in [&with_ollama, &without] {
-        assert!(!matches!(c.backend, Backend::Oxillama | Backend::Auto));
+        assert_ne!(c.backend, Backend::Auto);
     }
 }
 

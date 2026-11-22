@@ -128,9 +128,8 @@ Per `docs/architecture/2026-10-quality-audit-execution-plan.md` (§5), `dendrite
 | `candle-core` | `0.11` | Optional (feature `candle`) in-process tensor engine |
 | `candle-nn` | `0.11` | Optional (feature `candle`) neural network layers |
 | `candle-transformers` | `0.11` | Optional (feature `candle`) transformer architectures |
-| `hf-hub` | `1.0.0` | Optional (features `candle`, `oxillama`) Hugging Face Hub client |
+| `hf-hub` | `1.0.0` | Optional (feature `candle`) Hugging Face Hub client |
 | `tokenizers` | `1.0.0-rc.3` | Optional (feature `candle`) fast tokenizers |
-| `oxillama-runtime` | `0.1.4` | Optional (feature `oxillama`) in-process GGUF runtime |
 | `diesel` | `2.3.14` | Optional (features `postgres`, `sqlite`) the only database access layer: query DSL, connections, transactions |
 | `diesel_migrations` | `2.3.1` | Optional (features `postgres`, `sqlite`) embedded schema migrations (`migrations/`) |
 | `pgvector` | `0.4.2` | Optional (feature `postgres`, `features = ["diesel"]`) PostgreSQL vector type for Diesel |
@@ -230,7 +229,7 @@ Selection criteria: no system libraries (bundled C compiled by `cc` is accepted,
 | Chunking | **cAST** split-then-merge over **tree-sitter** syntax trees | fixed line windows (cut functions), whole files (dilute relevance) |
 | Lexical / BM25 | **Tantivy** with a code tokenizer (camelCase / snake_case / digit split + whole identifier); configurable `[lexical] k1, b, q` (defaults unchanged: 1.2, 0.75, 1.0; DRAG-47) | SQLite FTS5 (bundled C FFI) |
 | Vector search | exact parallel **int8** scan (4× smaller than f32, recall@10 ≥ 0.95); **HNSW** implemented behind feature `hnsw` and `[index] vector_index` (auto currently picks flat int8: DRAG-41) | hnsw_rs now (extra f32 copy + graph breaks the 200 MB budget at 50k chunks), instant-distance (rebuild-only), sqlite-vec (C extension), embedded LanceDB (footprint, heavy build) |
-| Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default), in-process **candle** (safetensors BERT/Nomic/Jina on Metal/CUDA/CPU), **ollama**, **hf**, **oxillama**, and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
+| Embeddings | OpenAI-compatible `/v1/embeddings` through the **LiteLLM gateway** (default), in-process **candle** (safetensors BERT/Nomic/Jina on Metal/CUDA/CPU), **ollama**, **hf**, and in-process **model2vec** (offline) | fastembed-rs (`ort` → ONNX Runtime C++). The earlier plan to reuse a candle embedder from `embedag-llm` was dropped: its `CandleProvider` is a simulated structured-output provider, not an embedder |
 | Fusion | weighted **RRF** (k = 60) over lexical, dense and symbol-name lists, implemented locally (no adaptive fusion weights) | `embedag-rag::RrfRanker` (two lists only, `Uuid` keys, pulls in `oxirag`) |
 | Change detection | **embedag-core** BLAKE3 Merkle tree (`MerkleNode::from_paths` + `diff`, via git dependency `embedag`) | full rescans |
 | Ledger | **redb** (pure Rust, default); **SQLite** (Diesel over bundled `libsqlite3-sys`, feature `sqlite`, `[storage] ledger = "sqlite"`, DRAG-49) as an opt-in; shared tier **PostgreSQL 16 + pgvector** (remote: DRAG-33; edge mode with `memory-wal.journal`: DRAG-34; push and compaction: DRAG-35) | Turso (async-only Rust API in a synchronous engine, pre-1.0 file format, mimalloc and Tantivy in its default features; its MVCC writers do not help a single-writer engine; revisit at 1.0 with a sync API or an ANN index); sqlite-vec for search (int8 `vec0` exact scan p95 43 ms at 49k × 256-d with 8 readers, against 0.2 ms for the in-memory scan) |

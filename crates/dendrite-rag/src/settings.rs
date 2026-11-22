@@ -2,7 +2,7 @@
 //!
 //! ```toml
 //! [embed]
-//! backend = "ollama"            # auto (default) | openai | ollama | hf | candle | oxillama | model2vec | none
+//! backend = "ollama"            # auto (default) | openai | ollama | hf | candle | model2vec | none
 //! model = "nomic-embed-text"
 //! url = "http://localhost:11434"
 //! # api_key_env = "HF_TOKEN"   document_prefix / query_prefix / pooling / batch

@@ -36,8 +36,8 @@
 //!
 //! # Feature flags
 //!
-//! Nothing is enabled by default. `hnsw`, `sqlite`, `postgres`, `model2vec`, `candle`
-//! (`candle-metal`, `candle-cuda`, `candle-accelerate`) and `oxillama` add optional backends;
+//! Nothing is enabled by default. `hnsw`, `sqlite`, `postgres`, `model2vec` and `candle`
+//! (`candle-metal`, `candle-cuda`, `candle-accelerate`) add optional backends;
 //! `testutil` exposes the test fixtures.
 //!
 //! The design notes and per-stage specifications are in the repository's `docs/` directory:
