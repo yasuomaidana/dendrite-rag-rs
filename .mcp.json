@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "dendrite": {
+      "command": "dendrite",
+      "args": [
+        "inter",
+        "serve",
+        "--profile",
+        "core"
+      ]
+    },
+    "dendrite-synapse-dendrite-ecosystem": {
+      "command": "dendrite",
+      "args": [
+        "inter",
+        "serve",
+        "--synapse",
+        "dendrite-ecosystem"
+      ]
+    }
+  }
+}

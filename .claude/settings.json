@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v dendrite >/dev/null 2>&1 || exit 0; dendrite hook plan-saved; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "ExitPlanMode"
+      },
+      {
+        "hooks": [
+          {
+            "command": "command -v dendrite >/dev/null 2>&1 || exit 0; dendrite hook decision; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "AskUserQuestion"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v dendrite >/dev/null 2>&1 || exit 0; out=$(dendrite hook pre-tool 2>&1); c=$?; case \"$out\" in *dendrite-first:*) [ \"$c\" -eq 2 ] && { printf '%s\\n' \"$out\" >&2; exit 2; };; esac; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash|Grep|mcp__dendrite.*"
+      },
+      {
+        "hooks": [
+          {
+            "command": "command -v dendrite >/dev/null 2>&1 || { echo \"blocked: dendrite is not on PATH, so this edit cannot be checked against a ticket claim - install it and run: dendrite session resume\" >&2; exit 2; }; out=$(dendrite hook pre-edit 2>&1); c=$?; if [ \"$c\" -ne 0 ]; then printf '%s\\n' \"$out\" >&2; exit 2; fi; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "command -v dendrite >/dev/null 2>&1 || exit 0; dendrite hook session-end; exit 0",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
