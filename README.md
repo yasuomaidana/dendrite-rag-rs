@@ -228,6 +228,7 @@ Comprehensive architectural documentation and specifications are maintained in t
 - [JSON-RPC 2.0 Protocol](docs/specs/protocol.md): Stdio method catalog, parameters, and error codes.
 - [Memory Synchronization](docs/specs/memory-sync.md): Local-only, edge, and push synchronization topologies.
 - [Topic Memory](docs/specs/topic-memory.md): Structured topic memory parser and zero-extrapolation fidelity guard.
+- [Brief](docs/specs/brief.md): A cited reading brief for an agent about to explore, condensed from a retrieval map and a capped grep by a local model, with a named fallback model.
 - [Ask & Multi-Tier RAG](docs/specs/ask.md): Retrieval-augmented generation answering workflow, prompt construction, local/hybrid/paid tiers, and answer caching.
 
 ---
