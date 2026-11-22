@@ -21,7 +21,7 @@ The `symbols` boost also decides how code competes with documentation, which def
 
 `Embedder` trait: `model_id()`, `embed_documents(&[String])`, `embed_query(&str)`. Vectors are L2-normalized, so cosine similarity is a dot product.
 
-The backend and model are the project's choice: `openai` (LiteLLM gateway or any OpenAI-compatible server), `ollama`, `hf` (Hugging Face Inference or TEI), the in-process `candle`, `oxillama` or `model2vec`, or `none`. Each has a default model. Known model families get their task prefixes and pooling automatically. [embedders.md](embedders.md) covers configuration (`.dendrite/rag.toml` and `DENDRITE_RAG_EMBED_*`), wire formats and how to choose.
+The backend and model are the project's choice: `openai` (LiteLLM gateway or any OpenAI-compatible server), `ollama`, `hf` (Hugging Face Inference or TEI), the in-process `candle` or `model2vec`, or `none`. Each has a default model. Known model families get their task prefixes and pooling automatically. [embedders.md](embedders.md) covers configuration (`.dendrite/rag.toml` and `DENDRITE_RAG_EMBED_*`), wire formats and how to choose.
 
 **Embedding phase.** It runs after the lexical index and ledger are committed, and is resumable:
 

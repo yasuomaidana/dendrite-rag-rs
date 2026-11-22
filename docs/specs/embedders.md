@@ -9,7 +9,7 @@ Dense retrieval needs an embedding model. The project owner can choose any backe
 
 ```toml
 [embed]
-backend = "ollama"              # auto (default) | openai | ollama | hf | candle | oxillama | model2vec | none
+backend = "ollama"              # auto (default) | openai | ollama | hf | candle | model2vec | none
 model = "nomic-embed-text"      # optional: each backend has a default
 url = "http://localhost:11434"  # optional, HTTP backends only
 # api_key_env = "HF_TOKEN"      # the variable holding the bearer key (keys never go in the file)
@@ -73,7 +73,7 @@ Unknown keys, unknown backends and malformed values are errors, never silently r
 6. `model2vec` (static embeddings) when the binary has the `model2vec` feature.
 7. `none`: lexical and symbol retrieval only.
 
-A configured `model`, prefixes, pooling and batch carry over to the chosen backend. oxillama is never chosen automatically: oxillama-runtime 0.1.4 offloads only Q4_0 single-token decode to the GPU, so its embeddings run on the CPU (over 3 s per chunk measured). Because the choice can differ between machines, a project that needs identical vectors everywhere pins `backend` and `model`.
+A configured `model`, prefixes, pooling and batch carry over to the chosen backend. The `oxillama` backend was removed (protocol 1.16.0) when its upstream relicensed to BUSL-1.1 and went private; `backend = "oxillama"` (or `DENDRITE_RAG_EMBED_BACKEND=oxillama`) is a configuration error that says to use `candle`, which loads the same Qwen3-Embedding models from safetensors. Because the choice can differ between machines, a project that needs identical vectors everywhere pins `backend` and `model`.
 
 Recommended builds: `cargo install --locked --git https://github.com/yasuomaidana/dendrite-rag-rs --features candle-metal` on Apple Silicon, `--features candle-cuda` on NVIDIA (needs the CUDA toolkit), none to use Ollama.
 
@@ -87,11 +87,10 @@ Recommended builds: `cargo install --locked --git https://github.com/yasuomaidan
 
 | Backend | Runs | Wire / runtime | Default model | Key |
 |---|---|---|---|---|
-| `openai` (aliases `gateway`, `litellm`) | any OpenAI-compatible server: the LiteLLM gateway (default `LITELLM_PROXY_URL`, then `http://localhost:4000`), vLLM, LM Studio, `oxillama serve` | `POST {url}/v1/embeddings` | `local-nomic-embed-text-latest` | `LITELLM_API_KEY`, `LITELLM_MASTER_KEY`, `OPENAI_API_KEY` |
+| `openai` (aliases `gateway`, `litellm`) | any OpenAI-compatible server: the LiteLLM gateway (default `LITELLM_PROXY_URL`, then `http://localhost:4000`), vLLM, LM Studio | `POST {url}/v1/embeddings` | `local-nomic-embed-text-latest` | `LITELLM_API_KEY`, `LITELLM_MASTER_KEY`, `OPENAI_API_KEY` |
 | `ollama` | an Ollama server (default `OLLAMA_HOST`, then `http://localhost:11434`) | `POST {url}/api/embed` with `truncate: true` | `nomic-embed-text` | — |
 | `hf` (aliases `huggingface`, `tei`) | Hugging Face Inference: serverless (no `url`), a dedicated endpoint (`*.endpoints.huggingface.cloud`), or any Text Embeddings Inference server (`{url}/embed`) | `POST` `{"inputs": [...], "truncate": true}`. Sentence vectors are used as returned; token-level outputs are pooled | `BAAI/bge-base-en-v1.5` | `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, then the `huggingface-cli login` token file. Serverless without a token is an error |
 | `candle` | in process, build feature `candle` (`candle-metal` for the Apple GPU, `candle-cuda` for NVIDIA, `candle-accelerate` for Accelerate BLAS on the CPU) | safetensors encoders on candle: BERT family (bge, e5, MiniLM, RoBERTa), NomicBERT (nomic-embed-text v1/v1.5), JinaBERT (jina-embeddings-v2), and the query/key post-norm JinaBERT of the code model `jinaai/jina-embeddings-v2-base-code`, which candle-transformers lacks and dendrite-rag implements in `embed::jina_code` (vectors match the reference PyTorch model at cosine 1.0000), and Qwen3-Embedding (`Qwen/Qwen3-Embedding-0.6B` and siblings, `embed::qwen3`: one text per pass, last-token pooling, the query instruction prefix, f16 on the GPU). The architecture is read from `config.json`; others are rejected with a pointer to the server backends. Inputs are cut at 512 tokens; batches of 16 grouped by length | `jinaai/jina-embeddings-v2-base-code` | `HF_TOKEN` only for gated repos |
-| `oxillama` | in process, build feature `oxillama` (pure Rust, no C/C++; needs Rust 1.89). **CPU only for embeddings**: oxillama-runtime 0.1.4 runs multi-token prefill on the CPU | GGUF decoder embedders on OxiLLaMa (`oxillama-runtime`): Qwen3-Embedding and other Llama, Qwen3, Gemma, Mistral or Phi based embedders. The model is a `.gguf` path, a hub repository (its `Q8_0` file is preferred, then `f16`), or `<repo>/<file>.gguf`; the tokenizer comes from the GGUF metadata. One input per forward pass | `Qwen/Qwen3-Embedding-0.6B-GGUF` | `HF_TOKEN` only for gated repos |
 | `model2vec` | in process, build feature `model2vec` | static token embeddings (model2vec-rs) | `minishlab/potion-code-16M-v2` | — |
 | `none` | — | lexical and symbol rankings only | — | — |
 
@@ -122,6 +121,5 @@ Measured on 30 golden questions (`eval/RESULTS.md`):
 - **Best quality, in process:** `candle` (Metal or CUDA build) with `jinaai/jina-embeddings-v2-base-code`, the default of `auto` on a GPU build: hybrid MRR 0.807, the right file in the top 10 for every question.
 - **A server already running:** `ollama` (or `openai` through the gateway) with `nomic-embed-text`: hybrid MRR 0.770.
 - **Shared GPU box or managed service:** `hf` against a TEI server or a dedicated endpoint.
-- **CPU-only machines:** `candle` on the CPU gives the same quality but took 46 minutes for a 5,300-chunk repository; Ollama took 8.4 minutes. `oxillama` (Qwen3-Embedding from one GGUF file) runs over 3 s per chunk and suits small projects or query-only use.
-- **Fully offline, nothing else installed:** `model2vec`, which embeds a repository in seconds at lower quality.
+- **CPU-only machines:** `candle` on the CPU gives the same quality but took 46 minutes for a 5,300-chunk repository; Ollama took 8.4 minutes.- **Fully offline, nothing else installed:** `model2vec`, which embeds a repository in seconds at lower quality.
 - **No model at all:** `none`. Lexical and symbol retrieval carry most identifier-shaped queries.

@@ -30,7 +30,7 @@ It does not depend on Dendrite, so it can be used as an embedded library in any 
 - **cAST Syntax-Tree Chunking**: Tree-sitter split-then-merge chunker that respects semantic language structures (functions, methods, classes, impl blocks, markdown headings) rather than arbitrary line windows. Each chunk carries its qualified scope chain, the symbols it defines and the names it references, and is indexed with a header of its path and scope.
 - **Code-Aware BM25**: Backed by [Tantivy](https://github.com/quickwit-oss/tantivy), using a specialized `CodeTokenizer` that indexes whole identifiers alongside sub-tokens split across `camelCase`, `snake_case`, and digit boundaries. The BM25 parameters `k1`, `b` and `q` are configurable (`Config::bm25`, `Bm25Params`); the defaults are 1.2, 0.75 and 1, and `q` below 1 scored worse in the evaluation (see [`eval/RESULTS.md`](https://github.com/yasuomaidana/dendrite-rag-rs/blob/main/eval/RESULTS.md)).
 - **Pluggable Vector Embeddings**: Unified `Embedder` trait supporting:
-  - **In-process**: [Candle](https://github.com/huggingface/candle) (BERT, JinaBERT, NomicBERT with Metal/CUDA/Accelerate support), OxiLLaMa (GGUF Qwen3-Embedding, CPU only for embeddings), [Model2Vec](https://github.com/MinishLab/model2vec) (static embeddings).
+  - **In-process**: [Candle](https://github.com/huggingface/candle) (BERT, JinaBERT, NomicBERT with Metal/CUDA/Accelerate support), [Model2Vec](https://github.com/MinishLab/model2vec) (static embeddings).
   - **Local/Remote Gateways**: Ollama, Hugging Face Inference or Text Embeddings Inference (TEI) (`hf`), OpenAI-compatible gateways (`openai`, e.g. LiteLLM).
   - **Auto-Selection** (`backend = auto`): the first available of candle on a GPU (Metal or CUDA build), a TEI server (`HF_TEI_ENDPOINT`), Ollama, a LiteLLM gateway (`LITELLM_PROXY_URL`), candle on the CPU, model2vec; with none of them, lexical and symbol retrieval only (`none`).
   - **Settings**: `EmbedConfig` also takes `dimensions` (target vector size, Matryoshka models) and `budget_tokens` (a token budget that caps one indexing run; the next run continues where it stopped).
@@ -75,7 +75,7 @@ flowchart TD
         C & M --> R[ledger.rs<br/>redb tables: files, chunks, embeddings]
         C & M --> T[lexical.rs<br/>Tantivy BM25 + CodeTokenizer]
         C & M --> G[symbols.rs & graph/<br/>Symbol def/ref graph & Leiden communities]
-        C & M --> E[embed/<br/>Candle / OxiLLaMa / Model2Vec / Ollama / HF / OpenAI]
+        C & M --> E[embed/<br/>Candle / Model2Vec / Ollama / HF / OpenAI]
         E --> V[vector.rs & vector/hnsw/<br/>Flat int8 scan / HNSW graph]
     end
 
@@ -101,7 +101,7 @@ flowchart TD
 | [`ledger`](src/ledger.rs) | Embedded ACID storage via `redb`: files, chunk metadata, Merkle roots, and chunk embedding caches. |
 | [`bm25`](src/bm25.rs) | Okapi BM25 parameters (`k1`, `b`, `q`) and formula shared by Tantivy, PostgreSQL, and `rank`. |
 | [`lexical`](src/lexical.rs) | Tantivy full-text indexing, BM25 scoring, and `CodeTokenizer` splitting on case transitions and numbers. |
-| [`embed`](src/embed/mod.rs) | `Embedder` trait with backends: `candle` (Metal/CUDA), `oxillama` (GGUF), `model2vec`, `ollama`, `hf`, `openai`, and `none`. |
+| [`embed`](src/embed/mod.rs) | `Embedder` trait with backends: `candle` (Metal/CUDA), `model2vec`, `ollama`, `hf`, `openai`, and `none`. |
 | [`vector`](src/vector.rs) | Vector indexes: `FlatIndex` with int8 quantization and optional `HnswIndex` (`vector/hnsw/`, `hnsw` feature). |
 | [`symbols`](src/symbols.rs) | Extracted definitions and references, symbol-name ranking, and chunk neighbors. |
 | [`graph`](src/graph/mod.rs) | Semantic code graph: call, import, and type edges; Leiden community clustering; path and explain queries. |
@@ -128,7 +128,6 @@ No feature is enabled by default.
 | `candle-metal` | Enables Apple Silicon GPU acceleration via Metal for Candle embedders. |
 | `candle-cuda` | Enables NVIDIA GPU CUDA acceleration for Candle embedders (needs the CUDA toolkit to build). |
 | `candle-accelerate` | Enables Apple Accelerate framework BLAS on macOS CPU. |
-| `oxillama` | Enables in-process GGUF embedding models (Qwen3-Embedding and other decoder models) via the OxiLLaMa runtime; needs Rust 1.89. |
 | `model2vec` | Enables in-process static subword embeddings using `model2vec-rs`. |
 | `sqlite` | Enables SQLite as an alternative local ledger (`[storage] ledger = "sqlite"`). The default ledger is redb. |
 | `postgres` | Enables the PostgreSQL 16 + `pgvector` backend for the shared tier (`[storage] mode = "remote"` or `"edge"`), through Diesel with a bundled libpq. |

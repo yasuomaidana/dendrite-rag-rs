@@ -84,7 +84,7 @@ Values are examples unless a comment names a default.
 
 ```toml
 [embed]
-backend = "auto"                    # auto (default) | openai | ollama | hf | candle | oxillama | model2vec | none
+backend = "auto"                    # auto (default) | openai | ollama | hf | candle | model2vec | none
 model = "nomic-embed-text"          # each backend has a default model
 url = "http://localhost:11434"      # HTTP backends only
 # api_key_env = "HF_TOKEN"          # name of the variable holding the bearer key
@@ -168,7 +168,7 @@ The server reads newline-delimited JSON-RPC 2.0 from `stdin` and writes response
 
 ### Protocol version 1.14.0 and the Dendrite Go client
 
-The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.14.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`, `oxillama`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
+The protocol version is a semver string. `health` returns `{name: "dendrite-rag", version, protocol: "1.16.0", features}`. `features` lists the cargo features the binary was built with (`postgres`, `sqlite`, `hnsw`, `model2vec`, `candle`, `candle-metal`, `candle-cuda`, `candle-accelerate`), so a client can tell, before opening a project, which `[embed]`, `[storage]` and `[rerank]` settings the binary can honour.
 
 Dendrite's Go client (`pkg/sidecar.Client` in `dendrite-control`) spawns one sidecar process per call and runs the `health` handshake. It checks only the protocol **major** version: a server with a different major version is refused (and Dendrite falls back to its in-process Go implementation when the binary is missing, incompatible or unhealthy). Minor versions add optional params and result fields, and the client gates features on the minor version.
 
@@ -334,7 +334,6 @@ Feature flags forward directly to corresponding features in the [`loom-rag`](htt
 | `candle-metal` | `loom-rag/candle-metal` | Enables Apple Silicon GPU acceleration via Metal for Candle embeddings. |
 | `candle-cuda` | `loom-rag/candle-cuda` | Enables NVIDIA CUDA acceleration for Candle embeddings. |
 | `candle-accelerate` | `loom-rag/candle-accelerate` | Enables Apple Accelerate CPU BLAS acceleration for Candle. |
-| `oxillama` | `loom-rag/oxillama` | Enables in-process GGUF decoder embeddings (Qwen3-Embedding) via OxiLLaMa runtime. |
 
 ---
 

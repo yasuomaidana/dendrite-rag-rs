@@ -19,7 +19,7 @@ flowchart LR
     W[Walker<br/>ignore] --> C[cAST chunker<br/>tree-sitter]
     C --> H[Contextual header]
     H --> L[(Tantivy BM25<br/>code tokenizer)]
-    H --> E[Embedder<br/>openai / ollama / hf / candle / oxillama / model2vec]
+    H --> E[Embedder<br/>openai / ollama / hf / candle / model2vec]
     E --> V[(Vector index<br/>flat int8 / HNSW)]
     C --> G[(Symbol graph<br/>defs / refs)]
     C --> R[(redb ledger<br/>files, chunks, embeddings, Merkle root)]
@@ -66,7 +66,7 @@ flowchart LR
 | `bm25` | Okapi BM25 parameters (`[lexical] k1, b, q`, DRAG-47) and Tsallis q-log IDF formula shared by Tantivy, PostgreSQL and rank |
 | `ledger` | Local ledger in redb (default) or SQLite (feature `sqlite`, DRAG-49): files, chunks, embedding cache, metadata |
 | `lexical` | Tantivy schema, code tokenizer, BM25 search |
-| `embed` | `Embedder` trait and backends: `auto` (GPU first: candle on Metal/CUDA, TEI, Ollama), `openai`, `ollama`, `hf`, `candle`, `oxillama` (CPU only), `model2vec` |
+| `embed` | `Embedder` trait and backends: `auto` (GPU first: candle on Metal/CUDA, TEI, Ollama), `openai`, `ollama`, `hf`, `candle`, `model2vec` |
 | `vector` | `VectorIndex` trait, exact int8 flat index, HNSW (`vector/hnsw/{graph,persist}`, feature `hnsw`; `auto` selects flat int8 scan: DRAG-41) |
 | `symbols` | Symbol tables, chunk neighbours, file reference graph |
 | `fusion` | Weighted RRF (`k = 60`; per-model defaults, no adaptive fusion weights) |

@@ -8,7 +8,7 @@ A retrieval engine purpose-built for source code repositories and technical docu
 
 - **Syntax-Aware Chunking (cAST)**: Uses Tree-sitter to split code along semantic boundaries (functions, classes, impl blocks, markdown sections) rather than arbitrary line windows. Each chunk preserves its qualified scope chain, signature, and doc comments.
 - **Code-Aware BM25**: Employs [Tantivy](https://github.com/quickwit-oss/tantivy) with a specialized `CodeTokenizer` that indexes whole identifiers as well as components split across `camelCase`, `snake_case`, and numbers.
-- **Pluggable Vector Embeddings**: In-process inference via [Candle](https://github.com/huggingface/candle) (Metal/CUDA/CPU), [OxiLLaMa](https://github.com/yasuomaidana/oxillama) (GGUF), [Model2Vec](https://github.com/MinishLab/model2vec), local Ollama, Hugging Face TEI, and OpenAI-compatible gateways.
+- **Pluggable Vector Embeddings**: In-process inference via [Candle](https://github.com/huggingface/candle) (Metal/CUDA/CPU), [Model2Vec](https://github.com/MinishLab/model2vec), local Ollama, Hugging Face TEI, and OpenAI-compatible gateways.
 - **Quantized Vector Search & HNSW**: Dot-product int8 flat scan with exact float rescoring, plus an optional Hierarchical Navigable Small World (`hnsw` feature) graph index.
 - **Typed Symbol Graph & Leiden Communities**: Extracts call, import, and type reference edges, and runs the Leiden algorithm to detect semantic code communities.
 - **Weighted Reciprocal Rank Fusion (RRF)**: Merges sparse BM25, dense embedding vectors, and symbol matches into a single unified ranking without score calibration issues.
@@ -49,7 +49,7 @@ flowchart LR
     W[Parallel Walker<br/>ignore & binary filter] --> C[cAST Chunker<br/>Tree-sitter grammars]
     C --> H[Contextual Header<br/>scope chain & signature]
     H --> L[(Tantivy BM25<br/>code tokenizer)]
-    H --> E[Embedder<br/>Candle / OxiLLaMa / Model2Vec / Ollama / HF / OpenAI]
+    H --> E[Embedder<br/>Candle / Model2Vec / Ollama / HF / OpenAI]
     E --> V[(Vector Index<br/>int8 flat scan / HNSW)]
     C --> G[(Symbol Graph<br/>defs / refs / calls / types)]
     C --> R[(redb Ledger<br/>files, chunks, Merkle root)]
@@ -130,7 +130,7 @@ Project configuration resides in `.dendrite/rag.toml` and is loaded hierarchical
 
 ```toml
 [embed]
-backend = "auto"                    # "auto", "candle", "oxillama", "model2vec", "ollama", "hf", "openai", "none"
+backend = "auto"                    # "auto", "candle", "model2vec", "ollama", "hf", "openai", "none"
 model = "nomic-embed-text"
 batch = 32
 # dimensions = 1024                 # target vector dimensions (Matryoshka models)
