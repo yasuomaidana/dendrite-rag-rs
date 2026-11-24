@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Removed
 - The `oxillama` embedder backend, `Backend::Oxillama` and the `oxillama` cargo feature (BUSL-1.1 relicense upstream); use `candle` (DRAG-129).
 
