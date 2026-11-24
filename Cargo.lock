@@ -1674,18 +1674,18 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "embedag"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3dc6d7a7ecd574b9bfdb226198fe151c0c96df33beb310eb3d5d52cbb337942a"
+checksum = "40564f3e33bccd9cbacd10b929df8a993792f22c5a121d8d977c7cdab5194a0d"
 dependencies = [
  "embedag-core",
 ]
 
 [[package]]
 name = "embedag-core"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06dc97b40dc0efab8fba33ba4fdea1fa5477255bb8ef6b42743787495025a9b"
+checksum = "f36ae3a8fb3643b03b90090c581e02e002c84cffd45039e9d8c74329156848b8"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5630,7 +5630,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
