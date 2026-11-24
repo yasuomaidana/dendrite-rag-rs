@@ -128,9 +128,6 @@ impl Backend {
     /// Parses a backend name (aliases included).
     pub fn parse(s: &str) -> std::result::Result<Backend, String> {
         let clean = s.trim().to_ascii_lowercase();
-        if clean == "oxillama" {
-            return Err("oxillama backend removed (licence change); use candle".to_string());
-        }
         match clean.as_str() {
             "auto" => Ok(Backend::Auto),
             "openai" | "gateway" | "litellm" => Ok(Backend::Openai),

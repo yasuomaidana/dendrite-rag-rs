@@ -73,7 +73,7 @@ Unknown keys, unknown backends and malformed values are errors, never silently r
 6. `model2vec` (static embeddings) when the binary has the `model2vec` feature.
 7. `none`: lexical and symbol retrieval only.
 
-A configured `model`, prefixes, pooling and batch carry over to the chosen backend. The `oxillama` backend was removed (protocol 1.16.0) when its upstream relicensed to BUSL-1.1 and went private; `backend = "oxillama"` (or `DENDRITE_RAG_EMBED_BACKEND=oxillama`) is a configuration error that says to use `candle`, which loads the same Qwen3-Embedding models from safetensors. Because the choice can differ between machines, a project that needs identical vectors everywhere pins `backend` and `model`.
+A configured `model`, prefixes, pooling and batch carry over to the chosen backend. Because the choice can differ between machines, a project that needs identical vectors everywhere pins `backend` and `model`.
 
 Recommended builds: `cargo install --locked --git https://github.com/yasuomaidana/dendrite-rag-rs --features candle-metal` on Apple Silicon, `--features candle-cuda` on NVIDIA (needs the CUDA toolkit), none to use Ollama.
 
