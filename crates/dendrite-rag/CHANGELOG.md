@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Added
 - **`brief`** (protocol 1.15, `[DRAG-125]`): a short, cited reading brief for an agent about to explore a project. A retrieval map and the grep matches of the identifiers in the question are condensed by a local model; when it fails, a fallback model the caller names writes the brief, and without one the map and matches come back as they are (`source_tier: raw`). Lines citing a path the input did not contain are dropped. `[brief]` settings and `DENDRITE_RAG_BRIEF_*` variables name the models and limits. No paid model is compiled in.
 

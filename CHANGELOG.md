@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Removed
 - The `oxillama` embedder backend, its cargo feature and the `oxillama-runtime` dependency (protocol 1.16.0): its upstream relicensed to BUSL-1.1 and went private. `backend = "oxillama"` is now a configuration error that says to use `candle`. `deny.toml` bans the oxillama and oxirag crates by name and `scripts/check-busl-public-repos.py` accepts BUSL-1.1 only from public source repositories (DRAG-129).
 
