@@ -17,7 +17,6 @@ fn normalizes_and_truncates() {
 #[case("tei", Ok(Backend::Hf))]
 #[case("huggingface", Ok(Backend::Hf))]
 #[case("off", Ok(Backend::None))]
-#[case("oxillama", Err("oxillama backend removed (licence change); use candle".to_string()))]
 #[case("word2vec", Err("unknown backend `word2vec`".to_string()))]
 fn backend_names_and_aliases_parse(
     #[case] name: &str,

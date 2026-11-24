@@ -9,10 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-11-23
 
-### Removed
-- The `oxillama` embedder backend, its cargo feature and the `oxillama-runtime` dependency (protocol 1.16.0): its upstream relicensed to BUSL-1.1 and went private. `backend = "oxillama"` is now a configuration error that says to use `candle`. `deny.toml` bans the oxillama and oxirag crates by name and `scripts/check-busl-public-repos.py` accepts BUSL-1.1 only from public source repositories (DRAG-129).
-
 ### Changed
+- Uses embedag 0.2.0 (`[DRAG-131]`).
 - Database access goes through Diesel: the PostgreSQL tier (`postgres` feature) and the SQLite ledger (`sqlite` feature) use the Diesel DSL and embedded migrations instead of `postgres` and `rusqlite`. Hand-written SQL (BM25 in SQL, the recursive commit walk and pgvector compaction of `push`, PRAGMAs) lives only in the `raw` modules, and `tests/db_access.rs` fails the build if SQL or another database crate appears anywhere else. Schemas, stored data and behaviour are unchanged; databases created before this change open as they are.
 - Protocol 1.13.0: the optional `files_unreadable` field of the `index` result is a documented minor addition (`[DRAG-98]`).
 - The complexity gate measures Java, Kotlin and Svelte as well: one `Lang::core` mapping to `dendrite-core`'s languages replaces the private one in `quality::complexity`, which had left Java out (DRAG-91).

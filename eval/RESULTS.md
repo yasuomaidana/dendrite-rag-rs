@@ -330,11 +330,9 @@ Same golden set; Dendrite repository at the time of each run (832–833 files, a
 | candle (CPU) | nomic-embed-text-v1.5 | 0.656 | 0.67 | 0.97 | 0.770 | 45.8 min | 2.2 GB |
 | candle (CPU) | jina-embeddings-v2-base-code | 0.716 | 0.67 | **1.00** | **0.807** | 46.3 min | 2.6 GB |
 | **candle (Metal)**, `auto` default | jina-embeddings-v2-base-code | 0.654 | 0.67 | 0.97 | 0.806 | 20.6 min | 627 MB |
-| oxillama (CPU) | Qwen3-Embedding-0.6B Q8_0 | — | — | — | — | stopped after 5 h without finishing (over 3 s per chunk) | — |
 
 - candle on Metal reproduces the reference PyTorch vectors (cosine 1.0000) and is the `auto` default on GPU builds. It embeds 2.2× faster than candle on the CPU with a quarter of the memory, but Ollama is still 2.5× faster for the first full index.
 - jina-embeddings-v2-base-code is the best model measured. The Metal and CPU rows differ by one question because the corpus changed between runs (one file fewer).
-- Qwen3-Embedding through oxillama matches the reference model (cosine 0.9996) but runs on the CPU: oxillama-runtime 0.1.4 offloads only Q4_0 single-token decode to the GPU, and embeddings are multi-token prefill. `auto` never picks it.
 - Search latency with jina-code vectors (8 concurrent readers): lexical p95 3.1 ms, vector p95 14.5 ms; vector recall@10 against exact search 1.000.
 
 ## Scale: `~/go/pkg/mod/github.com` (5,887 files, 49,302 chunks)

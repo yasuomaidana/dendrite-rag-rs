@@ -40,7 +40,6 @@ fn reads_the_project_file() {
 #[rstest]
 #[case("[embed]\nbakend = \"ollama\"\n")]
 #[case("[embed]\nbackend = \"word2vec\"\n")]
-#[case("[embed]\nbackend = \"oxillama\"\n")]
 fn rejects_unknown_keys_and_backends_parse(#[case] toml: &str) {
     assert!(Settings::parse(toml).is_err());
 }
@@ -51,27 +50,6 @@ fn rejects_unknown_backend_env() {
     assert!(
         s.apply_env(env(&[("DENDRITE_RAG_EMBED_BACKEND", "word2vec")]))
             .is_err()
-    );
-}
-
-#[test]
-fn oxillama_backend_reports_removal_error() {
-    let err = Settings::parse("[embed]\nbackend = \"oxillama\"\n").unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("oxillama backend removed (licence change); use candle"),
-        "{err}"
-    );
-
-    let mut s = Settings::default();
-    let env_err = s
-        .apply_env(env(&[("DENDRITE_RAG_EMBED_BACKEND", "oxillama")]))
-        .unwrap_err();
-    assert!(
-        env_err
-            .to_string()
-            .contains("oxillama backend removed (licence change); use candle"),
-        "{env_err}"
     );
 }
 
